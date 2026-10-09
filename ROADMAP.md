@@ -36,14 +36,20 @@ Capture must not depend on any particular classification taxonomy. A
 `CaptureClassifier` interface, with domain taxonomies living in adopters.
 **Exit:** capture module builds and tests green with no taxonomy dependency.
 
-## P4 — Reference daemon
+## P4 — Reference daemon — needs a Mac
 
 macOS screen, audio, and activity capture writing schema v0.1, with on-device
 transcription. Accessibility-API text first with Vision OCR fallback, redaction
 before disk, frame dedupe, per-application and per-input-device exclusion.
 Default ASR must be redistributable without a gate or revenue limit.
-**Exit:** a clean machine runs the daemon and produces a conformant store,
-including transcripts whose revocation propagates.
+
+The contract is specified in [`packages/daemon/CONTRACT.md`](packages/daemon/CONTRACT.md):
+write path, privacy invariants, and definition of done. Implementation requires
+Swift and Objective-C against ScreenCaptureKit, AVAudioEngine and Vision, which
+can only be compiled and tested on macOS.
+
+**Exit:** a clean machine runs the daemon and produces a store that passes
+`packages/schema/conformance` unmodified.
 
 ## P5 — Local MCP server ✅
 
@@ -57,10 +63,12 @@ plus an end-to-end stdio run returning an enveloped payload to a client
 speaking raw JSON-RPC. An out-of-scope read fails closed with an explicit
 authorization error and is logged.
 
-## P6 — Public launch
+## P6 — Public launch — needs a Mac and signing credentials
 
 Threat model published, 0.1.0 tagged, signed and notarised build on GitHub
-Releases with published checksums and a documented from-source build.
+Releases with published checksums and a documented from-source build. Process
+and accepted obligations in [RELEASING.md](RELEASING.md).
+
 **Exit:** a non-developer installs the notarised build and it captures; a
 developer builds from source and gets the same behaviour.
 
