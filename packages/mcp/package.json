@@ -1,0 +1,17 @@
+{
+  "name": "@presence-capture/mcp",
+  "version": "0.1.0-draft",
+  "description": "Local-only, read-only MCP server over a conformant capture store",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": { ".": "./src/server.js" },
+  "bin": { "presence-capture-mcp": "./src/stdio.js" },
+  "files": ["src", "conformance"],
+  "engines": { "node": ">=22.5.0" },
+  "scripts": {
+    "test": "node --test conformance/*.test.js",
+    "conformance": "node --test conformance/*.test.js"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

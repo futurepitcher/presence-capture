@@ -1,0 +1,14 @@
+{
+  "name": "presence-capture",
+  "version": "0.1.0-draft",
+  "private": true,
+  "description": "An open capture substrate: screen, activity, and transcribed ambient audio into a revocable, replayable, privacy-classified event store",
+  "license": "Apache-2.0",
+  "type": "module",
+  "workspaces": ["packages/schema", "packages/mcp"],
+  "engines": { "node": ">=22.5.0" },
+  "scripts": {
+    "test": "npm run test --workspaces --if-present",
+    "conformance": "npm run conformance --workspaces --if-present"
+  }
+}

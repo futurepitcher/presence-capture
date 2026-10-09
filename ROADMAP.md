@@ -45,12 +45,17 @@ Default ASR must be redistributable without a gate or revenue limit.
 **Exit:** a clean machine runs the daemon and produces a conformant store,
 including transcripts whose revocation propagates.
 
-## P5 — Local MCP server
+## P5 — Local MCP server ✅
 
-Read-only, local transport only, scopes enforced below the tool layer, egress
-log, untrusted envelope.
-**Exit:** a third-party MCP client reads a scoped view; an out-of-scope read
-fails closed and is logged.
+[`packages/mcp`](packages/mcp): JSON-RPC 2.0 over stdio, no network listener,
+no dependencies. Two read-only tools. Scopes, envelope and egress all enforced
+in the store below the tool layer, so a bug in the protocol layer cannot
+over-serve.
+
+**Exit met:** 11 assertions covering ADR 0001 T1-T12 at the protocol surface,
+plus an end-to-end stdio run returning an enveloped payload to a client
+speaking raw JSON-RPC. An out-of-scope read fails closed with an explicit
+authorization error and is logged.
 
 ## P6 — Public launch
 

@@ -35,7 +35,7 @@ jobs:
           fail: true
 
   conformance:
-    name: Schema conformance suite
+    name: Conformance suites
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -44,7 +44,15 @@ jobs:
         with:
           node-version: '22'
 
-      # No dependencies to install: the suite runs on node:sqlite and node:test.
-      - name: Run conformance suite
+      # Links the workspaces. There are no third-party dependencies to fetch:
+      # both suites run on node:sqlite and node:test.
+      - name: Link workspaces
+        run: npm install --no-audit --no-fund
+
+      - name: Schema conformance (R1-R10)
         working-directory: packages/schema
+        run: npm test
+
+      - name: MCP conformance (ADR 0001 T1-T12)
+        working-directory: packages/mcp
         run: npm test
