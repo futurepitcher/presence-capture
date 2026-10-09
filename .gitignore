@@ -1,0 +1,31 @@
+# Build output
+dist/
+build/
+target/
+*.xcarchive
+.build/
+
+# Dependencies
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Local capture data — never commit
+*.db
+*.db-shm
+*.db-wal
+*.sqlite3
+captures/
+payloads/
+*.mp4
+*.mov
+*.wav
+*.m4a
+
+# Editor / OS
+.DS_Store
+.idea/
+*.swp
+.vscode/

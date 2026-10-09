@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    name: Documentation checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Required files are present
+        run: |
+          set -euo pipefail
+          for f in LICENSE NOTICE README.md ROADMAP.md CONTRIBUTING.md \
+                   SECURITY.md CODE_OF_CONDUCT.md \
+                   docs/spec/SCHEMA.md docs/adr/0001-serving-trust-boundary.md; do
+            test -f "$f" || { echo "missing: $f"; exit 1; }
+          done
+
+      - name: License is Apache-2.0
+        run: grep -q "Apache License" LICENSE && grep -q "Version 2.0" LICENSE
+
+      - name: Markdown links resolve
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --no-progress --offline --include-fragments .
+          fail: true
