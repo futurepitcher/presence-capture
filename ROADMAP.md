@@ -9,11 +9,13 @@ Public repo, Apache-2.0, NOTICE, contributor docs, security policy, package
 skeletons, CI.
 **Exit:** repo public, CI green, no code of substance yet.
 
-## P1 — Serving trust model
+## P1 — Serving trust model ✅
 
-ADR covering read scopes as enforcement, egress accounting, the untrusted-payload
-envelope, and the indirect-prompt-injection threat model.
-**Exit:** ADR accepted. Blocks P5.
+[ADR 0001](docs/adr/0001-serving-trust-boundary.md) — **Accepted 2026-10-09.**
+Threat model (5 adversaries, 5 named attack chains), grant model, hash-chained
+egress log, untrusted-payload envelope, and a limits section stating what is
+detected rather than prevented. Defines the T1–T12 conformance suite that gates
+P5.
 
 ## P2 — Schema spec v0.1
 
