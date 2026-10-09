@@ -140,9 +140,10 @@ can forget.
   contract.
 - **Vector store.** The interface is defined in
   [`src/vector-store.js`](../../packages/schema/src/vector-store.js);
-  **LanceDB** is the shipped default. A backend MAY be substituted, but R3 is
-  mandatory regardless. Run `conformance/vector-store.test.js` against an
-  adapter to claim conformance.
+  **LanceDB** is the shipped default, chosen for being Rust-native over Apache
+  Arrow and embeddable without a server process. A backend MAY be substituted,
+  but R3 is mandatory regardless — run `conformance/vector-store.test.js`
+  against an adapter to claim conformance.
 - **Text extraction.** Accessibility-API text first, OCR as fallback. Cheaper
   than extracting from every frame, and higher fidelity where available.
 - **Audio and transcription.** Transcription is in scope and runs on-device. A
