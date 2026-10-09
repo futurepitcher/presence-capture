@@ -37,11 +37,15 @@ conformance suite, plus a reference implementation that proves the spec works.
 
 | Package | What it is |
 |---------|-----------|
-| [`packages/schema`](packages/schema) | The specification, migrations, and conformance suite. **The actual standard.** |
+| [`packages/schema`](packages/schema) | The specification, migrations, and conformance suite. **The actual standard.** v0.1.0-draft, 32 passing assertions, zero dependencies |
 | [`packages/daemon`](packages/daemon) | macOS reference implementation — ScreenCaptureKit, AVAudioEngine, activity capture |
 | [`packages/mcp`](packages/mcp) | Local-only MCP server with read scopes and an egress log |
 
 ## Design positions
+
+**Try it:** `cd packages/schema && npm test` — Node ≥ 22.5, nothing to install.
+The suite is what defines conformance, so it is also the fastest way to see what
+this schema claims.
 
 **Local-only, read-only, for now.** v1 ships no network listener and no MCP
 mutations. Not because it is hard to add, but because serving a complete record

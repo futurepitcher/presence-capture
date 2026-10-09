@@ -33,3 +33,18 @@ jobs:
         with:
           args: --no-progress --offline --include-fragments .
           fail: true
+
+  conformance:
+    name: Schema conformance suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      # No dependencies to install: the suite runs on node:sqlite and node:test.
+      - name: Run conformance suite
+        working-directory: packages/schema
+        run: npm test

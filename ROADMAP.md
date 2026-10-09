@@ -17,13 +17,18 @@ egress log, untrusted-payload envelope, and a limits section stating what is
 detected rather than prevented. Defines the T1–T12 conformance suite that gates
 P5.
 
-## P2 — Schema spec v0.1
+## P2 — Schema spec v0.1 ✅
 
-Normative `docs/spec/SCHEMA.md`, migration lineage from 001, conformance suite
-including revocation-propagation, replay-determinism, and derived-artifact
-revocation tests, plus generated type bindings. Settles the frame-storage
-contract. Vector-store interface with **LanceDB** as the shipped default.
-**Exit:** the reference adopter passes the conformance suite.
+Normative [`docs/spec/SCHEMA.md`](docs/spec/SCHEMA.md) with field-level
+definitions and R1–R10. Migration lineage `001`–`004`. Reference implementation
+over SQLite. Vector-store interface with LanceDB as the shipped default and an
+in-memory reference backend. TypeScript and Pydantic bindings.
+
+**32-assertion conformance suite, zero dependencies** (`node:sqlite` +
+`node:test`), wired into CI. Covers revocation propagation with per-projection
+receipts, transitive derived-artifact revocation, replay determinism,
+`sacred_mode` unreachability, envelope coverage, provenance forgery resistance,
+and egress hash-chain tamper detection.
 
 ## P3 — Classifier decoupling
 

@@ -1,0 +1,21 @@
+{
+  "name": "@presence-capture/schema",
+  "version": "0.1.0-draft",
+  "description": "Capture schema specification, migration lineage, and conformance suite",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": ["src", "migrations", "conformance"],
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "test": "node --test conformance/*.test.js",
+    "conformance": "node --test conformance/*.test.js"
+  },
+  "keywords": ["capture", "event-sourcing", "revocation", "privacy", "mcp"],
+  "dependencies": {},
+  "devDependencies": {}
+}
