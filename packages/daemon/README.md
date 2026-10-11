@@ -35,7 +35,8 @@ must be able to run it.
 
 | Component | Licence | Role |
 |-----------|---------|------|
-| **Qwen3-ASR** (0.6B / 1.7B) | Apache-2.0, 52 languages | **Default ASR** |
+| **Apple SpeechAnalyzer** / on-device `SFSpeechRecognizer` | Ships with macOS; nothing redistributed | **Default ASR on macOS** ([ADR 0004](../../docs/adr/0004-apple-on-device-models.md)) |
+| Qwen3-ASR (0.6B / 1.7B) | Apache-2.0, 52 languages | Optional, and a candidate default off macOS |
 | Whisper large-v3-turbo | MIT | Optional high-accuracy finalizer |
 | whisper.cpp | MIT | Optional runtime |
 | WhisperX (code) | BSD-2-Clause | Optional alignment stage |
