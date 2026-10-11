@@ -23,8 +23,13 @@ private let readerAuthorizer: @convention(c) (
 
 extension CaptureStore {
     /// From now on this connection may read anything a grant allows and append to the egress log,
-    /// and write nothing else. Irreversible for this connection.
+    /// and write nothing else. Irreversible for this connection. A reader opens with
+    /// `init(readerPath:masterKey:)`, which installs this before any SQL runs.
     public func restrictToReading() {
-        lock.withLock { _ = sqlite3_set_authorizer(db, readerAuthorizer, nil) }
+        lock.withLock { installReaderAuthorizer() }
+    }
+
+    func installReaderAuthorizer() {
+        _ = sqlite3_set_authorizer(db, readerAuthorizer, nil)
     }
 }

@@ -2,8 +2,10 @@
  * How the store-layer suite reaches an implementation: through the driver
  * protocol (docs/spec/DRIVER.md), never through its API.
  *
- * Set PRESENCE_CAPTURE_DRIVER to the command that starts your driver, e.g.
- *   PRESENCE_CAPTURE_DRIVER="/usr/local/bin/pcap-driver" npm run conformance:store
+ * Set PRESENCE_CAPTURE_DRIVER to your driver: the path of its executable,
+ * spaces and all, or a JSON array for a command with arguments:
+ *   PRESENCE_CAPTURE_DRIVER="/Applications/Presence Capture.app/Contents/MacOS/pcap-driver"
+ *   PRESENCE_CAPTURE_DRIVER='["/usr/local/bin/node", "/path/to/driver.mjs"]'
  * Unset, the suite drives the reference implementation's own driver process.
  */
 
@@ -21,10 +23,24 @@ export class DriverError extends Error {
   }
 }
 
+/**
+ * A command from the environment: one executable path, never split, since an
+ * app bundle's path has spaces; or a JSON array when it takes arguments.
+ */
+export function commandFrom(value) {
+  const configured = value?.trim();
+  if (!configured) return null;
+  if (!configured.startsWith('[')) return [configured];
+  const command = JSON.parse(configured);
+  if (!Array.isArray(command) || command.length === 0 || !command.every((part) => typeof part === 'string')) {
+    throw new Error('a command given as JSON is an array of strings');
+  }
+  return command;
+}
+
 /** The command the suite runs: the environment's, or the reference driver. */
 export function driverCommand() {
-  const configured = process.env.PRESENCE_CAPTURE_DRIVER?.trim();
-  return configured ? configured.split(/\s+/) : [process.execPath, REFERENCE_DRIVER];
+  return commandFrom(process.env.PRESENCE_CAPTURE_DRIVER) ?? [process.execPath, REFERENCE_DRIVER];
 }
 
 /** Start a driver process. Requests are answered in order, one line each. */

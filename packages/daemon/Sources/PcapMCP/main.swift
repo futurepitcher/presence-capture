@@ -60,13 +60,13 @@ let keyBytes: Data = keyText.count == 64
     : keyData
 guard keyBytes.count == 32 else { fail("the master key must be 32 bytes, raw or as 64 hex characters") }
 
+// Opened as a reader: restricted before any SQL runs; never created or migrated here.
 let store: CaptureStore
 do {
-    store = try CaptureStore(path: storePath, masterKey: SymmetricKey(data: keyBytes))
+    store = try CaptureStore(readerPath: storePath, masterKey: SymmetricKey(data: keyBytes))
 } catch {
     fail("the store can't be opened: \(error)")
 }
-store.restrictToReading()
 
 func result(_ id: Any, _ value: [String: Any]) -> [String: Any] { ["jsonrpc": "2.0", "id": id, "result": value] }
 func failure(_ id: Any, _ code: Int, _ message: String) -> [String: Any] {

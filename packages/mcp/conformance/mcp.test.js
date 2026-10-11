@@ -3,8 +3,10 @@
  *
  * Each test starts the server under test as an MCP client would, over stdio:
  *
- *   PRESENCE_CAPTURE_MCP="/path/to/pcap-mcp" npm test
+ *   PRESENCE_CAPTURE_MCP="/Applications/Presence Capture.app/Contents/MacOS/pcap-mcp" npm test
  *
+ * The value is one executable path, spaces and all, or a JSON array for a
+ * command with arguments.
  * Unset, it starts the reference (src/stdio.js). The server is given a store,
  * a grant and the store's master key file:
  *   <command> --store <path> --grant <grant_id> --master-key-file <path>
@@ -23,10 +25,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { eachLine, jsonLine, openStore } from '@presence-capture/schema';
+import { commandFrom } from '../../schema/conformance/driver-client.js';
 
 const FUTURE = '2099-01-01T00:00:00Z';
 const REFERENCE = [process.execPath, new URL('../src/stdio.js', import.meta.url).pathname];
-const command = () => process.env.PRESENCE_CAPTURE_MCP?.trim().split(/\s+/) ?? REFERENCE;
+const command = () => commandFrom(process.env.PRESENCE_CAPTURE_MCP) ?? REFERENCE;
 
 const SEED = [
   ['standard', 'standup notes: ship on friday'],
