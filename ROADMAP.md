@@ -81,6 +81,9 @@ The daemon is ported from PresenceVoice's working capture app.
 
 ## M3: Recall, native MCP, public benchmarks
 
+Built to [ADR 0008](docs/adr/0008-recall-indexes-in-memory.md): indexes live in
+memory, and everything at rest is sealed.
+
 - Projections for full-text search, vectors (`NLContextualEmbedding`) and
   activity sessions.
 - A native `pcap-mcp` with `search`, `recent`, `timeline`, `now`, `session`

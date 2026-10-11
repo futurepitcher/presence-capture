@@ -2,7 +2,7 @@
 
 ## Status
 
-**Proposed** — 2026-10-10. Shapes M3 (search, vectors, sessions, `pcap-mcp`).
+**Accepted** — 2026-10-10. Shapes M3 (search, vectors, sessions, `pcap-mcp`).
 
 ## Context
 
