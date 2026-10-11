@@ -73,6 +73,11 @@ app's home:
 [{ "name": "git-activity", "command": ["/opt/homebrew/bin/node", "/path/to/packages/plugins/git-activity/sensor.mjs", "/Users/you/code/repo"] }]
 ```
 
+It runs only as you approved it. A new sensor, or one whose executable or
+script has changed since, waits under **Approve Sensors…** in the menu, which
+shows exactly what will run. Approving records each file's SHA-256 in
+`sensors.json`.
+
 Its observations pass the same gate as the built-in sensors': exclusion, then
 redaction, then sealing. It never touches the store or the key. While capture
 is held, what it sends is dropped. Its captures are `sensor:<name>`, so they

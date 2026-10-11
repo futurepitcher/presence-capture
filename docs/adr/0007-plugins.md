@@ -56,9 +56,22 @@ It runs out of process, in any language.
 **What this can't promise.** A sensor needs real access to the system (git,
 the music player, a calendar), so it can't be sandboxed the way a projector
 is. It runs with the user's own permissions. The gate guarantees what it
-*stores*; nothing can guarantee what a native program does on its own. Pin
-it: before 0.1, `sensors.json` records each command's SHA-256, and a changed
-executable isn't run until it's approved again.
+*stores*; nothing can guarantee what a native program does on its own.
+
+So **a sensor runs only as approved.**
+- Its pins are the SHA-256 of its executable and of every regular file its
+  command names, keyed by absolute path: as an argument, absolute or
+  relative, or as the path in a `--flag=path`. Every sensor is started in
+  `/`, so a relative path names the same file when it's pinned as when it
+  runs. Symbolic links are followed, so what's hashed is what runs. A
+  directory it watches, or a device, isn't code and isn't pinned (or read).
+- The macOS app shows the exact command to the person and writes the pins
+  when they approve.
+- A sensor whose files have changed since (a swapped script, an upgraded
+  interpreter) isn't run, even on a relaunch, until it's approved again.
+
+`src/pins.js` and `CaptureStore.Pins` compute pins the same way. Pins
+written by one are accepted by the other.
 
 **The sensor kit** fails a sensor when:
 - its header is invalid;
@@ -162,8 +175,12 @@ file, another app.
   calls, no model downloads, no clock. That's the point. A projector that
   needs a model gets it from the host, as a future host function declared in
   its manifest, not by fetching it.
-- The macOS app hosts projectors through a WebAssembly runtime: JavaScriptCore's,
-  or WasmKit (Apache-2.0). That dependency will be justified in its own pull
-  request.
+- **The macOS app hosts projectors through JavaScriptCore's WebAssembly**, which
+  is part of macOS, so there's no new dependency. It was verified on
+  2026-10-10 to run a module inside a signed, hardened-runtime binary without
+  the JIT entitlement. It runs in a helper process the app can kill at a
+  capture's time limit, and the helper never opens the store. The host reads
+  for it through the native read path that M3 builds for `pcap-mcp`, so it
+  lands with that.
 - Sensors stay the honest exception, and are pinned and approved for that
   reason.

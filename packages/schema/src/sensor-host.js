@@ -8,21 +8,29 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { createGate } from './gate.js';
 import { headerError } from './observations.js';
+import { pinError, SENSOR_CWD } from './pins.js';
 
 /** How long a sensor told to stop has before it's killed, and how long after that it's given up on. */
 const GRACE_MS = 2000;
 const GIVE_UP_MS = 1000;
 
 /**
- * @param {{command: string[], store: object, fragments?: string[], platform?: string,
+ * @param {{command: string[], store: object, pins?: object, fragments?: string[], platform?: string,
  *   held?: () => boolean, timeoutMs?: number}} options
- *   `held` drops observations while capture is held (paused, locked); they are
- *   never queued. `timeoutMs` stops a sensor that runs on.
+ *   `pins`, when given, are the approved hashes (src/pins.js): a command that
+ *   doesn't match them isn't run. `held` drops observations while capture is
+ *   held (paused, locked); they are never queued. `timeoutMs` stops a sensor
+ *   that runs on.
  * @returns {Promise<{name: string, stats: object, dropped: number}>}
  */
-export function runSensor({ command, store, fragments = [], platform = 'macos', held = () => false, timeoutMs }) {
+export function runSensor({ command, store, pins, fragments = [], platform = 'macos', held = () => false, timeoutMs }) {
+  if (pins !== undefined) {
+    const error = pinError(command, pins);
+    if (error) return Promise.reject(new Error(`sensor not run: ${error}`));
+  }
   return new Promise((resolve, reject) => {
-    const child = spawn(command[0], command.slice(1), { stdio: ['ignore', 'pipe', 'ignore'] });
+    // Always started here, so a relative path in its command means the file that was pinned.
+    const child = spawn(command[0], command.slice(1), { stdio: ['ignore', 'pipe', 'ignore'], cwd: SENSOR_CWD });
     let name = null;
     let gate = null;
     let dropped = 0;

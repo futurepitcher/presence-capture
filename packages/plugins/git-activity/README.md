@@ -18,7 +18,9 @@ node sensor.mjs --every 30 ~/code/a ~/code/b          # watch
 node ../../schema/bin/sensor-kit.js -- node sensor.mjs --once ~/code/my-repo   # check it
 ```
 
-On macOS, list it in `~/Library/Application Support/Presence Capture/sensors.json`:
+On macOS, list it in `~/Library/Application Support/Presence Capture/sensors.json`.
+It won't run until you approve it from the app's menu, which pins `node` and
+`sensor.mjs` as they are:
 
 ```json
 [{ "name": "git-activity", "command": ["/opt/homebrew/bin/node", "/path/to/sensor.mjs", "/Users/you/code/my-repo"] }]

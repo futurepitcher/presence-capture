@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var microphoneItem: NSMenuItem!
     private var hearMicrophoneItem: NSMenuItem!
     private var hearSystemAudioItem: NSMenuItem!
+    private var approveSensorsItem: NSMenuItem!
     private var audio: Listener?
     private var store: CaptureStore?
     private var capturer: ScreenCapturer?
@@ -184,11 +185,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hearMicrophoneItem = NSMenuItem(title: "Hear the Microphone", action: #selector(toggleMicrophone), keyEquivalent: "")
         hearSystemAudioItem = NSMenuItem(title: "Hear System Audio", action: #selector(toggleSystemAudio), keyEquivalent: "")
         let exclusions = NSMenuItem(title: "Edit Excluded Apps and Windows…", action: #selector(editExclusions), keyEquivalent: "")
+        approveSensorsItem = NSMenuItem(title: "Approve Sensors…", action: #selector(approveSensors), keyEquivalent: "")
         let screenItem = NSMenuItem(title: "Allow Screen Recording…", action: #selector(allowScreen), keyEquivalent: "")
         microphoneItem = NSMenuItem(title: "Allow Microphone…", action: #selector(allowMicrophone), keyEquivalent: "")
         accessibilityItem = NSMenuItem(title: "Allow Accessibility (page addresses)…", action: #selector(allowAccessibility), keyEquivalent: "")
         for item in [stateItem!, audioItem!, .separator(), pauseItem!, forgetQuarter, forgetHour, .separator(),
-                     hearMicrophoneItem!, hearSystemAudioItem!, exclusions, .separator(), screenItem, microphoneItem!, accessibilityItem!, .separator()] {
+                     hearMicrophoneItem!, hearSystemAudioItem!, exclusions, approveSensorsItem!, .separator(), screenItem, microphoneItem!, accessibilityItem!, .separator()] {
             menu.addItem(item)
         }
         menu.addItem(NSMenuItem(title: "Quit Presence Capture", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
@@ -206,6 +208,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         microphoneItem.isHidden = audio == nil || AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         hearMicrophoneItem.state = hearMicrophone ? .on : .off
         hearSystemAudioItem.state = hearSystemAudio ? .on : .off
+        let waiting = sensors?.unapproved.count ?? 0
+        approveSensorsItem.isHidden = waiting == 0
+        approveSensorsItem.title = waiting == 1 ? "Approve 1 Sensor…" : "Approve \(waiting) Sensors…"
         let symbol = problem != nil || !seesScreen ? "exclamationmark.circle" : paused ? "pause.circle" : "record.circle"
         statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Presence Capture: \(state)")
     }
@@ -260,6 +265,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleSystemAudio() {
         defaults.set(!hearSystemAudio, forKey: "hearSystemAudio")
         holdCapture()
+        refresh()
+    }
+
+    /// Each sensor waiting for approval, shown as exactly what will run, approved one at a time.
+    /// Approving pins it as it is on disk now; a later change waits for approval again.
+    @objc private func approveSensors() {
+        guard let sensors else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        for sensor in sensors.unapproved {
+            let alert = NSAlert()
+            alert.messageText = "Run the sensor “\(sensor.name)”?"
+            alert.informativeText = [
+                sensor.command.joined(separator: " "),
+                "Why it's waiting: \(sensor.reason).",
+                "It runs with your permissions. What it sends is excluded, redacted and sealed like any capture, "
+                    + "but a program you run can do anything you can. Approve it only if you trust it.",
+            ].joined(separator: "\n\n")
+            alert.addButton(withTitle: "Approve")
+            alert.addButton(withTitle: "Not Now")
+            guard alert.runModal() == .alertFirstButtonReturn else { continue }
+            do {
+                try sensors.approve(sensor.name)
+            } catch {
+                log.write("sensors.approve_failed name=\(sensor.name)")
+            }
+        }
         refresh()
     }
 
