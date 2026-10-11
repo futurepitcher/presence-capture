@@ -1,0 +1,23 @@
+{
+  "_": "What a sensor may emit (ADR 0007). Every host validates observations the same way: the reference (src/observations.js) and the macOS daemon both test against this file. A valid observation is put through the gate (exclusion, redaction, sealing); an invalid one is dropped and counted, never stored.",
+  "headers": [
+    { "header": { "sensor": "git-activity", "protocol": "1" }, "valid": true },
+    { "header": { "sensor": "Now Playing", "protocol": "1" }, "valid": false, "why": "names are lower-case letters, digits and hyphens" },
+    { "header": { "sensor": "git-activity", "protocol": "2" }, "valid": false, "why": "an unknown protocol" },
+    { "header": { "protocol": "1" }, "valid": false, "why": "no name" }
+  ],
+  "observations": [
+    { "valid": true, "observation": { "at": "2026-10-06T09:00:05.000Z", "kind": "screen", "app": "Cursor", "window": "store.js", "text": "function revoke() {}" } },
+    { "valid": true, "observation": { "at": "2026-10-06T09:00:05.000Z", "kind": "screen", "app": "Safari", "window": "Docs", "url": "https://example.com/", "extraction": "accessibility", "text": "Docs" } },
+    { "valid": true, "observation": { "at": "2026-10-06T09:00:05Z", "kind": "activity", "app": "git", "window": "presence-capture — fix the log", "state": "active" } },
+    { "valid": true, "observation": { "at": "2026-10-06T10:00:30.000Z", "kind": "audio", "device": "output", "seconds": 14.2, "transcript": "Can we ship by Friday?" } },
+    { "valid": false, "why": "an unknown kind", "observation": { "at": "2026-10-06T09:00:05.000Z", "kind": "keystrokes", "text": "hunter2" } },
+    { "valid": false, "why": "no time", "observation": { "kind": "screen", "app": "Cursor", "window": "x", "text": "y" } },
+    { "valid": false, "why": "a time that isn't one", "observation": { "at": "yesterday", "kind": "screen", "app": "Cursor", "window": "x", "text": "y" } },
+    { "valid": false, "why": "screen without text", "observation": { "at": "2026-10-06T09:00:05.000Z", "kind": "screen", "app": "Cursor", "window": "x" } },
+    { "valid": false, "why": "an unknown extraction", "observation": { "at": "2026-10-06T09:00:05.000Z", "kind": "screen", "app": "Cursor", "window": "x", "text": "y", "extraction": "keylogger" } },
+    { "valid": false, "why": "an unknown activity state", "observation": { "at": "2026-10-06T09:00:05.000Z", "kind": "activity", "app": "git", "window": "x", "state": "busy" } },
+    { "valid": false, "why": "audio from an unknown device", "observation": { "at": "2026-10-06T09:00:05.000Z", "kind": "audio", "device": "phone", "transcript": "hi" } },
+    { "valid": false, "why": "not an object", "observation": "screen" }
+  ]
+}

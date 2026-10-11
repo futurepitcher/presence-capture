@@ -11,7 +11,7 @@ Pre-alpha, in progress (M2 on the [roadmap](../../ROADMAP.md)).
 - The store passes the store-layer conformance suite through `pcap-driver`.
 - The app captures screen, audio and activity into that store.
 - Not yet done:
-  - the plugin interfaces;
+  - projector and exporter plugins (proposed in ADR 0007);
   - a live side-by-side parity trial against screenpipe.
 
 ## Build, test, run
@@ -61,6 +61,27 @@ Before anything is written, in this order ([CONTRACT.md](CONTRACT.md)):
 
 An excluded window still passes time, so activity keeps its state alone, never
 what it was.
+
+## Sensor plugins
+
+Anything else worth noting (commits, what's playing, a calendar) can be added
+as a [sensor plugin](../../docs/adr/0007-plugins.md): an executable, in any
+language, that writes observations to stdout. List it in `sensors.json` in the
+app's home:
+
+```json
+[{ "name": "git-activity", "command": ["/opt/homebrew/bin/node", "/path/to/packages/plugins/git-activity/sensor.mjs", "/Users/you/code/repo"] }]
+```
+
+Its observations pass the same gate as the built-in sensors': exclusion, then
+redaction, then sealing. It never touches the store or the key. While capture
+is held, what it sends is dropped. Its captures are `sensor:<name>`, so they
+can be revoked together. Check one with the
+[sensor kit](../schema/conformance/plugins/sensor-kit.js):
+
+```sh
+node ../schema/bin/sensor-kit.js -- node ../plugins/git-activity/sensor.mjs --once ~/code/repo
+```
 
 ## The menu
 
