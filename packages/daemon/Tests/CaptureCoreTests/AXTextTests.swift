@@ -47,6 +47,20 @@ final class AXTextTests: XCTestCase {
         XCTAssertFalse(out.contains("4417"), "text outside the window's frame was kept")
     }
 
+    func testReadsNoTextWithoutEvidenceItsVisible() {
+        let root = Node(role: "AXWindow", frame: window, children: [
+            text(paragraph),
+            Node(role: "AXStaticText", value: "No frame at all: the hidden PIN is 4417."),
+            Node(role: "AXStaticText", value: "Collapsed to nothing: the hidden PIN is 4417.", frame: CGRect(x: 120, y: 300, width: 0, height: 20)),
+            Node(role: "AXStaticText", value: "No height: the hidden PIN is 4417.", frame: CGRect(x: 120, y: 340, width: 300, height: 0)),
+            // A container with no frame of its own is still walked; its visible child is read.
+            Node(role: "AXGroup", children: [text("Inside a frameless group, and on screen.", at: 400)]),
+        ])
+        let out = AXText.visibleText(root, window: window) ?? ""
+        XCTAssertFalse(out.contains("4417"), "text with no evidence it was visible was kept")
+        XCTAssertTrue(out.contains("Inside a frameless group"))
+    }
+
     func testGivesWayToOCRWhenThereIsTooLittle() {
         // A canvas app, say: a window whose tree has a title and little else.
         let root = Node(role: "AXWindow", frame: window, children: [text("Untitled")])
