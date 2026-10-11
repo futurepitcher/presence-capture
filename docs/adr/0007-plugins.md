@@ -172,8 +172,12 @@ file, another app.
   calls, no model downloads, no clock. That's the point. A projector that
   needs a model gets it from the host, as a future host function declared in
   its manifest, not by fetching it.
-- The macOS app hosts projectors through a WebAssembly runtime: JavaScriptCore's,
-  or WasmKit (Apache-2.0). That dependency will be justified in its own pull
-  request.
+- **The macOS app hosts projectors through JavaScriptCore's WebAssembly**, which
+  is part of macOS, so there's no new dependency. It was verified on
+  2026-10-10 to run a module inside a signed, hardened-runtime binary without
+  the JIT entitlement. It runs in a helper process the app can kill at a
+  capture's time limit, and the helper never opens the store. The host reads
+  for it through the native read path that M3 builds for `pcap-mcp`, so it
+  lands with that.
 - Sensors stay the honest exception, and are pinned and approved for that
   reason.
