@@ -93,7 +93,16 @@ and the store keeps the outputs.
 **Running it**
 - **It reads through a grant** made from its manifest. Every capture it's
   given is enveloped and egress-logged under `projector:<name>`, and nothing
-  outside its scope reaches it.
+  outside its scope reaches it. The host refuses a grant that isn't the
+  projector's own, or that reads capture types or privacy levels its manifest
+  doesn't; it never narrows one silently.
+- **What runs is what was checked.** The module is compiled once, from the
+  bytes whose hash was approved, and only a projector the host itself loaded
+  is run.
+- **A capture is projected whole or not at all.** Its outputs and the
+  projector's watermark are written in one transaction. A write that fails
+  leaves the watermark before the capture, so it's projected whole next
+  time.
 - **Every capture gets a fresh instance**, so nothing one capture leaves in
   memory can surface in another's output and outlive its revocation.
 - Each capture has a time limit. A module that runs over it is stopped, and

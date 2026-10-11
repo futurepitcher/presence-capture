@@ -7,8 +7,8 @@
 
 import { parentPort, workerData } from 'node:worker_threads';
 
-const module = new WebAssembly.Module(workerData.moduleBytes);
-const { maxOutput } = workerData;
+// Compiled once by the host from the bytes it checked; never recompiled here.
+const { module, maxOutput } = workerData;
 
 parentPort.on('message', ({ id, input }) => {
   try {

@@ -101,3 +101,50 @@ test('projector manifest: sacred_mode can never be read, and names are checked',
   assert.match(manifestError({ ...MANIFEST, projector: 'Word Count' }), /names/);
   assert.equal(manifestError(MANIFEST), null);
 });
+
+test('projector scope: a grant wider than its manifest, or another client\'s, is refused', async () => {
+  const store = day();
+  const projector = load(constant(OUTPUT), { ...MANIFEST, reads: { capture_types: ['screen_text'], privacy_levels: ['standard'] } });
+  const wide = store.issueGrant({ clientId: 'projector:word-count', expiresAt: '2099-01-01T00:00:00Z', captureTypes: ['*'] });
+  await assert.rejects(runProjector({ store, projector, grantId: wide }), /capture types its manifest does not/);
+  const someoneElses = store.issueGrant({ clientId: 'claude-desktop', expiresAt: '2099-01-01T00:00:00Z', captureTypes: ['screen_text'] });
+  await assert.rejects(runProjector({ store, projector, grantId: someoneElses }), /not projector:word-count's/);
+  const sensitive = store.issueGrant({ clientId: 'projector:word-count', expiresAt: '2099-01-01T00:00:00Z', captureTypes: ['screen_text'], privacyLevels: ['standard', 'sensitive'] });
+  await assert.rejects(runProjector({ store, projector, grantId: sensitive }), /privacy levels/);
+  assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM egress_record WHERE client_id LIKE 'projector:%'").get().n, 0, 'something was served first');
+  store.close();
+});
+
+test('projector pinning: bytes changed after loading change nothing that runs, and only a loaded projector runs', async () => {
+  const store = day();
+  const bytes = constant(OUTPUT);
+  const projector = load(bytes);
+  bytes.set(constant(JSON.stringify({ entries: [{ ref: 'summary', kind: 'summary', value: 'swapped in later' }] })).subarray(0, bytes.length));
+  await runProjector({ store, projector, grantId: grantFor(store, MANIFEST, { expiresAt: '2099-01-01T00:00:00Z' }) });
+  const [{ capture_id: id }] = store.db.prepare("SELECT capture_id FROM projection_entry WHERE projection_name = 'word-count'").all();
+  assert.deepEqual(store.projectionOutputs({ projection: 'word-count', captureId: id })[0].value, { projected: true });
+
+  const forged = { ...projector, module: new WebAssembly.Module(constant(OUTPUT)) };
+  await assert.rejects(runProjector({ store, projector: forged, grantId: grantFor(store, MANIFEST, { expiresAt: '2099-01-01T00:00:00Z' }) }), /not a projector this host loaded/);
+  store.close();
+});
+
+test('projector writes: a capture is projected whole or not at all, and is retried after a failed write', async () => {
+  const store = day();
+  const two = JSON.stringify({ entries: [{ ref: 'a', kind: 'summary', value: 1 }, { ref: 'b', kind: 'summary', value: 2 }] });
+  const projector = load(constant(two));
+  const grantId = grantFor(store, MANIFEST, { expiresAt: '2099-01-01T00:00:00Z' });
+  // The second entry's write fails, as a crash between them would leave it.
+  store.db.exec(`CREATE TEMP TRIGGER fail_b BEFORE INSERT ON main.projection_entry WHEN NEW.entry_ref = 'b'
+    BEGIN SELECT RAISE(ABORT, 'disk full'); END;`);
+  await assert.rejects(runProjector({ store, projector, grantId }), /disk full/);
+  assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM projection_entry').get().n, 0, 'a capture was left half projected');
+  assert.equal(store.watermark('projector:word-count'), 0, 'the watermark passed a capture that was not kept');
+
+  store.db.exec('DROP TRIGGER fail_b');
+  const retried = await runProjector({ store, projector, grantId });
+  assert.ok(retried.projected > 0);
+  const counts = store.db.prepare('SELECT COUNT(*) AS n FROM projection_entry GROUP BY capture_id').all().map((r) => r.n);
+  assert.ok(counts.every((n) => n === 2), 'a capture was left half projected');
+  store.close();
+});

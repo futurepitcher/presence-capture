@@ -35,6 +35,9 @@ const PROJECTION_KINDS = ['index', 'vector', 'summary'];
 const GRANTABLE = ['standard', 'sensitive', 'excluded'];
 const CAPTURE_TYPES = ['screen_frame', 'screen_text', 'audio_segment', 'audio_transcript', 'audio_alignment', 'activity'];
 
+/** Projectors this host loaded and checked; nothing else is run. */
+const loaded = new WeakSet();
+
 /** Null when the manifest is valid; otherwise why not. */
 export function manifestError(m) {
   if (!m || typeof m !== 'object') return 'not an object';
@@ -77,7 +80,28 @@ export function loadProjector({ bytes, manifest, approvedSha256 }) {
   if (exports.memory !== 'memory' || exports.alloc !== 'function' || exports.project !== 'function') {
     throw new Error('a projector exports memory, alloc and project');
   }
-  return { bytes, manifest, sha256 };
+  // What runs is the module compiled from the bytes that were checked, never
+  // the bytes again: changing them afterwards changes nothing that runs.
+  const projector = Object.freeze({ module, manifest: structuredClone(manifest), sha256 });
+  loaded.add(projector);
+  return projector;
+}
+
+/**
+ * The grant a projector reads through must be its own, and no wider than its
+ * manifest: issued to projector:<name>, for capture types and privacy levels
+ * its manifest reads, current. A wider one is refused, not narrowed silently.
+ */
+function checkGrant(store, grantId, manifest) {
+  const grant = store.db.prepare('SELECT * FROM grant_record WHERE grant_id = ?').get(grantId);
+  if (!grant) throw new Error('no grant');
+  if (grant.client_id !== `projector:${manifest.projector}`) throw new Error(`the grant is not projector:${manifest.projector}'s`);
+  const types = JSON.parse(grant.capture_types);
+  const levels = JSON.parse(grant.privacy_levels);
+  if (types.includes('*') || types.some((t) => !manifest.reads.capture_types.includes(t))) {
+    throw new Error('the grant reads capture types its manifest does not');
+  }
+  if (levels.some((l) => !manifest.reads.privacy_levels.includes(l))) throw new Error('the grant reads privacy levels its manifest does not');
 }
 
 /** The grant a projector reads through: exactly what its manifest says it reads. */
@@ -115,7 +139,7 @@ function workerFor(projector) {
   let nextId = 1;
   const start = () => {
     worker = new Worker(new URL('./projector-worker.js', import.meta.url), {
-      workerData: { moduleBytes: projector.bytes, maxOutput: LIMITS.maxOutputBytes },
+      workerData: { module: projector.module, maxOutput: LIMITS.maxOutputBytes },
     });
   };
   start();
@@ -151,7 +175,9 @@ function workerFor(projector) {
  * @returns {Promise<{read: number, projected: number, entries: number, timedOut: number, failed: number, rejected: number}>}
  */
 export async function runProjector({ store, projector, grantId, timeoutMs = LIMITS.timeoutMs, limit = 100 }) {
+  if (!loaded.has(projector)) throw new Error('not a projector this host loaded and checked');
   const { manifest } = projector;
+  checkGrant(store, grantId, manifest);
   const consumer = `projector:${manifest.projector}`;
   store.registerProjection({ name: manifest.projection.name, kind: manifest.projection.kind });
   const reader = store.createReader(grantId);
@@ -163,35 +189,37 @@ export async function runProjector({ store, projector, grantId, timeoutMs = LIMI
       stats.read += 1;
       const { provenance } = envelope.presence_capture_untrusted;
       const result = await worker.run(Buffer.from(JSON.stringify(envelope)), timeoutMs);
-      if (!result.ok) {
-        if (result.timedOut) stats.timedOut += 1;
-        else stats.failed += 1;
-      } else {
-        let output;
+      let output;
+      if (result.ok) {
         try {
           output = JSON.parse(Buffer.from(result.output).toString('utf8'));
         } catch {
           output = undefined;
         }
-        if (outputError(output, manifest)) {
-          stats.rejected += 1;
-        } else {
-          try {
-            for (const entry of output.entries) {
-              store.addProjectionEntry({
-                projection: manifest.projection.name, captureId: provenance.capture_id, entryRef: entry.ref,
-                output: { kind: entry.kind, value: entry.value },
-              });
-            }
-            stats.projected += 1;
-            stats.entries += output.entries.length;
-          } catch {
-            // Revoked while it was being projected: nothing is kept for it.
-            stats.failed += 1;
-          }
-        }
       }
-      store.setWatermark(consumer, provenance.sequence);
+      if (!result.ok || outputError(output, manifest)) {
+        if (!result.ok && result.timedOut) stats.timedOut += 1;
+        else if (!result.ok) stats.failed += 1;
+        else stats.rejected += 1;
+        // Nothing is kept for it, and it isn't tried again.
+        store.setWatermark(consumer, provenance.sequence);
+        continue;
+      }
+      try {
+        store.recordProjection({
+          projection: manifest.projection.name, captureId: provenance.capture_id, outputs: output.entries,
+          consumer, sequence: provenance.sequence,
+        });
+        stats.projected += 1;
+        stats.entries += output.entries.length;
+      } catch (err) {
+        // Revoked while it was projected: nothing is kept for it, and the
+        // watermark moves on. Anything else stops the run with the watermark
+        // before this capture, so it's projected whole next time.
+        if (!/revoked or unknown/.test(err.message)) throw err;
+        stats.failed += 1;
+        store.setWatermark(consumer, provenance.sequence);
+      }
     }
   } finally {
     await worker.close();

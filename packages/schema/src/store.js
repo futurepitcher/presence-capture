@@ -229,6 +229,25 @@ export function openStore(path = ':memory:', { masterKey } = {}) {
     }));
   }
 
+  /**
+   * A projector's outputs for one capture and its watermark, in one
+   * transaction: a capture is projected whole or not at all, and the
+   * watermark never passes a capture whose outputs weren't all kept.
+   */
+  function recordProjection({ projection, captureId, outputs, consumer, sequence }) {
+    db.exec('BEGIN');
+    try {
+      for (const o of outputs) {
+        addProjectionEntry({ projection, captureId, entryRef: o.ref, output: { kind: o.kind, value: o.value } });
+      }
+      setWatermark(consumer, sequence);
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
   /** A consumer's position in the event stream (R4): the last sequence it processed. */
   function watermark(consumer) {
     return db.prepare('SELECT last_sequence FROM replay_watermark WHERE consumer = ?').get(consumer)?.last_sequence ?? 0;
@@ -634,7 +653,7 @@ export function openStore(path = ':memory:', { masterKey } = {}) {
   return {
     db,
     appendCapture, contentText, payloadBytes, dedupeKeyFor, registerProjection, addProjectionEntry,
-    projectionOutputs, watermark, setWatermark,
+    projectionOutputs, recordProjection, watermark, setWatermark,
     revoke, retain, finishErasure, get erasurePending() { return erasurePending; }, issueGrant, revokeGrant, createReader, replay, verifyEgressChain,
     close: () => db.close(),
   };
