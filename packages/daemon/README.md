@@ -1,25 +1,85 @@
 # `presence-capture-daemon`
 
-macOS reference implementation. Captures screen, ambient audio, and activity into
-a conformant store — and transcribes the audio, because raw audio is not data
-anyone can use.
+The macOS reference implementation: a menu-bar app that reads the screen, hears
+this Mac and notes what's in front, into a store whose content is sealed and
+whose revocation erases. It writes and never serves. Agents read the store
+through `packages/mcp`, a separate process.
 
 ## Status
 
-Pre-alpha, not yet extracted. Phase P4 on the [roadmap](../../ROADMAP.md).
+Pre-alpha, in progress (M2 on the [roadmap](../../ROADMAP.md)).
+- The store passes the store-layer conformance suite through `pcap-driver`.
+- The app captures screen, audio and activity into that store.
+- Not yet done:
+  - accessibility text ahead of OCR;
+  - the plugin interfaces;
+  - a live side-by-side parity trial against screenpipe.
 
-## Planned design
+## Build, test, run
 
-- **Screen:** ScreenCaptureKit, in-process. Not `CGWindowListCapture` — it
-  provides no recording privacy indicator and is on a deprecation path.
-- **Audio:** AVAudioEngine, ambient lane.
-- **Transcription:** on-device. Nothing leaves the machine.
-- **Activity:** window, application, and input-idle signals.
-- **Text:** accessibility-API text first, Apple Vision OCR as fallback.
-- **Privacy:** redaction before anything reaches disk; per-application and
-  per-input-device exclusion; frame dedupe.
+You need macOS 14 or later, with Xcode 26 or later for the macOS 26 SDK.
 
-Its only job is to produce a store that passes the conformance suite.
+```sh
+cd packages/daemon
+swift test                     # the store, the shared cases, OCR, utterances, on-device transcription
+./build.sh                     # .build/app/Presence Capture.app, signed with your Apple Development identity if you have one
+open ".build/app/Presence Capture.app"
+```
+
+Check the store against the spec:
+
+```sh
+swift build --product pcap-driver
+cd ../schema && PRESENCE_CAPTURE_DRIVER="$(swift build --package-path ../daemon --show-bin-path)/pcap-driver" npm run conformance:store
+```
+
+The app asks for nothing at launch. Screen Recording, the microphone and
+Accessibility (for a browser's page address) are each asked for from its menu,
+when you choose. The store is in `~/Library/Application Support/Presence
+Capture/` (set `PRESENCE_CAPTURE_HOME` to move it). Its master key is in the
+Keychain, on this device only, never synced.
+
+## What it captures
+
+Every 5 seconds, unless paused, asleep, locked, or another user has the Mac:
+
+| Lane | Kept as | Notes |
+|------|---------|-------|
+| **Screen** | `screen_text` | Each on-screen window of the front app, read by Vision. An unchanged window isn't kept again. No image is ever kept ([ADR 0005](../../docs/adr/0005-text-first-capture.md)) |
+| **Audio** (macOS 26) | `audio_segment` + `audio_transcript` | The microphone and system audio, each of which can be turned off. Transcribed on device by SpeechAnalyzer ([ADR 0004](../../docs/adr/0004-apple-on-device-models.md)), one utterance at a time, stamped when it was said. No audio is kept |
+| **Activity** | `activity` | The app, window and state (active, idle after 2 minutes, locked), written only when one changes |
+
+Before anything is written, in this order ([CONTRACT.md](CONTRACT.md)):
+1. Excluded apps and windows are never read: the system's own UI, this app,
+   and your list (Edit Excluded Apps and Windows…).
+2. Secrets and personal identifiers are redacted
+   ([shared cases](../schema/cases/README.md)).
+3. Content is sealed under a key of its own.
+
+An excluded window still passes time, so activity keeps its state alone, never
+what it was.
+
+## The menu
+
+| Item | What it does |
+|------|--------------|
+| Pause / Resume | Nothing is captured, heard or noted while paused |
+| Forget the Last 15 Minutes… / Forget the Last Hour… | A revocation of that stretch, erased from disk with a receipt ([ADR 0002](../../docs/adr/0002-erasable-revocation.md)). Asked first, because it can't be undone |
+| Hear the Microphone / Hear System Audio | Each input device on or off |
+| Edit Excluded Apps and Windows… | Your list, one fragment a line, applied within seconds. If it can't be read, nothing is captured |
+
+Retention erases what's older than 14 days, hourly (`defaults write
+org.presence-capture.app retentionDays 30` to change it). The log, in `logs/`,
+holds counts only.
+
+## Layout
+
+| Target | What |
+|--------|------|
+| `CaptureStore` | The store: migrations embedded from `packages/schema/migrations` (`scripts/embed-migrations.mjs`), CryptoKit sealing, revocation that erases, retention, redaction and exclusion |
+| `CaptureCore` | What can be tested without a screen: Vision OCR, which window is in front, SpeechAnalyzer transcription, utterances |
+| `PresenceCapture` | The menu-bar app, its sensors and the Keychain |
+| `PcapDriver` | `pcap-driver`, the [conformance driver](../../docs/spec/DRIVER.md) over `CaptureStore` |
 
 ## Transcripts are projections, not captures
 

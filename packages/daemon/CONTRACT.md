@@ -60,6 +60,16 @@ Per captured artifact, in this order:
 - The transcript inherits the audio's `privacy_level`. It MUST NOT be assigned a
   weaker one.
 
+## Activity
+
+- An `activity` capture records the front app, its front window's title and a
+  state: `active`, `idle` (no input for 2 minutes) or `locked`. It's written
+  only when one of those changes, so a session runs from one to the next.
+- Content is JSON, sealed like any other: `{"app", "window", "state"}`.
+- For an excluded window, or the lock screen, it's `{"state", "excluded":
+  true}` with no `source_app`. The time is kept, never what it was.
+- The window title is redacted like any other text.
+
 ## Privacy invariants
 
 These are not features. An implementation that misses one is not conformant:
