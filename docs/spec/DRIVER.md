@@ -58,7 +58,7 @@ fields may be omitted or `null`.
 | `open` | `path`, `master_key_hex` (64 hex chars) | `{}`. Creates the store when `path` doesn't exist. Fails with `key` when the store exists and the key doesn't open it |
 | `append` | `capture_type`, `source`, `privacy_level`; optional `capture_id`, `captured_at`, `source_app`, `source_url`, `classification`, `content_text`, `payload: {bytes_base64, media_type}`, `extraction`, `derived_from`, `dedupe_key` | `{capture_id}` |
 | `register_projection` | `name`, `kind` (`index`, `vector`, `summary`) | `{}` |
-| `add_projection_entry` | `projection`, `capture_id`, `entry_ref` | `{}` |
+| `add_projection_entry` | `projection`, `capture_id`, `entry_ref`; optional `output_kind` and `output_json`, the output kept sealed under the capture's key | `{}` |
 | `revoke` | `scope_kind`, `scope_value`; optional `reason` | `{revocation_id, revoked_capture_ids, erased_on_disk}`, including captures reached through `derived_from`. `erased_on_disk` is false while a reader holds the write-ahead log and the revoked bytes may still be in it |
 | `retain` | `days`; optional `now` (ISO 8601, for tests) | As `revoke`, or `{revocation_id: null, revoked_capture_ids: []}` when nothing was old enough |
 | `content` | `capture_id` | `{text}`, the capture's text as the implementation unseals it, or `null` |

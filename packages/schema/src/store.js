@@ -192,11 +192,72 @@ export function openStore(path = ':memory:', { masterKey } = {}) {
     `).run(name, kind, now());
   }
 
-  function addProjectionEntry({ projection, captureId, entryRef }) {
+  /**
+   * Record that a projection holds something derived from a capture, so
+   * revocation knows what to prune (R3). With `output`, the store keeps what
+   * was derived, sealed under the capture's own data key (ADR 0007): revoking
+   * the capture deletes it and destroys the key that sealed it.
+   */
+  function addProjectionEntry({ projection, captureId, entryRef, output }) {
+    let kind = null;
+    let sealed = null;
+    if (output) {
+      const row = db.prepare('SELECT wrapped_key FROM capture_key WHERE capture_id = ?').get(captureId);
+      if (!row) throw new Error('no output for a capture that is revoked or unknown');
+      const dataKey = unseal(masterKey, row.wrapped_key, `key:${captureId}`);
+      kind = output.kind;
+      sealed = seal(dataKey, Buffer.from(JSON.stringify(output.value)), `projection:${projection}:${captureId}:${entryRef}`);
+    }
     db.prepare(`
-      INSERT INTO projection_entry (projection_name, capture_id, entry_ref, created_at)
-      VALUES (?, ?, ?, ?)
-    `).run(projection, captureId, entryRef, now());
+      INSERT INTO projection_entry (projection_name, capture_id, entry_ref, created_at, output_kind, output_sealed)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(projection, captureId, entryRef, now(), kind, sealed);
+  }
+
+  /** What a projection keeps for a capture, unsealed: [{entryRef, kind, value}]. */
+  function projectionOutputs({ projection, captureId }) {
+    const row = db.prepare('SELECT wrapped_key FROM capture_key WHERE capture_id = ?').get(captureId);
+    if (!row) return [];
+    const dataKey = unseal(masterKey, row.wrapped_key, `key:${captureId}`);
+    return db.prepare(`
+      SELECT entry_ref, output_kind, output_sealed FROM projection_entry
+      WHERE projection_name = ? AND capture_id = ? AND output_sealed IS NOT NULL ORDER BY entry_ref
+    `).all(projection, captureId).map((r) => ({
+      entryRef: r.entry_ref,
+      kind: r.output_kind,
+      value: JSON.parse(unseal(dataKey, r.output_sealed, `projection:${projection}:${captureId}:${r.entry_ref}`).toString('utf8')),
+    }));
+  }
+
+  /**
+   * A projector's outputs for one capture and its watermark, in one
+   * transaction: a capture is projected whole or not at all, and the
+   * watermark never passes a capture whose outputs weren't all kept.
+   */
+  function recordProjection({ projection, captureId, outputs, consumer, sequence }) {
+    db.exec('BEGIN');
+    try {
+      for (const o of outputs) {
+        addProjectionEntry({ projection, captureId, entryRef: o.ref, output: { kind: o.kind, value: o.value } });
+      }
+      setWatermark(consumer, sequence);
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  /** A consumer's position in the event stream (R4): the last sequence it processed. */
+  function watermark(consumer) {
+    return db.prepare('SELECT last_sequence FROM replay_watermark WHERE consumer = ?').get(consumer)?.last_sequence ?? 0;
+  }
+
+  function setWatermark(consumer, sequence) {
+    db.prepare(`
+      INSERT INTO replay_watermark (consumer, last_sequence, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT (consumer) DO UPDATE SET last_sequence = excluded.last_sequence, updated_at = excluded.updated_at
+    `).run(consumer, sequence, now());
   }
 
   // ------------------------------------------------------------ revocation
@@ -439,7 +500,7 @@ export function openStore(path = ':memory:', { masterKey } = {}) {
     if (!grant) throw new AuthorizationError('no grant: default deny');
 
     return {
-      read({ tool, query = '', contains = null, limit = null }) {
+      read({ tool, query = '', contains = null, limit = null, afterSequence = null }) {
         if (grant.revoked_at) throw new AuthorizationError('grant revoked');
         if (grant.expires_at <= now()) throw new AuthorizationError('grant expired');
 
@@ -470,6 +531,7 @@ export function openStore(path = ':memory:', { masterKey } = {}) {
         }
         if (grant.time_from) { clauses.push('e.captured_at >= ?'); params.push(grant.time_from); }
         if (grant.time_to)   { clauses.push('e.captured_at <= ?'); params.push(grant.time_to); }
+        if (afterSequence != null) { clauses.push('e.sequence > ?'); params.push(afterSequence); }
 
         // Content is sealed, so `contains` is matched after unsealing, and
         // only rows the grant already admits are ever unsealed. Case-insensitive,
@@ -496,6 +558,7 @@ export function openStore(path = ':memory:', { masterKey } = {}) {
             envelope_version: ENVELOPE_VERSION,
             provenance: {
               capture_id: r.capture_id,
+              sequence: r.sequence,
               captured_at: r.captured_at,
               source_app: r.source_app,
               source_url: r.source_url,
@@ -590,6 +653,7 @@ export function openStore(path = ':memory:', { masterKey } = {}) {
   return {
     db,
     appendCapture, contentText, payloadBytes, dedupeKeyFor, registerProjection, addProjectionEntry,
+    projectionOutputs, recordProjection, watermark, setWatermark,
     revoke, retain, finishErasure, get erasurePending() { return erasurePending; }, issueGrant, revokeGrant, createReader, replay, verifyEgressChain,
     close: () => db.close(),
   };

@@ -77,8 +77,9 @@ export function createDriverHandler({ open = openStore } = {}) {
       return {};
     },
 
-    add_projection_entry: ({ projection, capture_id: captureId, entry_ref: entryRef }) => {
-      need().addProjectionEntry({ projection, captureId, entryRef });
+    add_projection_entry: ({ projection, capture_id: captureId, entry_ref: entryRef, output_kind: kind, output_json: json }) => {
+      const output = kind ? { kind, value: JSON.parse(json) } : undefined;
+      need().addProjectionEntry({ projection, captureId, entryRef, output });
       return {};
     },
 

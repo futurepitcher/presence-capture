@@ -137,6 +137,13 @@ A projection is any derived view — a text index, a vector index, a summary.
 Entries are attributable to the capture they came from, which is the only reason
 revocation can be *proven* to propagate rather than asserted.
 
+An entry may carry what was derived (migration 006): `output_kind` (`text`,
+`vector`, `summary`) and `output_sealed`, sealed under the **source capture's
+data key** with AAD `projection:<projection_name>:<capture_id>:<entry_ref>`.
+Revoking the capture deletes the entry, and destroys the key that sealed its
+output (R11). An output can't be added for a capture that's revoked
+([ADR 0007](../adr/0007-plugins.md)).
+
 On revocation an implementation MUST, in one transaction:
 
 1. delete every `projection_entry` for the revoked set, and

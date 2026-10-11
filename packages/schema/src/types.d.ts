@@ -107,12 +107,15 @@ export interface EgressRecord {
 }
 
 /** The only shape in which capture content crosses an MCP boundary. */
+/** A capture's place in the event stream travels with it, so a consumer can keep a watermark (R4). */
 export interface UntrustedEnvelope {
   presence_capture_untrusted: {
     envelope_version: '1';
     /** Populated from capture metadata, never derived from content. */
     provenance: {
       capture_id: string;
+      /** Its place in the event stream (R4), for a consumer's watermark. */
+      sequence: number;
       captured_at: string;
       source_app: string | null;
       source_url: string | null;
