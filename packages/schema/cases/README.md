@@ -8,6 +8,7 @@ can be held to the same answers.
 |------|------|-----------|
 | `exclusion.json` | What is never captured: system UI and the lock screen, the app's own windows, and the user's list (R8). Includes how the user's list is parsed | `src/exclusion.js` |
 | `redaction.json` | Secrets and personal identifiers replaced before writing (CONTRACT step 3) | `src/redact.js` |
+| `observations.json` | What a sensor plugin may emit: its header and observations ([ADR 0007](../../../docs/adr/0007-plugins.md)) | `src/observations.js` |
 
 The reference implementations are tested against these files in
 `conformance/api/cases.test.js`. The macOS daemon tests its own against the

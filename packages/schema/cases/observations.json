@@ -1,0 +1,199 @@
+{
+  "_": "What a sensor may emit (ADR 0007). Every host validates observations the same way: the reference (src/observations.js) and the macOS daemon both test against this file. A valid observation is put through the gate (exclusion, redaction, sealing); an invalid one is dropped and counted, never stored. An observation may carry `dedupe`, a stable id for what it observed: the gate keys it (see dedupe_vectors) and the store refuses the same one from the same source twice.",
+  "headers": [
+    {
+      "header": {
+        "sensor": "git-activity",
+        "protocol": "1"
+      },
+      "valid": true
+    },
+    {
+      "header": {
+        "sensor": "Now Playing",
+        "protocol": "1"
+      },
+      "valid": false,
+      "why": "names are lower-case letters, digits and hyphens"
+    },
+    {
+      "header": {
+        "sensor": "git-activity",
+        "protocol": "2"
+      },
+      "valid": false,
+      "why": "an unknown protocol"
+    },
+    {
+      "header": {
+        "protocol": "1"
+      },
+      "valid": false,
+      "why": "no name"
+    }
+  ],
+  "observations": [
+    {
+      "valid": true,
+      "observation": {
+        "at": "2026-10-06T09:00:05.000Z",
+        "kind": "screen",
+        "app": "Cursor",
+        "window": "store.js",
+        "text": "function revoke() {}"
+      }
+    },
+    {
+      "valid": true,
+      "observation": {
+        "at": "2026-10-06T09:00:05.000Z",
+        "kind": "screen",
+        "app": "Safari",
+        "window": "Docs",
+        "url": "https://example.com/",
+        "extraction": "accessibility",
+        "text": "Docs"
+      }
+    },
+    {
+      "valid": true,
+      "observation": {
+        "at": "2026-10-06T09:00:05Z",
+        "kind": "activity",
+        "app": "git",
+        "window": "presence-capture — fix the log",
+        "state": "active"
+      }
+    },
+    {
+      "valid": true,
+      "observation": {
+        "at": "2026-10-06T10:00:30.000Z",
+        "kind": "audio",
+        "device": "output",
+        "seconds": 14.2,
+        "transcript": "Can we ship by Friday?"
+      }
+    },
+    {
+      "valid": true,
+      "observation": {
+        "at": "2026-10-06T09:00:05Z",
+        "kind": "activity",
+        "app": "git",
+        "window": "repo — x",
+        "state": "active",
+        "dedupe": "3c51f9106c4f0e0b7d4b2f8a1e9d0c6b5a4f3e2d"
+      }
+    },
+    {
+      "valid": false,
+      "why": "an unknown kind",
+      "observation": {
+        "at": "2026-10-06T09:00:05.000Z",
+        "kind": "keystrokes",
+        "text": "hunter2"
+      }
+    },
+    {
+      "valid": false,
+      "why": "no time",
+      "observation": {
+        "kind": "screen",
+        "app": "Cursor",
+        "window": "x",
+        "text": "y"
+      }
+    },
+    {
+      "valid": false,
+      "why": "a time that isn't one",
+      "observation": {
+        "at": "yesterday",
+        "kind": "screen",
+        "app": "Cursor",
+        "window": "x",
+        "text": "y"
+      }
+    },
+    {
+      "valid": false,
+      "why": "screen without text",
+      "observation": {
+        "at": "2026-10-06T09:00:05.000Z",
+        "kind": "screen",
+        "app": "Cursor",
+        "window": "x"
+      }
+    },
+    {
+      "valid": false,
+      "why": "an unknown extraction",
+      "observation": {
+        "at": "2026-10-06T09:00:05.000Z",
+        "kind": "screen",
+        "app": "Cursor",
+        "window": "x",
+        "text": "y",
+        "extraction": "keylogger"
+      }
+    },
+    {
+      "valid": false,
+      "why": "an unknown activity state",
+      "observation": {
+        "at": "2026-10-06T09:00:05.000Z",
+        "kind": "activity",
+        "app": "git",
+        "window": "x",
+        "state": "busy"
+      }
+    },
+    {
+      "valid": false,
+      "why": "audio from an unknown device",
+      "observation": {
+        "at": "2026-10-06T09:00:05.000Z",
+        "kind": "audio",
+        "device": "phone",
+        "transcript": "hi"
+      }
+    },
+    {
+      "valid": false,
+      "why": "not an object",
+      "observation": "screen"
+    },
+    {
+      "valid": false,
+      "why": "a dedupe that isn't text",
+      "observation": {
+        "at": "2026-10-06T09:00:05Z",
+        "kind": "activity",
+        "app": "git",
+        "state": "active",
+        "dedupe": 42
+      }
+    },
+    {
+      "valid": false,
+      "why": "an empty dedupe",
+      "observation": {
+        "at": "2026-10-06T09:00:05Z",
+        "kind": "activity",
+        "app": "git",
+        "state": "active",
+        "dedupe": ""
+      }
+    }
+  ],
+  "dedupe_vectors": [
+    {
+      "_": "dedupe_key = hex(HMAC-SHA256(HKDF-SHA256(master_key, salt empty, info 'presence-capture dedupe', 32 bytes), source + U+001F + value))",
+      "master_key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "source": "sensor:git-activity",
+      "value": "3c51f9106c4f0e0b7d4b2f8a1e9d0c6b5a4f3e2d",
+      "dedupe_key": "563dd9d102ee1a7b4d878a9999da1a7c436de375d2ba567d664f23de98bb1f2c"
+    }
+  ]
+}

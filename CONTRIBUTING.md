@@ -16,7 +16,11 @@ contributions right now aren't all code.
    you can report, privately ([SECURITY.md](SECURITY.md)).
 3. **Spec review.** Requirements in [`SCHEMA.md`](docs/spec/SCHEMA.md) that are
    wrong, missing, or can't be implemented on your platform.
-4. **Cases.** A redaction or exclusion case the shared files miss
+4. **A sensor plugin.** Something worth remembering that the built-in sensors
+   don't capture. It's an executable that writes observations to stdout
+   ([ADR 0007](docs/adr/0007-plugins.md)), checked by the sensor kit; see
+   [`packages/plugins/git-activity`](packages/plugins/git-activity/README.md).
+5. **Cases.** A redaction or exclusion case the shared files miss
    ([`packages/schema/cases/`](packages/schema/cases/README.md)).
 
 Issues labelled `good first issue` are scoped to be done in an afternoon.

@@ -27,10 +27,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var capturer: ScreenCapturer?
     private var activity: ActivityCapturer?
     private var log: Logger!
+    private var sensors: SensorPlugins?
+    /// Whether capture is held, for sensor plugins, whose output arrives off the main thread.
+    private let heldNow = Flag()
     private var timers: [Timer] = []
     private var problem: String?
 
     private var exclusionPath: String { home + "/excluded-windows.txt" }
+    private var sensorsPath: String { home + "/sensors.json" }
     private var interval: TimeInterval { TimeInterval(defaults.integer(forKey: "interval").nonZero ?? 5) }
     private var retentionDays: Int { defaults.integer(forKey: "retentionDays").nonZero ?? 14 }
     private var hearMicrophone: Bool { defaults.object(forKey: "hearMicrophone") as? Bool ?? true }
@@ -61,6 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// user is taking the Mac or it's locking, which may not read so yet.
     private func holdCapture(going: Bool = false) {
         let held = going || heldFor != nil
+        heldNow.value = held
         audio?.tick(listening: !held && CGPreflightScreenCaptureAccess())
         if held { activity?.reset() }
         guard let capturer else { return }
@@ -86,7 +91,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     (defaults.object(forKey: "hearMicrophone") as? Bool ?? true, defaults.object(forKey: "hearSystemAudio") as? Bool ?? true)
                 }, log: log.write)
             }
+            let exclusionPath = self.exclusionPath
+            let heldNow = self.heldNow
+            sensors = SensorPlugins(configPath: sensorsPath, store: store, fragments: { Exclusion.load(exclusionPath) },
+                                    held: { heldNow.value }, log: log.write)
             holdCapture()
+            sensors?.start()
             schedule(capturer: capturer, store: store)
             retain(store)
             log.write("start.ready")
@@ -103,6 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         timers.append(Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             guard let self else { return }
             let held = self.heldFor != nil
+            self.heldNow.value = held
             let seesScreen = CGPreflightScreenCaptureAccess()
             self.audio?.tick(listening: !held && seesScreen)
             // An erasure a reader held up is finished as soon as the reader lets go (ADR 0002).
@@ -125,6 +136,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.retain(store)
             let log = self.log!
             let heard = self.audio?.takeCounts() ?? (input: 0, output: 0)
+            for sensor in self.sensors?.takeCounts() ?? [] {
+                log.write("sensors.hour name=\(sensor.name) appended=\(sensor.stats.appended) excluded=\(sensor.stats.excluded) redacted=\(sensor.stats.redacted) invalid=\(sensor.stats.invalid) dropped=\(sensor.dropped)")
+            }
             Task {
                 let counts = await capturer.takeCounts()
                 let average = counts.reads == 0 ? 0 : Int(counts.readMs / Double(counts.reads))
@@ -295,6 +309,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// What was heard up to now is kept before the app goes.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        sensors?.stop()
         guard let audio else { return .terminateNow }
         timers.forEach { $0.invalidate() }
         timers = []
@@ -303,6 +318,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
+    }
+}
+
+/// A Bool read and written from any thread.
+final class Flag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = false
+    var value: Bool {
+        get { lock.withLock { stored } }
+        set { lock.withLock { stored = newValue } }
     }
 }
 

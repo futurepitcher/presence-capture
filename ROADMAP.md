@@ -63,8 +63,11 @@ The daemon is ported from PresenceVoice's working capture app.
 - ✅ CI on `macos-26`.
 - ✅ Accessibility text ahead of OCR: the focused window only, what's
   visible, never a password field.
-- ☐ Sensor, Projector and Exporter plugin interfaces, each with a
-  conformance kit, in-process or out of process over the driver protocol.
+- ✅ Sensor plugins ([ADR 0007](docs/adr/0007-plugins.md)): out of process, in
+  any language, through the same gate, with a conformance kit and a
+  git-activity example. Hosted by the reference and the macOS app.
+- ☐ Projector and exporter plugins, proposed in ADR 0007, waiting on its
+  acceptance.
 - ☐ A side-by-side parity trial against screenpipe, and a forensic check on
   a live store.
 

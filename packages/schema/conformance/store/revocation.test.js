@@ -84,3 +84,16 @@ test('store R2: each scope kind revokes what it names, and only that', () => wit
   assert.deepEqual(await revoked('privacy_level', 'sensitive'), [ids.private]);
   assert.deepEqual(await call('content', { capture_id: ids.kept }), { text: 'kept' });
 }));
+
+test('store R2: times are kept in one form, so a range takes a time written without milliseconds', () => withStore(async ({ call, path }) => {
+  const { capture_id: id } = await call('append', screenText('at five past, to the second', { captured_at: '2026-10-06T09:00:05Z' }));
+  assert.equal(query(path, 'SELECT captured_at FROM capture_event WHERE capture_id = ?', id)[0].captured_at, '2026-10-06T09:00:05.000Z');
+
+  // Its bounds written either way: the capture is inside both ranges.
+  const inside = await call('revoke', { scope_kind: 'time_range', scope_value: '2026-10-06T09:00:05Z/2026-10-06T09:00:05.999Z' });
+  assert.deepEqual(inside.revoked_capture_ids, [id], "a capture at ...05Z escaped a range ending ...05.999Z");
+
+  const { capture_id: later } = await call('append', screenText('later', { captured_at: '2026-10-06T10:00:00.000Z' }));
+  const upTo = await call('revoke', { scope_kind: 'time_range', scope_value: '2026-10-06T09:30:00.000Z/2026-10-06T10:00:00Z' });
+  assert.deepEqual(upTo.revoked_capture_ids, [later], 'a range ending ...00Z left out a capture at ...00.000Z');
+}));

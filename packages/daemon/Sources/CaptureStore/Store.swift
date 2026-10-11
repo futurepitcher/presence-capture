@@ -63,6 +63,9 @@ public struct Revocation: Sendable, Equatable {
 public final class CaptureStore: @unchecked Sendable {
     private var db: OpaquePointer?
     private let masterKey: SymmetricKey
+    /// Keys dedupe values, so a dedupe_key, which outlives a revocation in the append-only log,
+    /// can't be matched to what it named without the master key.
+    private let dedupeSecret: SymmetricKey
     private let lock = NSLock()
     private var erasurePending = false
 
@@ -73,6 +76,7 @@ public final class CaptureStore: @unchecked Sendable {
     public init(path: String, masterKey: SymmetricKey) throws {
         guard masterKey.bitCount == 256 else { throw StoreError.sqlite("masterKey must be 32 bytes") }
         self.masterKey = masterKey
+        dedupeSecret = HKDF<SHA256>.deriveKey(inputKeyMaterial: masterKey, info: Data("presence-capture dedupe".utf8), outputByteCount: 32)
         try FileManager.default.createDirectory(at: URL(fileURLWithPath: path).deletingLastPathComponent(), withIntermediateDirectories: true)
         guard sqlite3_open(path, &db) == SQLITE_OK else { throw StoreError.sqlite("can't open the store") }
         try exec("PRAGMA foreign_keys = ON")
@@ -152,6 +156,14 @@ public final class CaptureStore: @unchecked Sendable {
             try run("INSERT INTO projection_entry (projection_name, capture_id, entry_ref, created_at) VALUES (?, ?, ?, ?)",
                     projection, captureId, entryRef, Self.iso(Date()))
         }
+    }
+
+    /// The dedupe_key for a value a sensor marks as already seen: HMAC-SHA256 under a key derived
+    /// from the master key, over "<source>\u{1F}<value>", as the reference derives it. The store
+    /// refuses the same one twice, even after the first is revoked.
+    public func dedupeKey(source: String, value: String) -> String {
+        HMAC<SHA256>.authenticationCode(for: Data("\(source)\u{1F}\(value)".utf8), using: dedupeSecret)
+            .map { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: Reads of a capture's own content
@@ -281,8 +293,9 @@ public final class CaptureStore: @unchecked Sendable {
         case "privacy_level":
             seeds = try rows("SELECT capture_id FROM capture_event WHERE privacy_level = ?", scopeValue).map { $0.text(0) }
         case "time_range":
-            let bounds = scopeValue.split(separator: "/", maxSplits: 1).map(String.init)
-            guard bounds.count == 2 else { throw StoreError.sqlite("time_range is from/to") }
+            // In the form captured_at is kept in, so "...05Z" can't sort after "...05.999Z".
+            let bounds = scopeValue.split(separator: "/", maxSplits: 1).map(String.init).compactMap(Self.date).map(Self.iso)
+            guard bounds.count == 2 else { throw StoreError.sqlite("time_range is from/to, each an ISO 8601 time") }
             seeds = try rows("SELECT capture_id FROM capture_event WHERE captured_at >= ? AND captured_at <= ?", bounds[0], bounds[1]).map { $0.text(0) }
         default:
             throw StoreError.sqlite("unknown scope kind: \(scopeKind)")

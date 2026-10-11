@@ -8,7 +8,8 @@
     ".": "./src/index.js"
   },
   "bin": {
-    "presence-capture-driver": "./bin/driver.js"
+    "presence-capture-driver": "./bin/driver.js",
+    "presence-capture-sensor-kit": "./bin/sensor-kit.js"
   },
   "files": [
     "src",

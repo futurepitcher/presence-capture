@@ -64,7 +64,7 @@ and live in `payload_blob` or a file `storage_uri` names.
 |-------|------|-------|
 | `capture_id` | TEXT PK | |
 | `sequence` | INTEGER UNIQUE | Monotonic. The replay ordering — **not** `captured_at`, which can go backwards |
-| `captured_at` | TEXT | ISO 8601 |
+| `captured_at` | TEXT | ISO 8601 UTC with milliseconds (`2026-10-06T09:00:05.000Z`), always. Times are compared as text, so an implementation MUST write this one form, and MUST read a revocation's `time_range` bounds into it before comparing |
 | `capture_type` | TEXT | `screen_frame`, `screen_text`, `audio_segment`, `audio_transcript`, `audio_alignment`, `activity` |
 | `source` | TEXT | Source family. Platform-neutral (R9) |
 | `source_app` | TEXT NULL | Bundle id or executable where known |
@@ -74,7 +74,7 @@ and live in `payload_blob` or a file `storage_uri` names.
 | `payload_hash` | TEXT NULL | FK to `capture_payload` |
 | `extraction` | TEXT NULL | `accessibility`, `ocr`, `asr`, `none` |
 | `derived_from` | TEXT NULL | FK to `capture_event`. Set on derived artifacts (R10) |
-| `dedupe_key` | TEXT NULL | Unique where not null (R7) |
+| `dedupe_key` | TEXT NULL | Unique where not null (R7). For an observation a sensor marks with `dedupe` ([ADR 0007](../adr/0007-plugins.md)): hex(HMAC-SHA256(HKDF-SHA256(master key, empty salt, info `presence-capture dedupe`, 32 bytes), source ‖ U+001F ‖ value)). It outlives a revocation, so a revoked observation isn't captured again, and without the master key it says nothing about the value |
 
 Implementations MUST reject UPDATE and DELETE against this table. The reference
 implementation enforces this with database triggers rather than application

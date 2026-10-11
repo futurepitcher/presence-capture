@@ -22,6 +22,9 @@ sensor observed, **before** exclusion and redaction:
 
 - `exclusion_list` is the user's list, in the format `cases/exclusion.json`
   parses.
+- Any observation may carry `dedupe`: a stable ID for what it observed, such
+  as a commit hash. The store keeps it once per source, even after a
+  revocation.
 - `url` is set only where a real sensor could establish it. It's never
   inferred from the text.
 - An audio observation becomes an `audio_segment` with no stored audio (text

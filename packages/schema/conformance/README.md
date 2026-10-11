@@ -37,6 +37,13 @@ Unset, it drives the reference driver process (`bin/driver.js`), the same way.
 `store/forensic.js` and `store/inspect.js` read a store as SCHEMA.md defines
 it, with no help from the implementation that wrote it.
 
+## Plugin kits
+
+| File | What it checks |
+|------|----------------|
+| `plugins/sensor-kit.js` | A sensor plugin ([ADR 0007](../../../docs/adr/0007-plugins.md)): a valid header, observations that pass `cases/observations.json`, and captures that land as `sensor:<name>` through the gate. Run it with `bin/sensor-kit.js -- <command>` |
+| `plugins/sensor-kit.test.js` | The kit itself: the git-activity example passes, three broken sensors fail, and the host drops observations while held and applies the user's exclusions |
+
 ## Reference API layer
 
 | File | Requirements | ADR 0001 tests |

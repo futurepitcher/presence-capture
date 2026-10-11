@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, hkdfSync, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { migrate } from './migrate.js';
 import { newKey, seal, unseal } from './seal.js';
@@ -9,6 +9,17 @@ const EPOCH = '0000-01-01T00:00:00.000Z';
 
 const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 const now = () => new Date().toISOString();
+
+/**
+ * A time as the store writes it: ISO 8601 UTC with milliseconds. Every time
+ * the store compares as text (captured_at against a revocation's range) is in
+ * this form, so "...05Z" can't sort after "...05.999Z" and slip out of a range.
+ */
+function canonicalTime(value, what) {
+  const date = new Date(value);
+  if (typeof value !== 'string' || Number.isNaN(date.getTime())) throw new Error(`${what} must be an ISO 8601 time`);
+  return date.toISOString();
+}
 
 /** Raised when a read is attempted without sufficient authority. */
 export class AuthorizationError extends Error {
@@ -34,6 +45,11 @@ export function openStore(path = ':memory:', { masterKey } = {}) {
     masterKey = newKey();
   }
   if (masterKey.length !== 32) throw new Error('masterKey must be 32 bytes');
+
+  // Keys dedupe values (dedupeKeyFor) so a dedupe_key, which outlives a
+  // revocation in the append-only log, can't be matched to what it named
+  // without the master key.
+  const dedupeSecret = Buffer.from(hkdfSync('sha256', masterKey, Buffer.alloc(0), 'presence-capture dedupe', 32));
 
   const db = new DatabaseSync(path);
   db.exec('PRAGMA foreign_keys = ON');
@@ -104,7 +120,7 @@ export function openStore(path = ':memory:', { masterKey } = {}) {
       `).run(
         captureId,
         nextSequence(),
-        event.capturedAt ?? createdAt,
+        event.capturedAt == null ? createdAt : canonicalTime(event.capturedAt, 'capturedAt'),
         event.captureType,
         event.source,
         event.sourceApp ?? null,
@@ -131,6 +147,17 @@ export function openStore(path = ':memory:', { masterKey } = {}) {
       throw err;
     }
     return captureId;
+  }
+
+  /**
+   * The dedupe_key for a value a sensor marks as already seen (a commit hash,
+   * say): HMAC-SHA256 under a key derived from the master key, over
+   * "<source>\u001f<value>". The same value from the same source always gets
+   * the same key, so the store refuses it twice, even after the first is
+   * revoked. Without the master key the key says nothing about the value.
+   */
+  function dedupeKeyFor(source, value) {
+    return createHmac('sha256', dedupeSecret).update(`${source}\u001f${value}`).digest('hex');
   }
 
   /** A capture's text, unsealed; null when it has none or it was erased. */
@@ -188,7 +215,7 @@ export function openStore(path = ':memory:', { masterKey } = {}) {
         const [from, to] = scopeValue.split('/');
         return db
           .prepare('SELECT capture_id FROM capture_event WHERE captured_at >= ? AND captured_at <= ?')
-          .all(from, to);
+          .all(canonicalTime(from, 'time_range from'), canonicalTime(to, 'time_range to'));
       },
     }[scopeKind];
 
@@ -562,7 +589,7 @@ export function openStore(path = ':memory:', { masterKey } = {}) {
 
   return {
     db,
-    appendCapture, contentText, payloadBytes, registerProjection, addProjectionEntry,
+    appendCapture, contentText, payloadBytes, dedupeKeyFor, registerProjection, addProjectionEntry,
     revoke, retain, finishErasure, get erasurePending() { return erasurePending; }, issueGrant, revokeGrant, createReader, replay, verifyEgressChain,
     close: () => db.close(),
   };
