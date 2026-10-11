@@ -8,7 +8,7 @@
 {"at":"2026-10-06T10:00:30.000Z","kind":"audio","id":"call-1","device":"output","seconds":14.2,"transcript":"Can we ship the erasure work by Friday? Dana needs it for the demo."}
 {"at":"2026-10-06T10:00:46.000Z","kind":"audio","id":"call-2","device":"input","seconds":9.8,"transcript":"Yes. The forensic test is green; I'll open the pull request today and email dana@example.com the link."}
 {"at":"2026-10-06T10:31:00.000Z","kind":"screen","app":"Notes","bundle":"com.apple.Notes","window":"Q4 plan","extraction":"accessibility","text":"Q4 plan\n1. Ship M1 erasure by Friday\n2. Native daemon in M2\n3. Builder interviews"}
-{"at":"2026-10-06T10:45:00.000Z","kind":"screen","app":"Presence Capture","bundle":"org.presence-capture.app","window":"Agents read","extraction":"accessibility","text":"claude-code read 12 captures from Notes"}
+{"at":"2026-10-06T10:45:00.000Z","kind":"screen","app":"Presence Capture","bundle":"ai.presenceos.capture","window":"Agents read","extraction":"accessibility","text":"claude-code read 12 captures from Notes"}
 {"at":"2026-10-06T11:00:00.000Z","kind":"activity","app":"loginwindow","bundle":"com.apple.loginwindow","window":"","state":"locked"}
 {"at":"2026-10-06T11:00:02.000Z","kind":"screen","app":"loginwindow","bundle":"com.apple.loginwindow","window":"","extraction":"ocr","text":"Enter Password"}
 {"at":"2026-10-06T11:25:00.000Z","kind":"activity","app":"Cursor","bundle":"com.todesktop.230313mzl4w4u92","window":"forensic.js — presence-capture","state":"active"}

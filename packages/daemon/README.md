@@ -39,6 +39,10 @@ when you choose. The store is in `~/Library/Application Support/Presence
 Capture/` (set `PRESENCE_CAPTURE_HOME` to move it). Its master key is in the
 Keychain, on this device only, never synced.
 
+The bundle ID is `ai.presenceos.capture`. macOS ties the app's permissions,
+settings and Keychain item to it, so a build under another ID
+(`PRESENCE_CAPTURE_BUNDLE_ID`) starts afresh. A fork should use its own.
+
 ## What it captures
 
 Every 5 seconds, unless paused, asleep, locked, or another user has the Mac:
@@ -69,7 +73,7 @@ what it was.
 | Edit Excluded Apps and Windows… | Your list, one fragment a line, applied within seconds. If it can't be read, nothing is captured |
 
 Retention erases what's older than 14 days, hourly (`defaults write
-org.presence-capture.app retentionDays 30` to change it). The log, in `logs/`,
+ai.presenceos.capture retentionDays 30` to change it). The log, in `logs/`,
 holds counts only.
 
 ## Layout

@@ -8,7 +8,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT_DIR="${1:-${SCRIPT_DIR}/.build/app}"
 APP="${OUT_DIR}/Presence Capture.app"
-BUNDLE_ID="${PRESENCE_CAPTURE_BUNDLE_ID:-org.presence-capture.app}"
+# Reverse-DNS of presenceos.ai. It names the app to macOS: its permissions, its settings and its
+# Keychain item all follow it, so a build under another ID starts afresh with none of them.
+BUNDLE_ID="${PRESENCE_CAPTURE_BUNDLE_ID:-ai.presenceos.capture}"
 # By hash: a keychain can hold two certificates of one name, which codesign won't choose between.
 IDENTITY="${PRESENCE_CAPTURE_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | sed -nE 's/^ *[0-9]+\) ([0-9A-F]{40}) "Apple Development: .*/\1/p' | head -n 1)}"
 IDENTITY="${IDENTITY:--}"

@@ -4,8 +4,11 @@ import Security
 
 /// The store's master key, kept in this Mac's Keychain and nowhere else: never in the store,
 /// never beside it, never synced to other devices. Made on first launch.
+///
+/// Named after the app's bundle ID, so a build under another ID (a fork) has a key of its own.
+/// Changing the ID orphans the key, and with it every store it sealed.
 enum Keychain {
-    private static let service = "org.presence-capture.master-key"
+    private static let service = (Bundle.main.bundleIdentifier ?? "ai.presenceos.capture") + ".master-key"
     private static let account = "store"
 
     static func masterKey() throws -> SymmetricKey {
