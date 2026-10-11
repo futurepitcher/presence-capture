@@ -3,10 +3,14 @@
 # dependencies today; this watches for any that appear.
 version: 2
 updates:
+  # A release is at least 14 days old before it's proposed: time for a bad
+  # or compromised release to be found and pulled first.
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 14
     groups:
       actions:
         patterns: ['*']
@@ -15,3 +19,5 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 14
