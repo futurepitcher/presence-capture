@@ -96,7 +96,9 @@ jobs:
 
   # Developer Certificate of Origin (GOVERNANCE.md): every commit in a pull
   # request carries a Signed-off-by trailer naming its author. Sign off with
-  # `git commit -s`.
+  # `git commit -s`. Dependabot's updates are exempt: they're automation the
+  # maintainers configured, not a contribution someone certifies. Exempt by
+  # its exact identity, so no other bot or person can claim the exemption.
   dco:
     name: DCO sign-off
     if: github.event_name == 'pull_request'
@@ -116,6 +118,9 @@ jobs:
           missing=0
           for commit in $(git rev-list --no-merges "$BASE..$HEAD"); do
             author="$(git log -1 --format='%an <%ae>' "$commit")"
+            if [ "$author" = "dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>" ]; then
+              continue
+            fi
             if ! git log -1 --format='%(trailers:key=Signed-off-by,valueonly)' "$commit" | grep -qF "$author"; then
               echo "::error::$(git log -1 --format='%h %s' "$commit") is not signed off by $author"
               missing=1
