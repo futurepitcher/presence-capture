@@ -82,6 +82,8 @@ public final class CaptureStore: @unchecked Sendable {
         dedupeSecret = HKDF<SHA256>.deriveKey(inputKeyMaterial: masterKey, info: Data("presence-capture dedupe".utf8), outputByteCount: 32)
         try FileManager.default.createDirectory(at: URL(fileURLWithPath: path).deletingLastPathComponent(), withIntermediateDirectories: true)
         guard sqlite3_open(path, &db) == SQLITE_OK else { throw StoreError.sqlite("can't open the store") }
+        // Another process (a reader, another writer) may hold the write lock for a moment: wait for it.
+        sqlite3_busy_timeout(db, 5000)
         try exec("PRAGMA foreign_keys = ON")
         // Deleted content is overwritten, not left on a free page (R11).
         try exec("PRAGMA secure_delete = ON")
@@ -270,6 +272,10 @@ public final class CaptureStore: @unchecked Sendable {
     /// A reader in another process holding a snapshot blocks that, and SQLite says so only in the
     /// result row (busy = 1), never as an error. Retried for about a second; true once truncated.
     private func truncateLog(attempts: Int = 20) throws -> Bool {
+        // Retried on its own short schedule, so SQLite's busy wait is off while it tries: with it on,
+        // each attempt would wait out the whole busy timeout.
+        sqlite3_busy_timeout(db, 0)
+        defer { sqlite3_busy_timeout(db, 5000) }
         for attempt in 0..<attempts {
             if try rows("PRAGMA wal_checkpoint(TRUNCATE)").first?.int(0) == 0 {
                 erasurePending = false
@@ -348,8 +354,10 @@ public final class CaptureStore: @unchecked Sendable {
         return try rows(sql).first?.int(0) ?? 1
     }
 
-    func transaction(_ body: () throws -> Void) throws {
-        try exec("BEGIN")
+    /// `immediate` takes the write lock at once, before anything is read, so a read and the write
+    /// that depends on it can't be split by another process's write.
+    func transaction(immediate: Bool = false, _ body: () throws -> Void) throws {
+        try exec(immediate ? "BEGIN IMMEDIATE" : "BEGIN")
         do {
             try body()
             try exec("COMMIT")
@@ -405,13 +413,20 @@ public final class CaptureStore: @unchecked Sendable {
 
     /// Named apart from the variadic one: an array passed there would bind as a single value.
     func rows(_ sql: String, values: [Any?]) throws -> [Row] {
+        var out: [Row] = []
+        try eachRow(sql, values: values) { out.append($0); return true }
+        return out
+    }
+
+    /// Rows one at a time, as the statement steps, until `body` says stop: a read that needs a few
+    /// rows of a long history never holds the rest.
+    func eachRow(_ sql: String, values: [Any?], _ body: (Row) throws -> Bool) throws {
         let statement = try prepare(sql, values)
         defer { sqlite3_finalize(statement) }
-        var out: [Row] = []
         while true {
             switch sqlite3_step(statement) {
-            case SQLITE_ROW: out.append(Row(statement))
-            case SQLITE_DONE: return out
+            case SQLITE_ROW: if try !body(Row(statement)) { return }
+            case SQLITE_DONE: return
             default: throw failure()
             }
         }

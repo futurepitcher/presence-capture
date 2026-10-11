@@ -149,15 +149,16 @@ extension CaptureStore {
             let cap = min(request.limit ?? maximum, maximum)
             let needle = request.contains?.lowercased()
             var served: [(id: String, level: String, envelope: CanonicalJSON)] = []
-            let candidates = try rows("""
+            // Stepped one row at a time, stopping at the cap: a short read of a long history holds
+            // only what it serves.
+            try eachRow("""
                 SELECT e.capture_id, e.sequence, e.captured_at, e.source_app, e.source_url, e.capture_type, e.privacy_level, e.extraction
                 FROM capture_event e WHERE \(clauses.joined(separator: " AND ")) ORDER BY e.sequence
-                """, values: params)
-            for row in candidates {
-                if served.count >= cap { break }
+                """, values: params) { row in
+                guard served.count < cap else { return false }
                 let id = row.text(0)
                 let content = try unsealedText(id)
-                if let needle, !(content?.lowercased().contains(needle) ?? false) { continue }
+                if let needle, !(content?.lowercased().contains(needle) ?? false) { return true }
                 // Provenance comes from the capture's metadata, never from its content (T10).
                 let envelope = CanonicalJSON.object([("presence_capture_untrusted", .object([
                     ("envelope_version", .string(Self.envelopeVersion)),
@@ -170,6 +171,7 @@ extension CaptureStore {
                     ("content", .optional(content)),
                 ]))])
                 served.append((id, row.text(6), envelope))
+                return served.count < cap
             }
 
             var levelsServed: [String] = []
@@ -194,9 +196,19 @@ extension CaptureStore {
         return String(decoding: try Seal.open(row.data(1), key: key, aad: "text:\(captureId)"), as: UTF8.self)
     }
 
-    /// One record of what was served, chained to the one before it (ADR 0001 §4.2, SCHEMA.md).
+    /// One record of what was served, chained to the one before it (ADR 0001 §4.2, SCHEMA.md), under
+    /// the write lock: BEGIN IMMEDIATE takes it before the last record is read, so another process
+    /// can't take the same one and fork the chain (migration 007 refuses a fork besides).
     private func appendEgress(clientId: String, grantId: String, tool: String, queryFingerprint: String,
                               captureIds: [String], privacyLevelsServed: [String], byteCount: Int) throws {
+        try transaction(immediate: true) {
+            try appendEgressLocked(clientId: clientId, grantId: grantId, tool: tool, queryFingerprint: queryFingerprint,
+                                   captureIds: captureIds, privacyLevelsServed: privacyLevelsServed, byteCount: byteCount)
+        }
+    }
+
+    private func appendEgressLocked(clientId: String, grantId: String, tool: String, queryFingerprint: String,
+                                    captureIds: [String], privacyLevelsServed: [String], byteCount: Int) throws {
         let previous = try rows("SELECT record_hash FROM egress_record ORDER BY egress_id DESC LIMIT 1").first?.text(0) ?? Self.genesisHash
         let servedAt = Self.iso(Date())
         let strings = { (items: [String]) in CanonicalJSON.array(items.map(CanonicalJSON.string)) }

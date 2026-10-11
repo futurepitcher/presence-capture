@@ -133,3 +133,30 @@ test('store T12: the log\'s canonical JSON escapes as JSON.stringify does, whate
   assert.equal(record.byte_count, Buffer.byteLength(JSON.stringify(envelopes)));
   assert.equal(egressChainError(path), null);
 }));
+
+test('store T12: two processes reading at once keep one unbroken egress chain', async () => {
+  const { randomBytes } = await import('node:crypto');
+  const { mkdtempSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { startDriver } = await import('../driver-client.js');
+  const dir = mkdtempSync(join(tmpdir(), 'pc-concurrent-'));
+  const path = join(dir, 'store.sqlite');
+  const key = randomBytes(32).toString('hex');
+  const [a, b] = [startDriver(), startDriver()];
+  try {
+    await a.call('open', { path, master_key_hex: key });
+    await b.call('open', { path, master_key_hex: key });
+    for (let i = 0; i < 5; i++) await a.call('append', screenText(`row ${i}`));
+    const { grant_id } = await a.call('issue_grant', { client_id: 'c', expires_at: FUTURE });
+    // Two MCP clients, say, each reading as fast as it can.
+    const reads = (driver) => Promise.all(Array.from({ length: 25 }, () => driver.call('read', { grant_id, tool: 'recent' })));
+    await Promise.all([reads(a), reads(b)]);
+    assert.equal(query(path, 'SELECT COUNT(*) AS n FROM egress_record')[0].n, 50);
+    assert.equal(egressChainError(path), null);
+  } finally {
+    await a.close();
+    await b.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

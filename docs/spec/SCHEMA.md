@@ -185,6 +185,12 @@ can forget.
 - **`query_fingerprint`** is the SHA-256 of `tool ‖ U+0000 ‖ query ‖ U+0000 ‖
   contains`. The query itself is never kept.
 
+An implementation MUST read the last record and insert the next in one
+transaction that holds the write lock from its start (`BEGIN IMMEDIATE`), so
+two readers in different processes can't both follow the same record.
+Migration 007's unique index on `prev_hash` refuses a fork whatever an
+implementation does.
+
 The store-layer suite recomputes the chain from the file, so a log written by
 one implementation verifies in any other.
 
