@@ -28,19 +28,19 @@ content is classified, and what a consumer does with the result.
 
 ## Requirements
 
-| # | Requirement | Conformance test |
+| # | Requirement | Store layer (`conformance/store/`) |
 |---|-------------|------------------|
-| R1 | Capture events are append-only; payloads are content-addressed and stored apart from metadata | `append-only.test.js` |
+| R1 | Capture events are append-only; payloads are content-addressed and stored apart from metadata | `capture.test.js` |
 | R2 | Revocation is a first-class event, never a row delete | `revocation.test.js` |
-| R3 | Revocation propagates to projections and vector indices, verifiably | `revocation.test.js`, `vector-store.test.js` |
-| R4 | Replay receipts and watermarks record consumer position; replay is deterministic | `replay.test.js` |
-| R5 | Every event carries a privacy level, enforced at read boundaries | `privacy.test.js` |
-| R6 | Classification taxonomy is pluggable | `append-only.test.js` |
-| R7 | Near-identical frames are deduplicated before persistence | `revocation.test.js` |
-| R8 | Per-application exclusion is supported at capture time | daemon-side; not schema-testable |
-| R9 | The event shape is platform-neutral | by inspection |
+| R3 | Revocation propagates to projections and vector indices, verifiably | `revocation.test.js`; vector backends: `api/vector-store.test.js` |
+| R4 | Replay receipts and watermarks record consumer position; replay is deterministic | reference only: `api/replay.test.js` |
+| R5 | Every event carries a privacy level, enforced at read boundaries | `capture.test.js`; read boundary: `api/privacy.test.js` |
+| R6 | Classification taxonomy is pluggable | `capture.test.js` |
+| R7 | Near-identical frames are deduplicated before persistence | `capture.test.js` |
+| R8 | Per-application exclusion is supported at capture time | daemon-side; shared cases in `packages/schema/cases/` |
+| R9 | The event shape is platform-neutral | by inspection, and by the store layer holding every implementation to the same files |
 | R10 | Derived artifacts — transcripts, alignments, embeddings — are projections subject to R3 | `revocation.test.js` |
-| R11 | Revocation erases content: no plaintext ever reaches disk, and a revoked capture's key, text and bytes are gone from every file the store leaves, with a receipt | `forensic.test.js`, `mutation.test.js` |
+| R11 | Revocation erases content: no plaintext ever reaches disk, and a revoked capture's key, text and bytes are gone from every file the store leaves, with a receipt | `erasure.test.js`, `capture.test.js`, `revocation.test.js`; the check itself: `mutation.test.js` |
 | R12 | Retention is a scheduled revocation, never a delete | `retention.test.js` |
 
 ## Entities
@@ -195,11 +195,20 @@ can forget.
 
 ## Conformance
 
-An implementation is conformant when it passes
-[`packages/schema/conformance`](../../packages/schema/conformance). The suite
-requires Node ≥ 22.5 and has **no dependencies** — clone and run `npm test`.
+An implementation is conformant when it passes the **store layer** of
+[`packages/schema/conformance`](../../packages/schema/conformance), driven
+through the [driver protocol](DRIVER.md). That layer writes through your
+implementation and then reads your store's files directly, so it holds any
+language to the same bytes. The suite requires Node ≥ 22.13 and has **no
+dependencies**:
 
-It currently covers 48 assertions, including the five that distinguish this
+```sh
+PRESENCE_CAPTURE_DRIVER="/path/to/your-driver" npm run conformance:store
+```
+
+The reference implementation also passes an API layer covering its read path
+(grants, envelope and egress, ADR 0001 T1–T12) and replay (R4). Together the
+two layers cover 64 assertions, including the five that distinguish this
 schema:
 
 - **revocation propagation** — derived views and vector entries do not survive

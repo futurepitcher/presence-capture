@@ -1,19 +1,27 @@
 /**
  * The forensic check is only worth something if it fails stores that do not
- * erase. Each mutant here is the reference store with one erasure step broken
- * from the outside, and each must produce at least one forensic failure.
+ * erase. Each mutant is the reference store with one erasure step broken from
+ * the outside, driven through the same protocol, and each must produce at
+ * least one forensic failure.
+ *
+ * This file tests the check, not an implementation, so it always runs against
+ * the reference store, whatever PRESENCE_CAPTURE_DRIVER says.
  */
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createDriverHandler } from '../../src/driver.js';
+import { openStore } from '../../src/store.js';
+import { inProcessDriver } from '../driver-client.js';
 import { forensicErasureCheck } from './forensic.js';
-import { openStore } from '../src/store.js';
 
-const mutant = (breakIt) => (path, options) => {
-  const store = openStore(path, options);
-  breakIt(store);
-  return store;
-};
+const driverFor = (breakIt) => () => inProcessDriver(createDriverHandler({
+  open: (path, options) => {
+    const store = openStore(path, options);
+    breakIt(store);
+    return store;
+  },
+}));
 
 // A trigger that RAISE(IGNORE)s skips the statement silently: the store thinks
 // it deleted the row.
@@ -38,12 +46,16 @@ const MUTANTS = {
 };
 
 for (const [name, breakIt] of Object.entries(MUTANTS)) {
-  test(`R11 mutant is caught: ${name}`, () => {
-    const failures = forensicErasureCheck(mutant(breakIt));
+  test(`R11 mutant is caught: ${name}`, async () => {
+    const failures = await forensicErasureCheck(driverFor(breakIt));
     assert.ok(failures.length > 0, `a store where ${name} passed the forensic check`);
+    assert.ok(
+      failures.every((f) => !f.startsWith('check could not run')),
+      `the check crashed rather than finding the mutation: ${failures}`,
+    );
   });
 }
 
-test('R11: the unmutated store passes, so the mutants fail for their mutation', () => {
-  assert.deepEqual(forensicErasureCheck(openStore), []);
+test('R11: the unmutated store passes in-process too, so each mutant fails for its mutation', async () => {
+  assert.deepEqual(await forensicErasureCheck(driverFor(() => {})), []);
 });

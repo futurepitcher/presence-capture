@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { openStore } from '../src/store.js';
-import { scheduleRetention } from '../src/retention.js';
+import { openStore } from '../../src/store.js';
+import { scheduleRetention } from '../../src/retention.js';
 
 const NOW = new Date('2026-10-20T12:00:00.000Z');
 

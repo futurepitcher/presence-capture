@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { seedAudioChain } from './helpers.js';
-import { openStore } from '../src/store.js';
+import { openStore } from '../../src/store.js';
 
 const deriveText = (e) => (e.content_text ? { id: e.capture_id, text: e.content_text } : undefined);
 

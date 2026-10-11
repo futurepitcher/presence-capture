@@ -7,7 +7,7 @@
   "exports": { ".": "./src/server.js" },
   "bin": { "presence-capture-mcp": "./src/stdio.js" },
   "files": ["src", "conformance"],
-  "engines": { "node": ">=22.5.0" },
+  "engines": { "node": ">=22.13.0" },
   "scripts": {
     "test": "node --test conformance/*.test.js",
     "conformance": "node --test conformance/*.test.js"

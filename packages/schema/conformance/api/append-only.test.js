@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { openStore } from '../src/store.js';
+import { openStore } from '../../src/store.js';
 
 test('R1: capture events cannot be updated or deleted', () => {
   const store = openStore();

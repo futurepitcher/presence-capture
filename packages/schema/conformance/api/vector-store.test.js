@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { openStore } from '../src/store.js';
-import { bindVectorStore, createInMemoryVectorStore } from '../src/vector-store.js';
+import { openStore } from '../../src/store.js';
+import { bindVectorStore, createInMemoryVectorStore } from '../../src/vector-store.js';
 
 /**
  * Run this file against your own adapter to claim R3 conformance for a
