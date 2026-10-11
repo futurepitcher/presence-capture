@@ -48,7 +48,11 @@ public enum AXText {
             if secure.contains(node.role) || node.subrole.map(secure.contains) == true { return }
             // Out of the window entirely: scrolled away, or another part of the screen.
             if let frame = node.frame, frame.width > 0, frame.height > 0, !frame.intersects(window) { return }
-            if textRoles.contains(node.role), let text = (node.value ?? node.title)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+            // Text counts only with a frame on screen inside the window: one with none, or with no
+            // size, gives no evidence it's visible (hidden, collapsed, off-screen). A container
+            // without one is still walked: its children answer for themselves.
+            let shown = node.frame.map { $0.width > 0 && $0.height > 0 && $0.intersects(window) } ?? false
+            if shown, textRoles.contains(node.role), let text = (node.value ?? node.title)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
                 let kept = String(text.prefix(maxCharacters - characters))
                 lines.append(kept)
                 characters += kept.count
