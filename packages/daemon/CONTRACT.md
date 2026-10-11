@@ -43,7 +43,15 @@ Per captured artifact, in this order:
    `source_url` is set only where it was actually established; otherwise `NULL`.
    It MUST NOT be inferred from content.
 6. **Text.** Accessibility-API text first, Vision OCR as fallback. Record which
-   in `extraction`.
+   in `extraction`. Accessibility text is read only from the focused window,
+   bound to the title of the window that was captured, and only what is
+   visible in it: a text view's visible range, and elements inside the
+   window's frame. Text with no frame, or a zero-size one, gives no evidence
+   it's visible and is not read. A password field (`AXSecureTextField`) is
+   never read: an element's role is asked for before anything else, and a
+   secure one's value is never fetched. Every element queried has its own
+   short timeout. If
+   too little text is exposed to stand for the window, it is read by OCR.
 7. **Derived artifacts.** A transcript is a separate `capture_event` with
    `derived_from` pointing at its audio segment, and an alignment points at the
    transcript (R10). Never inline a transcript into the audio row — that breaks

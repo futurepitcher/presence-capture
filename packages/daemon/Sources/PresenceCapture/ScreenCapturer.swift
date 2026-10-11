@@ -4,7 +4,8 @@ import CaptureCore
 import CaptureStore
 import ScreenCaptureKit
 
-/// Every tick, each on-screen window of the frontmost app, read with Vision (OCR) and kept as text:
+/// Every tick, each on-screen window of the frontmost app, kept as text: the focused one read from
+/// the app's Accessibility tree where it exposes enough (exact, and no OCR), the rest with Vision:
 /// excluded first (nothing of an excluded window is read), then deduplicated (a window whose image
 /// hasn't changed since it was last kept is not kept again, R7), then redacted and sealed into the
 /// store. No image is ever written (ADR 0005). An actor: a capture, and Vision's reading, run off
@@ -22,15 +23,16 @@ actor ScreenCapturer {
     private(set) var frames = 0
     private(set) var reads = 0
     private(set) var readMs = 0.0
+    private(set) var axReads = 0
 
     init(store: CaptureStore, log: @escaping @Sendable (String) -> Void) {
         self.store = store
         self.log = log
     }
 
-    func takeCounts() -> (frames: Int, reads: Int, readMs: Double) {
-        defer { frames = 0; reads = 0; readMs = 0 }
-        return (frames, reads, readMs)
+    func takeCounts() -> (frames: Int, reads: Int, readMs: Double, axReads: Int) {
+        defer { frames = 0; reads = 0; readMs = 0; axReads = 0 }
+        return (frames, reads, readMs, axReads)
     }
 
     func hold(_ held: Bool) {
@@ -93,15 +95,26 @@ actor ScreenCapturer {
             let hash = OCR.hash(image)
             // Unchanged since it was last kept: dropped, not stored (R7).
             if lastKept[window.windowID] == hash { continue }
-            let started = Date()
-            let lines = try OCR.read(image)
-            reads += 1
-            readMs += Date().timeIntervalSince(started) * 1000
-            guard stillOn(pid), currentTitle(window.windowID) == title else { continue }
-            let text = lines.map(\.text).joined(separator: "\n")
+            let focused = window.windowID == FrontWindow.of(Set(windows.map(\.windowID)), pid: pid, frontToBack: listedWindows())
+            // The app's own text first, where it exposes it for this window: exact, and no OCR.
+            // Only the focused window can be read this way, and only what's visible in it.
+            var text: String?
+            var extraction = "ocr"
+            if focused, let read = AXReader.focusedWindow(pid: pid, title: title, deadline: Date().addingTimeInterval(0.5)),
+               let visible = AXText.visibleText(read.root, window: read.frame) {
+                text = visible
+                extraction = "accessibility"
+                axReads += 1
+            }
+            if text == nil {
+                let started = Date()
+                text = try OCR.read(image).map(\.text).joined(separator: "\n")
+                reads += 1
+                readMs += Date().timeIntervalSince(started) * 1000
+            }
+            guard stillOn(pid), currentTitle(window.windowID) == title, let text else { continue }
             lastKept[window.windowID] = hash
             guard !text.isEmpty else { continue }
-            let focused = window.windowID == FrontWindow.of(Set(windows.map(\.windowID)), pid: pid, frontToBack: listedWindows())
             // A page's address only where the browser says it (never inferred from what's on screen),
             // and only for this window: its focused window must be the one read, by title, and it
             // must still be in front with that title once the address is read. A tab switched
@@ -114,7 +127,7 @@ actor ScreenCapturer {
             }
             try store.append(NewCapture(
                 capturedAt: Date(), captureType: "screen_text", source: "screen", sourceApp: front.bundleIdentifier ?? app,
-                sourceUrl: url, contentText: Redact.redact(text), extraction: "ocr"))
+                sourceUrl: url, contentText: Redact.redact(text), extraction: extraction))
             frames += 1
         }
     }

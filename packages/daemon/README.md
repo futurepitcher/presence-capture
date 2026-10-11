@@ -11,7 +11,6 @@ Pre-alpha, in progress (M2 on the [roadmap](../../ROADMAP.md)).
 - The store passes the store-layer conformance suite through `pcap-driver`.
 - The app captures screen, audio and activity into that store.
 - Not yet done:
-  - accessibility text ahead of OCR;
   - the plugin interfaces;
   - a live side-by-side parity trial against screenpipe.
 
@@ -49,7 +48,7 @@ Every 5 seconds, unless paused, asleep, locked, or another user has the Mac:
 
 | Lane | Kept as | Notes |
 |------|---------|-------|
-| **Screen** | `screen_text` | Each on-screen window of the front app, read by Vision. An unchanged window isn't kept again. No image is ever kept ([ADR 0005](../../docs/adr/0005-text-first-capture.md)) |
+| **Screen** | `screen_text` | Each on-screen window of the front app. The focused one is read from the app's own Accessibility text where it exposes enough (exact, no OCR): only what's visible, never a password field. The rest are read by Vision OCR. An unchanged window isn't kept again. No image is ever kept ([ADR 0005](../../docs/adr/0005-text-first-capture.md)) |
 | **Audio** (macOS 26) | `audio_segment` + `audio_transcript` | The microphone and system audio, each of which can be turned off. Transcribed on device by SpeechAnalyzer ([ADR 0004](../../docs/adr/0004-apple-on-device-models.md)), one utterance at a time, stamped when it was said. No audio is kept |
 | **Activity** | `activity` | The app, window and state (active, idle after 2 minutes, locked), written only when one changes |
 

@@ -128,7 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task {
                 let counts = await capturer.takeCounts()
                 let average = counts.reads == 0 ? 0 : Int(counts.readMs / Double(counts.reads))
-                log.write("capture.hour frames=\(counts.frames) reads=\(counts.reads) read_ms_avg=\(average) audio_in=\(heard.input) audio_out=\(heard.output)")
+                log.write("capture.hour frames=\(counts.frames) ax_reads=\(counts.axReads) ocr_reads=\(counts.reads) ocr_ms_avg=\(average) audio_in=\(heard.input) audio_out=\(heard.output)")
             }
         })
     }
