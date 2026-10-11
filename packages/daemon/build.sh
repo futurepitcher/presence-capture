@@ -17,11 +17,14 @@ IDENTITY="${IDENTITY:--}"
 BUILD_NUMBER="$(git -C "${SCRIPT_DIR}" rev-list --count HEAD 2>/dev/null || echo 1)"
 
 swift build -c release --package-path "${SCRIPT_DIR}" --product PresenceCapture
+swift build -c release --package-path "${SCRIPT_DIR}" --product pcap-mcp
 BIN_DIR="$(swift build -c release --package-path "${SCRIPT_DIR}" --show-bin-path)"
 
 rm -rf "${APP}"
 mkdir -p "${APP}/Contents/MacOS"
 cp "${BIN_DIR}/PresenceCapture" "${APP}/Contents/MacOS/PresenceCapture"
+# The reader agents launch (ADR 0008), inside the bundle and signed with it.
+cp "${BIN_DIR}/pcap-mcp" "${APP}/Contents/MacOS/pcap-mcp"
 cat > "${APP}/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -43,6 +46,7 @@ cat > "${APP}/Contents/Info.plist" <<PLIST
 PLIST
 plutil -lint "${APP}/Contents/Info.plist" >/dev/null
 
+codesign --force --options runtime --sign "${IDENTITY}" "${APP}/Contents/MacOS/pcap-mcp"
 codesign --force --options runtime --entitlements "${SCRIPT_DIR}/PresenceCapture.entitlements" --sign "${IDENTITY}" "${APP}"
 codesign --verify --strict "${APP}"
 echo "built: ${APP} (signed: ${IDENTITY})"

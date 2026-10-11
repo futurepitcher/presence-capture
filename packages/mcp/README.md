@@ -7,8 +7,15 @@ Local-only, read-only MCP server over a conformant capture store.
 Pre-alpha, implemented and under test. Phase P5 on the [roadmap](../../ROADMAP.md).
 
 ```sh
-cd packages/mcp && npm test        # 11 assertions, no dependencies
+cd packages/mcp && npm test        # the reference, over stdio, no dependencies
+PRESENCE_CAPTURE_MCP="/path/to/pcap-mcp" npm test    # any other MCP server, held to the same tests
 ```
+
+The tests start the server under test as an MCP client would, over stdio,
+with `--store <path> --grant <grant_id> --master-key-file <path>`. They
+seed and inspect the store through the reference, which opens any conformant
+store. The native server, `pcap-mcp` (in `packages/daemon`), passes the same
+12.
 
 Run it against a store:
 

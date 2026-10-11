@@ -88,6 +88,26 @@ can be revoked together. Check one with the
 node ../schema/bin/sensor-kit.js -- node ../plugins/git-activity/sensor.mjs --once ~/code/repo
 ```
 
+## `pcap-mcp`, the native MCP server
+
+[ADR 0008](../../docs/adr/0008-recall-indexes-in-memory.md)'s reader:
+- It's launched by an MCP client over stdio, and it's inside the app bundle.
+- It reads through a grant: enforced in `CaptureStore`, enveloped, and
+  recorded in the hash-chained egress log.
+- **SQLite refuses every write it might make except an egress record**
+  (`restrictToReading`), so a bug in it can't touch a capture, a key or a
+  grant.
+- It passes the same MCP conformance as the reference.
+
+```sh
+swift build --product pcap-mcp
+pcap-mcp --store <path> --grant <grant_id> --master-key-file <path>
+```
+
+Opening the app's own store takes the master key from the Keychain. That
+waits on the Keychain item trusting `pcap-mcp` as well as the app, which is
+next.
+
 ## The menu
 
 | Item | What it does |

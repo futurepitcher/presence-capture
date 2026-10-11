@@ -88,11 +88,21 @@ jobs:
         working-directory: packages/daemon
         run: swift test
 
+      - name: Link workspaces
+        run: npm ci --no-audit --no-fund
+
       - name: Store-layer conformance against the Swift driver
         working-directory: packages/schema
         run: |
           swift build --package-path ../daemon --product pcap-driver
           PRESENCE_CAPTURE_DRIVER="$(swift build --package-path ../daemon --show-bin-path)/pcap-driver" npm run conformance:store
+
+      # pcap-mcp held to the same MCP conformance as the reference, over stdio.
+      - name: MCP conformance against pcap-mcp
+        working-directory: packages/mcp
+        run: |
+          swift build --package-path ../daemon --product pcap-mcp
+          PRESENCE_CAPTURE_MCP="$(swift build --package-path ../daemon --show-bin-path)/pcap-mcp" npm test
 
   # Developer Certificate of Origin (GOVERNANCE.md): every commit in a pull
   # request carries a Signed-off-by trailer naming its author. Sign off with
