@@ -9,17 +9,23 @@ Done before this roadmap:
 - schema spec v0.1, with migrations 001–004 and bindings;
 - the local, read-only MCP server (`packages/mcp`).
 
-## M0: Project foundation
+## M0: Project foundation (in review)
 
-- Governance, with a public pledge that the core stays Apache-2.0.
-- DCO sign-off.
-- An RFC process for spec changes.
-- A fake sensor that replays recorded fixtures, so the store, search, MCP and
-  eval can be worked on without a Mac.
-- OpenSSF Scorecard, signed tags, issue templates and Discussions.
+- ✅ [Governance](GOVERNANCE.md): the Apache-2.0 pledge, funding, how decisions
+  are made, and the path to maintainer.
+- ✅ DCO sign-off, checked in CI. No contributor licence agreement.
+- ✅ An [RFC process](rfcs/README.md) for the spec, the driver protocol and the
+  MCP surface.
+- ✅ A fake sensor that replays recorded fixtures through exclusion and
+  redaction, so the store, search, MCP and evals can be worked on without a
+  Mac.
+- ✅ OpenSSF Scorecard, actions pinned to commits, Dependabot, CODEOWNERS,
+  and issue and pull request templates.
+- ☐ Repository settings: branch protection, Discussions, a roadmap board,
+  GitHub Sponsors.
 
-**Exit:** a contributor on Linux runs the suite and the eval against the fake
-sensor.
+**Exit:** a contributor on Linux runs the suite and replays a fixture with no
+Mac. Scorecard ≥ 7.
 
 ## M1: Make forgetting real ✅
 

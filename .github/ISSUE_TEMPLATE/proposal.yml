@@ -1,0 +1,26 @@
+name: Proposal
+description: A feature, a plugin idea, or a change to how something works.
+labels: [proposal]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Changes to the spec, the driver protocol, the MCP surface or the shared cases go through an RFC (`rfcs/README.md`). This issue is a good place to start one.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you're trying to do, and what gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+    validations:
+      required: true
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Privacy
+      description: What this changes about what is captured, kept, served, or erased.

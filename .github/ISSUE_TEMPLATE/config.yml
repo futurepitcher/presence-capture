@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a vulnerability, privately
+    url: https://github.com/futurepitcher/presence-capture/security/advisories/new
+    about: Anything that exposes captured data, or revoked content that survives. Never as a public issue.
+  - name: Ask a question or share what you built
+    url: https://github.com/futurepitcher/presence-capture/discussions
+    about: Questions, ideas, and implementations in progress.
