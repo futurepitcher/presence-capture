@@ -23,11 +23,15 @@ Per captured artifact, in this order:
 
 1. **Exclusion check first.** Per-application and per-input-device exclusion is
    evaluated *before* bytes exist (R8). A capture that should not have happened
-   must never reach disk, not be deleted afterwards.
+   must never reach disk, not be deleted afterwards. The rules, and how the
+   user's list is parsed, are in
+   [`cases/exclusion.json`](../schema/cases/exclusion.json). A user list that
+   exists but can't be read means nothing is captured until it can be.
 2. **Dedupe.** Compute `dedupe_key` over the frame; a near-identical consecutive
    frame is dropped, not stored (R7).
 3. **Redact.** Secrets are filtered *before* anything reaches disk. Redaction
-   after persistence is not redaction.
+   after persistence is not redaction. The daemon's redactor passes
+   [`cases/redaction.json`](../schema/cases/redaction.json).
 4. **Seal.** Generate the capture's data key. Seal its text and any payload
    bytes with it (AES-256-GCM, AAD `text:` / `payload:<capture_id>`), and wrap
    the key with the master key from the Keychain. Plaintext never reaches

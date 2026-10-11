@@ -21,7 +21,7 @@ Done before this roadmap:
 **Exit:** a contributor on Linux runs the suite and the eval against the fake
 sensor.
 
-## M1: Make forgetting real (in progress)
+## M1: Make forgetting real ✅
 
 - ✅ Revocation erases content ([ADR 0002](docs/adr/0002-erasable-revocation.md)).
   Content is sealed per capture, and keys, text and bytes go in the revoking
@@ -31,10 +31,12 @@ sensor.
 - ✅ Retention is a scheduled revocation ([ADR 0003](docs/adr/0003-retention-is-revocation.md)).
 - ✅ Decisions on Apple on-device models ([ADR 0004](docs/adr/0004-apple-on-device-models.md))
   and text-first capture ([ADR 0005](docs/adr/0005-text-first-capture.md)).
-- ☐ The suite split into a store layer and an API layer, with a driver
-  protocol (`ingest`, `revoke`, `retain`, `dump`) any implementation can
-  expose.
-- ☐ Shared redaction, exclusion and dedupe case files in `packages/schema/cases/`.
+- ✅ The suite split into a store layer, driven through the
+  [driver protocol](docs/spec/DRIVER.md) any implementation can expose, and the
+  reference API layer.
+- ✅ Shared exclusion and redaction cases in `packages/schema/cases/`, with
+  reference implementations. Near-duplicate cases wait for M2's dedupe
+  decision.
 
 **Exit:** a store written by another implementation can be checked by the
 store-layer suite, forensic check included.

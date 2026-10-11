@@ -12,6 +12,7 @@
   },
   "files": [
     "src",
+    "cases",
     "bin",
     "migrations",
     "conformance"

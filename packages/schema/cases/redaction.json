@@ -1,0 +1,45 @@
+{
+  "_": "Redaction before disk (CONTRACT step 3). Secrets first, then personal identifiers, each replaced by a bracketed label. Every implementation's redactor gives these answers; the reference (src/redact.js) and the macOS daemon both test against this file. 'output' cases must match exactly; 'must_not_contain' cases must not leak any listed string.",
+  "cases": [
+    {
+      "name": "emails, phones and card numbers",
+      "input": "Mail zac@example.com or call (415) 555-0100; card 4111 1111 1111 1111",
+      "output": "Mail [EMAIL] or call [PHONE]; card [CREDIT_CARD]"
+    },
+    {
+      "name": "API keys and tokens",
+      "input": "ANTHROPIC_API_KEY=sk-ant-api03-abcdefghijklmnopqrstuvwx\ntoken ghp_abcdefghijklmnopqrstuvwxyz0123456789\naws AKIAABCDEFGHIJKLMNOP\nslack xoxb-1234567890-abcdefghij",
+      "must_not_contain": ["sk-ant-api03", "ghp_abcdef", "AKIAABCDEF", "xoxb-12345"]
+    },
+    {
+      "name": "a JWT and a private key block",
+      "input": "auth eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U\n-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----",
+      "output": "auth [JWT]\n[PRIVATE_KEY]"
+    },
+    {
+      "name": "a private key whose end was cut off: all of it from its start",
+      "input": "Deck notes\n-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\nAAAAAAAA",
+      "output": "Deck notes\n[PRIVATE_KEY]"
+    },
+    {
+      "name": "a whole key, then a cut one",
+      "input": "-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----\nthen\n-----BEGIN PRIVATE KEY-----\nxyz",
+      "output": "[PRIVATE_KEY]\nthen\n[PRIVATE_KEY]"
+    },
+    {
+      "name": "a labelled password",
+      "input": "password: hunter2hunter2",
+      "output": "[CREDENTIAL]"
+    },
+    {
+      "name": "a home directory path keeps its shape, not its user",
+      "input": "open /Users/dana/Documents/plan.md",
+      "output": "open /Users/[USER]/Documents/plan.md"
+    },
+    {
+      "name": "ordinary text is left alone",
+      "input": "Send Zac the revised deck by Friday at 3pm.",
+      "output": "Send Zac the revised deck by Friday at 3pm."
+    }
+  ]
+}

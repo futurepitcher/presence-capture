@@ -48,6 +48,7 @@ it, with no help from the implementation that wrote it.
 | `api/egress.test.js` | — | T6–T12 |
 | `api/vector-store.test.js` | R3 | — |
 | `api/retention.test.js` | R12, and the retention schedule | — |
+| `api/cases.test.js` | R8 exclusion and redaction, against the [shared cases](../cases/README.md) | — |
 
 ADR 0001's T1–T12 are checked again at the MCP protocol surface in
 `packages/mcp/conformance`.
