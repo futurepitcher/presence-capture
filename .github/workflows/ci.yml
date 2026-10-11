@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read
@@ -14,7 +13,9 @@ jobs:
     name: Documentation checks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       - name: Required files are present
         run: |
@@ -23,7 +24,8 @@ jobs:
                    SECURITY.md CODE_OF_CONDUCT.md \
                    docs/spec/SCHEMA.md docs/spec/DRIVER.md \
                    docs/adr/0001-serving-trust-boundary.md \
-                   docs/adr/0002-erasable-revocation.md; do
+                   docs/adr/0002-erasable-revocation.md \
+                   GOVERNANCE.md rfcs/README.md; do
             test -f "$f" || { echo "missing: $f"; exit 1; }
           done
 
@@ -31,7 +33,7 @@ jobs:
         run: grep -q "Apache License" LICENSE && grep -q "Version 2.0" LICENSE
 
       - name: Markdown links resolve
-        uses: lycheeverse/lychee-action@v2
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:
           args: --no-progress --offline --include-fragments .
           fail: true
@@ -43,9 +45,11 @@ jobs:
       matrix:
         node: ['22', '24']
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: ${{ matrix.node }}
 
@@ -63,3 +67,32 @@ jobs:
       - name: MCP conformance (ADR 0001 T1-T12)
         working-directory: packages/mcp
         run: npm test
+
+  # Developer Certificate of Origin (GOVERNANCE.md): every commit in a pull
+  # request carries a Signed-off-by trailer naming its author. Sign off with
+  # `git commit -s`.
+  dco:
+    name: DCO sign-off
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Every commit is signed off by its author
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for commit in $(git rev-list --no-merges "$BASE..$HEAD"); do
+            author="$(git log -1 --format='%an <%ae>' "$commit")"
+            if ! git log -1 --format='%(trailers:key=Signed-off-by,valueonly)' "$commit" | grep -qF "$author"; then
+              echo "::error::$(git log -1 --format='%h %s' "$commit") is not signed off by $author"
+              missing=1
+            fi
+          done
+          exit "$missing"

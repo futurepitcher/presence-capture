@@ -21,7 +21,15 @@ is making the resulting record **revocable in a way you can prove**:
 
 - Capture events are append-only, with content-addressed payloads.
 - **Revocation is an event, not a delete**, and it propagates into derived
-  projections and vector indices. A delete cannot prove the derived data went too.
+  projections and vector indices. A delete can't prove the derived data went
+  too.
+- **Revocation erases.** Each capture's content is sealed under its own key,
+  and revoking destroys the key, the text and the bytes in the same
+  transaction. A forensic test scans every file the store leaves to prove
+  nothing revoked survives. The record that something was captured stays, so
+  the audit trail does too.
+- **Retention is a scheduled revocation**, with the same receipts, so nothing
+  ever leaves the store without a record of why.
 - **Replay receipts and watermarks** let a consumer prove which events it
   processed and re-derive deterministically.
 - Every event carries a **privacy level that is enforced at read boundaries**,
@@ -37,15 +45,16 @@ conformance suite, plus a reference implementation that proves the spec works.
 
 | Package | What it is |
 |---------|-----------|
-| [`packages/schema`](packages/schema) | The specification, migrations, and conformance suite. **The actual standard.** v0.1.0-draft, 32 passing assertions, zero dependencies |
-| [`packages/daemon`](packages/daemon) | macOS reference implementation — ScreenCaptureKit, AVAudioEngine, activity capture |
+| [`packages/schema`](packages/schema) | The specification, migrations, and conformance suite. **The actual standard.** v0.1.0-draft, zero dependencies. The store layer checks any implementation through a [driver](docs/spec/DRIVER.md) |
+| [`packages/daemon`](packages/daemon) | macOS reference implementation, in progress (M2): ScreenCaptureKit, Apple's on-device speech and OCR, activity capture |
 | [`packages/mcp`](packages/mcp) | Local-only MCP server with read scopes and an egress log. Implemented; 11 passing assertions |
 
 ## Design positions
 
-**Try it:** `npm install && npm test` — Node ≥ 22.13, no third-party
-dependencies. 43 assertions across the schema and MCP suites. They define
-conformance, so they are also the fastest way to see what this project claims.
+**Try it:** `npm install && npm test`. It needs Node ≥ 22.13 and has no
+third-party dependencies. The schema and MCP suites define conformance, so
+they're also the fastest way to see what this project claims. No Mac needed:
+`packages/schema/bin/replay-fixture.js` fills a store with a synthetic day.
 
 **Local-only, read-only, for now.** v1 ships no network listener and no MCP
 mutations. Not because it is hard to add, but because serving a complete record
@@ -68,6 +77,16 @@ Extracted from [PresenceOS](https://github.com/futurepitcher/PresenceOS), which
 is its first adopter and runs the conformance suite against itself. PresenceOS's
 behavioural runtime and retrieval engine are not part of this project.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for a ten-minute tour and setup on any
+OS. Spec changes go through [RFCs](rfcs/README.md), and decisions are
+described in [GOVERNANCE.md](GOVERNANCE.md).
+
 ## License
 
-[Apache-2.0](LICENSE). Chosen over MIT for the explicit patent grant.
+[Apache-2.0](LICENSE), chosen over MIT for the explicit patent grant.
+
+**The core stays Apache-2.0.** No relicensing, no contributor licence
+agreement, and nothing paid ever gates capture, memory or erasure. See the
+pledge in [GOVERNANCE.md](GOVERNANCE.md).

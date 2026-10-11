@@ -1,0 +1,32 @@
+name: Bug
+description: Something does not do what the spec, an ADR, or the docs say.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **If this exposes captured data, or revoked content can still be read, stop here** and report it privately: Security → Report a vulnerability.
+        Please don't paste real captured content. Reproduce it with a fixture (`packages/schema/fixtures/`) instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: And what you expected, citing the requirement (R-number), ADR, or doc if there is one.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: Commands, a fixture, or a failing test.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: macOS 26.1, Node 24.18
