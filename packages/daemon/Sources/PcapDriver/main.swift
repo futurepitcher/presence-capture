@@ -67,6 +67,27 @@ func handle(_ op: String, _ args: [String: Any]) throws -> [String: Any] {
         let now = string(args, "now").flatMap(CaptureStore.date) ?? Date()
         guard let r = try need().retain(days: days, now: now) else { return ["revocation_id": NSNull(), "revoked_capture_ids": [String]()] }
         return ["revocation_id": r.revocationId, "revoked_capture_ids": r.revokedCaptureIds, "erased_on_disk": r.erasedOnDisk]
+    case "issue_grant":
+        guard let expires = string(args, "expires_at").flatMap(CaptureStore.date) else {
+            throw DriverError(code: "bad_request", message: "a grant with no expiry is not issuable")
+        }
+        var grant = NewGrant(clientId: try required(args, "client_id"), expiresAt: expires)
+        if let v = args["privacy_levels"] as? [String] { grant.privacyLevels = v }
+        if let v = args["capture_types"] as? [String] { grant.captureTypes = v }
+        if let v = args["sources"] as? [String] { grant.sources = v }
+        if let v = args["domains"] as? [String] { grant.domains = v }
+        grant.timeFrom = string(args, "time_from").flatMap(CaptureStore.date)
+        grant.timeTo = string(args, "time_to").flatMap(CaptureStore.date)
+        if let v = (args["max_rows_per_query"] as? NSNumber)?.intValue { grant.maxRowsPerQuery = v }
+        return ["grant_id": try need().issueGrant(grant)]
+    case "revoke_grant":
+        try need().revokeGrant(try required(args, "grant_id"))
+        return [:]
+    case "read":
+        let request = ReadRequest(
+            tool: try required(args, "tool"), query: string(args, "query") ?? "", contains: string(args, "contains"),
+            limit: (args["limit"] as? NSNumber)?.intValue, afterSequence: (args["after_sequence"] as? NSNumber)?.intValue)
+        return ["envelopes": try need().read(grantId: try required(args, "grant_id"), request).map(\.foundation)]
     case "content":
         return ["text": json(try need().contentText(try required(args, "capture_id")))]
     case "payload":
@@ -102,6 +123,7 @@ while let line = readLine() {
         switch error {
         case .constraint: code = "constraint"
         case .wrongKey: code = "key"
+        case .denied: code = "denied"
         default: code = "internal"
         }
         respond(["id": id, "ok": false, "error": ["code": code, "message": error.description]])

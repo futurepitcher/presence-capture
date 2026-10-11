@@ -4,7 +4,7 @@
  * its own executable, and the store-layer suite drives it the same way.
  */
 
-import { openStore } from './store.js';
+import { AuthorizationError, openStore } from './store.js';
 
 export const DRIVER_PROTOCOL_VERSION = '1';
 
@@ -18,6 +18,7 @@ class DriverError extends Error {
 /** What a failure means to the suite, not how this implementation phrased it. */
 function codeFor(err) {
   if (err instanceof DriverError) return err.code;
+  if (err instanceof AuthorizationError) return 'denied';
   if (/does not open this store|needs its masterKey|masterKey must be/.test(err.message)) return 'key';
   if (/constraint|append-only|write-once/i.test(err.message)) return 'constraint';
   return 'internal';
@@ -94,6 +95,29 @@ export function createDriverHandler({ open = openStore } = {}) {
         ? { revocation_id: result.revocationId, revoked_capture_ids: result.revokedCaptureIds, erased_on_disk: result.erasedOnDisk }
         : { revocation_id: null, revoked_capture_ids: [] };
     },
+
+    issue_grant: (a) => ({
+      grant_id: need().issueGrant({
+        clientId: a.client_id,
+        expiresAt: a.expires_at,
+        privacyLevels: a.privacy_levels,
+        captureTypes: a.capture_types,
+        sources: a.sources,
+        domains: a.domains,
+        timeFrom: a.time_from,
+        timeTo: a.time_to,
+        maxRowsPerQuery: a.max_rows_per_query,
+      }),
+    }),
+
+    revoke_grant: ({ grant_id: grantId }) => {
+      need().revokeGrant(grantId);
+      return {};
+    },
+
+    read: ({ grant_id: grantId, tool, query, contains, limit, after_sequence: afterSequence }) => ({
+      envelopes: need().createReader(grantId).read({ tool, query, contains, limit, afterSequence }),
+    }),
 
     content: ({ capture_id: captureId }) => ({ text: need().contentText(captureId) }),
 

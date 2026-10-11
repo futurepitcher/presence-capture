@@ -8,6 +8,8 @@ public enum StoreError: Error, CustomStringConvertible, Equatable {
     case constraint(String)
     /// The master key doesn't open this store.
     case wrongKey
+    /// A read the grant doesn't allow: no grant, a revoked one, an expired one (ADR 0001).
+    case denied(String)
     case sealing
     case sqlite(String)
 
@@ -15,6 +17,7 @@ public enum StoreError: Error, CustomStringConvertible, Equatable {
         switch self {
         case .constraint(let message): return "constraint: \(message)"
         case .wrongKey: return "masterKey does not open this store"
+        case .denied(let message): return "denied: \(message)"
         case .sealing: return "sealing failed"
         case .sqlite(let message): return "capture store: \(message)"
         }
@@ -61,12 +64,12 @@ public struct Revocation: Sendable, Equatable {
 /// was captured; what was captured is sealed per capture, and revocation erases it (ADR 0002).
 /// Retention is a scheduled revocation (ADR 0003). One connection, used one call at a time.
 public final class CaptureStore: @unchecked Sendable {
-    private var db: OpaquePointer?
-    private let masterKey: SymmetricKey
+    var db: OpaquePointer?
+    let masterKey: SymmetricKey
     /// Keys dedupe values, so a dedupe_key, which outlives a revocation in the append-only log,
     /// can't be matched to what it named without the master key.
     private let dedupeSecret: SymmetricKey
-    private let lock = NSLock()
+    let lock = NSLock()
     private var erasurePending = false
 
     public static let epoch = "0000-01-01T00:00:00.000Z"
@@ -204,7 +207,7 @@ public final class CaptureStore: @unchecked Sendable {
         }
     }
 
-    private func dataKey(_ captureId: String, wrapped: Data) throws -> SymmetricKey {
+    func dataKey(_ captureId: String, wrapped: Data) throws -> SymmetricKey {
         SymmetricKey(data: try Seal.open(wrapped, key: masterKey, aad: "key:\(captureId)"))
     }
 
@@ -345,7 +348,7 @@ public final class CaptureStore: @unchecked Sendable {
         return try rows(sql).first?.int(0) ?? 1
     }
 
-    private func transaction(_ body: () throws -> Void) throws {
+    func transaction(_ body: () throws -> Void) throws {
         try exec("BEGIN")
         do {
             try body()
@@ -356,7 +359,7 @@ public final class CaptureStore: @unchecked Sendable {
         }
     }
 
-    private func exec(_ sql: String) throws {
+    func exec(_ sql: String) throws {
         guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else { throw failure() }
     }
 
@@ -385,23 +388,23 @@ public final class CaptureStore: @unchecked Sendable {
         return statement
     }
 
-    private func run(_ sql: String, _ values: Any?...) throws {
+    func run(_ sql: String, _ values: Any?...) throws {
         _ = try runCounting(sql, values)
     }
 
-    private func runCounting(_ sql: String, _ values: [Any?]) throws -> Int {
+    func runCounting(_ sql: String, _ values: [Any?]) throws -> Int {
         let statement = try prepare(sql, values)
         defer { sqlite3_finalize(statement) }
         guard sqlite3_step(statement) == SQLITE_DONE else { throw failure() }
         return Int(sqlite3_changes(db))
     }
 
-    private func rows(_ sql: String, _ values: Any?...) throws -> [Row] {
+    func rows(_ sql: String, _ values: Any?...) throws -> [Row] {
         try rows(sql, values: values)
     }
 
     /// Named apart from the variadic one: an array passed there would bind as a single value.
-    private func rows(_ sql: String, values: [Any?]) throws -> [Row] {
+    func rows(_ sql: String, values: [Any?]) throws -> [Row] {
         let statement = try prepare(sql, values)
         defer { sqlite3_finalize(statement) }
         var out: [Row] = []
@@ -414,7 +417,7 @@ public final class CaptureStore: @unchecked Sendable {
         }
     }
 
-    private struct Row {
+    struct Row {
         private var values: [Any?] = []
         init(_ statement: OpaquePointer?) {
             for column in 0..<sqlite3_column_count(statement) {
@@ -429,6 +432,7 @@ public final class CaptureStore: @unchecked Sendable {
             }
         }
         func text(_ i: Int) -> String { values[i] as? String ?? "" }
+        func optionalText(_ i: Int) -> String? { values[i] as? String }
         func int(_ i: Int) -> Int { values[i] as? Int ?? 0 }
         func data(_ i: Int) -> Data { values[i] as? Data ?? Data() }
     }
