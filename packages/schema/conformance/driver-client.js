@@ -9,8 +9,8 @@
 
 import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
-import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { eachLine, jsonLine } from '../src/lines.js';
 
 const REFERENCE_DRIVER = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'driver.js');
 
@@ -33,7 +33,8 @@ export function startDriver(command = driverCommand()) {
   const pending = new Map();
   let nextId = 1;
 
-  createInterface({ input: child.stdout }).on('line', (line) => {
+  eachLine(child.stdout, (line) => {
+    if (line.trim() === '') return;
     const response = JSON.parse(line);
     const waiter = pending.get(response.id);
     if (!waiter) return;
@@ -51,7 +52,7 @@ export function startDriver(command = driverCommand()) {
       const id = nextId++;
       return new Promise((resolve, reject) => {
         pending.set(id, { resolve, reject });
-        child.stdin.write(`${JSON.stringify({ id, op, args })}\n`);
+        child.stdin.write(jsonLine({ id, op, args }));
       });
     },
     async close() {

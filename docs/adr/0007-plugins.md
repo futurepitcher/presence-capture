@@ -34,7 +34,9 @@ intended.
 ### 1. Sensors
 
 A sensor is an executable that writes **observations** to stdout, one JSON
-object a line, in the format the fake sensor replays (`fixtures/README.md`).
+object a line, in the format the fake sensor replays (`fixtures/README.md`). A
+line ends at `\n` alone, as in the driver protocol, so an observation whose
+text holds U+2028 stays whole.
 It runs out of process, in any language.
 
 - **It never touches the store and never sees the master key.** The host
