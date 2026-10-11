@@ -123,6 +123,12 @@ than more private.
   content, not the record that the source was used.
 - **Process memory.** Content unsealed for a read lives in memory until it is
   garbage-collected. The reference implementation doesn't scrub it.
+- **A reader holding the write-ahead log** (an MCP server mid-read) blocks its
+  truncation, so the revoked bytes stay in the log until the reader lets go.
+  The revocation still takes effect at once: the keys are gone from the
+  database, and every read path excludes the captures. The store reports the
+  erasure as not yet done on disk (`erasedOnDisk: false`), and finishes it as
+  soon as it can.
 - **SSD and filesystem remnants of SQLite pages** are below what
   `secure_delete` can reach. The key-per-capture design is what covers them,
   not a claim about the hardware.

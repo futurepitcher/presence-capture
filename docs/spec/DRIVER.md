@@ -59,8 +59,8 @@ fields may be omitted or `null`.
 | `append` | `capture_type`, `source`, `privacy_level`; optional `capture_id`, `captured_at`, `source_app`, `source_url`, `classification`, `content_text`, `payload: {bytes_base64, media_type}`, `extraction`, `derived_from`, `dedupe_key` | `{capture_id}` |
 | `register_projection` | `name`, `kind` (`index`, `vector`, `summary`) | `{}` |
 | `add_projection_entry` | `projection`, `capture_id`, `entry_ref` | `{}` |
-| `revoke` | `scope_kind`, `scope_value`; optional `reason` | `{revocation_id, revoked_capture_ids}`, including captures reached through `derived_from` |
-| `retain` | `days`; optional `now` (ISO 8601, for tests) | `{revocation_id, revoked_capture_ids}`, or `{revocation_id: null, revoked_capture_ids: []}` when nothing was old enough |
+| `revoke` | `scope_kind`, `scope_value`; optional `reason` | `{revocation_id, revoked_capture_ids, erased_on_disk}`, including captures reached through `derived_from`. `erased_on_disk` is false while a reader holds the write-ahead log and the revoked bytes may still be in it |
+| `retain` | `days`; optional `now` (ISO 8601, for tests) | As `revoke`, or `{revocation_id: null, revoked_capture_ids: []}` when nothing was old enough |
 | `content` | `capture_id` | `{text}`, the capture's text as the implementation unseals it, or `null` |
 | `payload` | `capture_id` | `{bytes_base64}`, or `null` |
 | `close` | — | `{}` |

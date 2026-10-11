@@ -94,3 +94,32 @@ test('R7: a duplicate dedupe_key is rejected rather than stored twice', () => {
   );
   store.close();
 });
+
+test('R11: an erasure a reader held up is finished once it lets go', async () => {
+  const { mkdtempSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { DatabaseSync } = await import('node:sqlite');
+  const { randomBytes } = await import('node:crypto');
+  const dir = mkdtempSync(join(tmpdir(), 'pc-held-'));
+  const path = join(dir, 'store.sqlite');
+  try {
+    const store = openStore(path, { masterKey: randomBytes(32) });
+    const id = store.appendCapture({ captureType: 'screen_text', source: 'screen', privacyLevel: 'standard', contentText: 'x' });
+    const reader = new DatabaseSync(path, { readOnly: true });
+    reader.exec('BEGIN');
+    reader.prepare('SELECT COUNT(*) FROM capture_event').get();
+
+    assert.equal(store.revoke({ scopeKind: 'capture', scopeValue: id }).erasedOnDisk, false);
+    assert.equal(store.erasurePending, true);
+    assert.equal(store.finishErasure(), false, 'finished while the reader still held the log');
+
+    reader.exec('COMMIT');
+    reader.close();
+    assert.equal(store.finishErasure(), true);
+    assert.equal(store.erasurePending, false);
+    store.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

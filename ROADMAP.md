@@ -47,16 +47,25 @@ Mac. Scorecard ≥ 7.
 **Exit:** a store written by another implementation can be checked by the
 store-layer suite, forensic check included.
 
-## M2: Native macOS daemon and plugin model
+## M2: Native macOS daemon and plugin model (in progress)
 
-The daemon is ported from PresenceVoice's working capture app:
-- ScreenCaptureKit, accessibility text, then Vision OCR;
-- SpeechAnalyzer for the mic and system audio;
-- an activity lane;
-- redaction and sealing before disk, with the master key in the Keychain.
+The daemon is ported from PresenceVoice's working capture app.
 
-Sensor, Projector and Exporter plugin interfaces, each with a conformance kit,
-in-process or out of process over the driver protocol.
+- ✅ `CaptureStore` in Swift passes the store-layer suite through `pcap-driver`,
+  forensic erasure included, and its stores open in the reference.
+- ✅ Screen through ScreenCaptureKit and Vision OCR, with no pixels kept.
+- ✅ Speech through SpeechAnalyzer for the mic and system audio, each of which
+  can be turned off.
+- ✅ An activity lane.
+- ✅ Exclusion, redaction and sealing before disk, with the master key in the
+  Keychain.
+- ✅ Retention, and "Forget the last 15 minutes / hour" from the menu.
+- ✅ CI on `macos-26`.
+- ☐ Accessibility text ahead of OCR.
+- ☐ Sensor, Projector and Exporter plugin interfaces, each with a
+  conformance kit, in-process or out of process over the driver protocol.
+- ☐ A side-by-side parity trial against screenpipe, and a forensic check on
+  a live store.
 
 **Exit:**
 - a clean Mac produces a store that passes the store-layer suite unmodified;

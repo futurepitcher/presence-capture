@@ -17,6 +17,10 @@ __pycache__/
 *.db-shm
 *.db-wal
 *.sqlite3
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.key
 captures/
 payloads/
 *.mp4

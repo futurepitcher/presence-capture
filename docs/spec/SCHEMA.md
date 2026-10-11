@@ -104,7 +104,10 @@ Keychain. A store MUST refuse to open with the wrong master key.
 MUST delete the revoked set's sealed payloads, sealed text and keys, and write
 one `erasure_receipt`. Before the revocation is reported done, deleted pages
 MUST be overwritten (`secure_delete`) and any write-ahead log holding the
-earlier frames MUST be checkpointed and truncated. **A revocation with no
+earlier frames MUST be checkpointed and truncated. A reader in another process
+can hold the log, and SQLite reports that only in the checkpoint's result row.
+While it does, the implementation MUST NOT report the erasure done, and MUST
+complete it once the log can be truncated. **A revocation with no
 erasure receipt is non-conformant.** Plaintext content MUST NOT reach disk at
 any time.
 

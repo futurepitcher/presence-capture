@@ -83,14 +83,14 @@ export function createDriverHandler({ open = openStore } = {}) {
     },
 
     revoke: ({ scope_kind: scopeKind, scope_value: scopeValue, reason }) => {
-      const { revocationId, revokedCaptureIds } = need().revoke({ scopeKind, scopeValue, reason });
-      return { revocation_id: revocationId, revoked_capture_ids: revokedCaptureIds };
+      const { revocationId, revokedCaptureIds, erasedOnDisk } = need().revoke({ scopeKind, scopeValue, reason });
+      return { revocation_id: revocationId, revoked_capture_ids: revokedCaptureIds, erased_on_disk: erasedOnDisk };
     },
 
     retain: ({ days, now }) => {
       const result = need().retain({ days, now: now ? new Date(now) : undefined });
       return result
-        ? { revocation_id: result.revocationId, revoked_capture_ids: result.revokedCaptureIds }
+        ? { revocation_id: result.revocationId, revoked_capture_ids: result.revokedCaptureIds, erased_on_disk: result.erasedOnDisk }
         : { revocation_id: null, revoked_capture_ids: [] };
     },
 

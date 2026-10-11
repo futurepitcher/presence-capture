@@ -68,6 +68,31 @@ jobs:
         working-directory: packages/mcp
         run: npm test
 
+  # The macOS daemon: its own tests, then the store-layer suite driven through
+  # its pcap-driver, so the Swift store is held to the same bytes as the
+  # reference. Transcriber tests skip on a runner without the speech model.
+  daemon:
+    name: macOS daemon
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '24'
+
+      - name: Swift tests
+        working-directory: packages/daemon
+        run: swift test
+
+      - name: Store-layer conformance against the Swift driver
+        working-directory: packages/schema
+        run: |
+          swift build --package-path ../daemon --product pcap-driver
+          PRESENCE_CAPTURE_DRIVER="$(swift build --package-path ../daemon --show-bin-path)/pcap-driver" npm run conformance:store
+
   # Developer Certificate of Origin (GOVERNANCE.md): every commit in a pull
   # request carries a Signed-off-by trailer naming its author. Sign off with
   # `git commit -s`.
