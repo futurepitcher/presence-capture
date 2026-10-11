@@ -26,10 +26,19 @@ FTS5 table on disk. That breaks the project's central guarantee:
 
 ## Decision
 
-1. **At rest, everything derived is sealed.** Embeddings, session labels and
-   digests are projection outputs (migration 006): sealed under their source
-   capture's key, erased by its revocation, and covered by the forensic check.
-   No index of content is ever written to disk.
+1. **At rest, everything derived is sealed, and only what one capture
+   answers for is kept.**
+   - An output derived from exactly one capture (its embedding, its summary)
+     is a projection output (migration 006). It's sealed under that capture's
+     key, erased by its revocation, and covered by the forensic check.
+   - An output derived from several captures is never written to disk. That
+     covers a session, its label, and a day's digest. Sealed under one
+     capture's key, it would survive the revocation of any of the others,
+     which breaks R10. Instead it's computed in memory, and recomputed from
+     what remains when any capture behind it is revoked.
+   - Persisting a multi-capture output needs an RFC: a list of its sources,
+     and a key of its own destroyed by the revocation of any of them.
+   - No index of content is ever written to disk.
 
 2. **Indexes live in the memory of the process that reads**:
    - keyword search: SQLite FTS5 in `:memory:`, BM25;
@@ -46,17 +55,33 @@ FTS5 table on disk. That breaks the project's central guarantee:
    can't be unsealed anyway, because its key is gone. An eviction that lags
    can't serve anything.
 
-4. **The daemon writes; `pcap-mcp` reads.** The native MCP server is the
-   reader: a separate process in the app bundle, launched by an MCP client
-   over stdio. It opens the store read-only and gets the master key from the
-   Keychain, whose item lists both the app and `pcap-mcp` as trusted. It
-   holds the indexes, serves `search`, `timeline`, `now`, `session` and
-   `transcript` through grants, the envelope and the egress log (ADR 0001),
-   and hosts projector plugins (ADR 0007).
+4. **The daemon writes captures; `pcap-mcp` reads them, and writes only its
+   own accounting.**
+   - The native MCP server is a separate process in the app bundle, launched
+     by an MCP client over stdio. It gets the master key from the Keychain,
+     whose item lists both the app and `pcap-mcp` as trusted.
+   - It holds the indexes, and serves `search`, `timeline`, `now`, `session`
+     and `transcript` through grants and the envelope.
+   - ADR 0001 requires every served row to be recorded in the egress log, so
+     `pcap-mcp` opens the store writable, under an **SQLite authorizer that
+     refuses every write except an insert into `egress_record`**. The log's
+     triggers already refuse updates and deletes. The boundary is enforced by
+     SQLite, below any tool handler, as grants are: a `pcap-mcp` bug can't
+     change a capture, a key or a grant.
 
-5. **Embeddings are computed by the daemon**, as a first-party projector
-   (`NLContextualEmbedding`, ADR 0004), and stored sealed. The reader loads
-   them; it never computes them for stored content. It embeds only the query.
+5. **Projectors run in the daemon, the writer.**
+   - Embeddings are computed by the daemon, as a first-party projector
+     (`NLContextualEmbedding`, ADR 0004), and stored sealed. The reader loads
+     them; it embeds only the query.
+   - Projector plugins (ADR 0007) are hosted by the daemon too, in a helper
+     process it can kill at a capture's time limit. The helper never opens
+     the store.
+   - The daemon reads for a projector through the projector's grant, so
+     every capture is enveloped and egress-logged under `projector:<name>`.
+   - It commits each capture's outputs and the projector's watermark in one
+     transaction (`recordProjection`).
+   - The daemon still serves no client. A projector is a sandboxed function
+     it calls, whose every read is accounted.
 
 ## Consequences
 
@@ -68,6 +93,10 @@ FTS5 table on disk. That breaks the project's central guarantee:
   never an index on disk.
 - **Memory is spent in the reader, not the daemon**, so the daemon's 250 MB
   budget is untouched. Vectors can drop to float16 if the eval says so.
+- **Sessions and digests are recomputed, not stored.** That's cheap for
+  sessions (activity is small). A digest from Foundation Models costs
+  seconds, so it's computed on request and cached in memory until a capture
+  behind it is revoked.
 - **The swap file is macOS's to protect**: it's encrypted by default on Apple
   Silicon. The reader never writes an index itself.
 - **A store too large for memory needs another design.** Blind indexing
