@@ -1,0 +1,65 @@
+import CoreGraphics
+import XCTest
+
+@testable import CaptureCore
+
+final class AXTextTests: XCTestCase {
+    private let window = CGRect(x: 100, y: 100, width: 800, height: 600)
+    private typealias Node = AXText.Node
+
+    private func text(_ value: String, at y: CGFloat = 200) -> Node {
+        Node(role: "AXStaticText", value: value, frame: CGRect(x: 120, y: y, width: 400, height: 20))
+    }
+
+    private let paragraph = "The quarterly plan ships the erasure work by Friday, then the native daemon."
+
+    func testReadsTheVisibleTextInTheTreesOrder() {
+        let root = Node(role: "AXWindow", frame: window, children: [
+            Node(role: "AXWebArea", frame: window, children: [
+                Node(role: "AXHeading", title: "Q4 plan", frame: CGRect(x: 120, y: 150, width: 300, height: 30)),
+                text(paragraph),
+            ]),
+        ])
+        XCTAssertEqual(AXText.visibleText(root, window: window), "Q4 plan\n\(paragraph)")
+    }
+
+    func testNeverReadsAPasswordField() {
+        let root = Node(role: "AXWindow", frame: window, children: [
+            text(paragraph),
+            Node(role: "AXSecureTextField", value: "hunter2hunter2", frame: CGRect(x: 120, y: 300, width: 200, height: 20)),
+            Node(role: "AXTextField", subrole: "AXSecureTextField", value: "correct horse battery", frame: CGRect(x: 120, y: 340, width: 200, height: 20)),
+            // A container marked secure: nothing under it either.
+            Node(role: "AXGroup", subrole: "AXSecureTextField", children: [text("inside a secure group")]),
+        ])
+        let out = AXText.visibleText(root, window: window) ?? ""
+        XCTAssertFalse(out.contains("hunter2"))
+        XCTAssertFalse(out.contains("correct horse"))
+        XCTAssertFalse(out.contains("inside a secure group"))
+    }
+
+    func testLeavesWhatsScrolledOutOfTheWindow() {
+        let root = Node(role: "AXWindow", frame: window, children: [
+            text(paragraph),
+            text("Far below, never on screen: the bank PIN is 4417.", at: 5000),
+        ])
+        let out = AXText.visibleText(root, window: window) ?? ""
+        XCTAssertTrue(out.contains("quarterly plan"))
+        XCTAssertFalse(out.contains("4417"), "text outside the window's frame was kept")
+    }
+
+    func testGivesWayToOCRWhenThereIsTooLittle() {
+        // A canvas app, say: a window whose tree has a title and little else.
+        let root = Node(role: "AXWindow", frame: window, children: [text("Untitled")])
+        XCTAssertNil(AXText.visibleText(root, window: window))
+    }
+
+    func testStopsAtItsLimits() {
+        let wide = Node(role: "AXWindow", frame: window, children: (0..<(AXText.maxNodes * 2)).map { text("line \($0) of a very long list of things", at: 200) })
+        let lines = AXText.visibleText(wide, window: window)?.split(separator: "\n") ?? []
+        XCTAssertLessThan(lines.count, AXText.maxNodes, "read past the node limit")
+
+        var deep = text(paragraph)
+        for _ in 0..<(AXText.maxDepth * 2) { deep = Node(role: "AXGroup", children: [deep]) }
+        XCTAssertNil(AXText.visibleText(Node(role: "AXWindow", frame: window, children: [deep]), window: window), "read past the depth limit")
+    }
+}

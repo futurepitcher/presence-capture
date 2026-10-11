@@ -61,7 +61,8 @@ The daemon is ported from PresenceVoice's working capture app.
   Keychain.
 - ✅ Retention, and "Forget the last 15 minutes / hour" from the menu.
 - ✅ CI on `macos-26`.
-- ☐ Accessibility text ahead of OCR.
+- ✅ Accessibility text ahead of OCR: the focused window only, what's
+  visible, never a password field.
 - ☐ Sensor, Projector and Exporter plugin interfaces, each with a
   conformance kit, in-process or out of process over the driver protocol.
 - ☐ A side-by-side parity trial against screenpipe, and a forensic check on
