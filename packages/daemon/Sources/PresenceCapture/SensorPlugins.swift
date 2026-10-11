@@ -7,11 +7,24 @@ import Foundation
 /// is held, or the exclusion list can't be read, what they send is dropped, never queued. A
 /// sensor that stops is started again a minute later.
 ///
-///     [{ "name": "git-activity", "command": ["/opt/homebrew/bin/node", "/path/sensor.mjs", "/Users/you/code/repo"] }]
+/// A sensor runs with the person's own permissions, so it runs only as approved: its pins (the
+/// SHA-256 of its executable and scripts) are written when the person approves it from the menu,
+/// and a sensor whose files have changed since isn't run until it's approved again.
+///
+///     [{ "name": "git-activity", "command": ["/opt/homebrew/bin/node", "/path/sensor.mjs", "/Users/you/code/repo"],
+///        "pins": { "/opt/homebrew/bin/node": "…", "/path/sensor.mjs": "…" } }]
 final class SensorPlugins: @unchecked Sendable {
     private struct Config: Decodable {
         let name: String
         let command: [String]
+        let pins: [String: String]?
+    }
+
+    /// A sensor waiting for the person's approval: what it would run, and why it's waiting.
+    struct Waiting: Sendable {
+        let name: String
+        let command: [String]
+        let reason: String
     }
 
     private let configPath: String
@@ -23,6 +36,8 @@ final class SensorPlugins: @unchecked Sendable {
     private var running: [String: Process] = [:]
     private var gates: [String: Gate] = [:]
     private var dropped: [String: Int] = [:]
+    private var waiting: [String: Waiting] = [:]
+    private var configs: [String: Config] = [:]
     private var stopping = false
 
     init(configPath: String, store: CaptureStore, fragments: @escaping @Sendable () -> [String]?, held: @escaping @Sendable () -> Bool,
@@ -41,8 +56,31 @@ final class SensorPlugins: @unchecked Sendable {
                 log("sensors.config_invalid")
                 continue
             }
+            lock.withLock { self.configs[config.name] = config }
             launch(config)
         }
+    }
+
+    /// Sensors not run because they aren't approved, or changed since they were.
+    var unapproved: [Waiting] { lock.withLock { waiting.values.sorted { $0.name < $1.name } } }
+
+    /// The person approved a sensor as it is on disk now: its pins are written to sensors.json and
+    /// it's run.
+    func approve(_ name: String) throws {
+        guard let config = lock.withLock({ configs[name] }) else { return }
+        let pins = try Pins.compute(config.command)
+        let data = try Data(contentsOf: URL(fileURLWithPath: configPath))
+        guard var entries = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
+        for index in entries.indices where entries[index]["name"] as? String == name { entries[index]["pins"] = pins }
+        try JSONSerialization.data(withJSONObject: entries, options: [.prettyPrinted, .sortedKeys])
+            .write(to: URL(fileURLWithPath: configPath), options: .atomic)
+        let approved = Config(name: config.name, command: config.command, pins: pins)
+        lock.withLock {
+            configs[name] = approved
+            waiting[name] = nil
+        }
+        log("sensors.approved name=\(name)")
+        launch(approved)
     }
 
     func stop() {
@@ -66,6 +104,12 @@ final class SensorPlugins: @unchecked Sendable {
     }
 
     private func launch(_ config: Config) {
+        // Checked at every launch, a relaunch too: a file changed while it ran stops it here.
+        if let reason = Pins.error(config.command, approved: config.pins) {
+            lock.withLock { waiting[config.name] = Waiting(name: config.name, command: config.command, reason: reason) }
+            log("sensors.unapproved name=\(config.name)")
+            return
+        }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: config.command[0])
         process.arguments = Array(config.command.dropFirst())
@@ -120,7 +164,7 @@ final class SensorPlugins: @unchecked Sendable {
             guard again else { return }
             DispatchQueue.global().asyncAfter(deadline: .now() + 60) { [weak self] in
                 guard let self, !self.lock.withLock({ self.stopping }) else { return }
-                self.launch(config)
+                self.launch(self.lock.withLock { self.configs[config.name] } ?? config)
             }
         }
         do {

@@ -4,4 +4,5 @@ export { scheduleRetention } from './retention.js';
 export { redact } from './redact.js';
 export { isExcluded, parseExclusionList, SELF_WINDOWS, SYSTEM_APPS } from './exclusion.js';
 export { runSensor } from './sensor-host.js';
+export { computePins, pinError } from './pins.js';
 export { grantFor, loadProjector, manifestError, runProjector } from './projector-host.js';

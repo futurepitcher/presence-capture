@@ -56,9 +56,19 @@ It runs out of process, in any language.
 **What this can't promise.** A sensor needs real access to the system (git,
 the music player, a calendar), so it can't be sandboxed the way a projector
 is. It runs with the user's own permissions. The gate guarantees what it
-*stores*; nothing can guarantee what a native program does on its own. Pin
-it: before 0.1, `sensors.json` records each command's SHA-256, and a changed
-executable isn't run until it's approved again.
+*stores*; nothing can guarantee what a native program does on its own.
+
+So **a sensor runs only as approved.**
+- Its pins are the SHA-256 of its executable and of every file its command
+  names (a script), keyed by absolute path. A directory it watches is data
+  and isn't pinned.
+- The macOS app shows the exact command to the person and writes the pins
+  when they approve.
+- A sensor whose files have changed since (a swapped script, an upgraded
+  interpreter) isn't run, even on a relaunch, until it's approved again.
+
+`src/pins.js` and `CaptureStore.Pins` compute pins the same way. Pins
+written by one are accepted by the other.
 
 **The sensor kit** fails a sensor when:
 - its header is invalid;

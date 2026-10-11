@@ -71,7 +71,9 @@ The daemon is ported from PresenceVoice's working capture app.
   grant. Outputs kept by the store under the capture's key, so revocation
   erases them. A kit of attacks the host must refuse or contain. Reference
   host only so far.
-- ☐ The projector host in the macOS app, and pinned sensors.
+- ✅ Pinned sensors: run only as approved, from the menu, and not again once
+  an executable or script changes.
+- ☐ The projector host in the macOS app.
 - ☐ A side-by-side parity trial against screenpipe, and a forensic check on
   a live store.
 
