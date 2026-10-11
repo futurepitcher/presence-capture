@@ -102,8 +102,16 @@ actor ScreenCapturer {
             lastKept[window.windowID] = hash
             guard !text.isEmpty else { continue }
             let focused = window.windowID == FrontWindow.of(Set(windows.map(\.windowID)), pid: pid, frontToBack: listedWindows())
-            // A page's address only where the browser says it (never inferred from what's on screen).
-            let url = focused && AXIsProcessTrusted() ? pageAddress(pid: pid) : nil
+            // A page's address only where the browser says it (never inferred from what's on screen),
+            // and only for this window: its focused window must be the one read, by title, and it
+            // must still be in front with that title once the address is read. A tab switched
+            // meanwhile gives no address rather than another page's.
+            var url: String?
+            if focused, AXIsProcessTrusted(), let page = pageAddress(pid: pid, title: title) {
+                guard stillOn(pid), currentTitle(window.windowID) == title,
+                      window.windowID == FrontWindow.of(Set(windows.map(\.windowID)), pid: pid, frontToBack: listedWindows()) else { continue }
+                url = page
+            }
             try store.append(NewCapture(
                 capturedAt: Date(), captureType: "screen_text", source: "screen", sourceApp: front.bundleIdentifier ?? app,
                 sourceUrl: url, contentText: Redact.redact(text), extraction: "ocr"))
@@ -131,12 +139,16 @@ actor ScreenCapturer {
     }
 
     /// The address of the page in the app's focused window, when it says (AXDocument, or AXURL): a
-    /// browser's. Needs Accessibility; none without it.
-    private func pageAddress(pid: pid_t) -> String? {
+    /// browser's. Only when that window's title is `title`, the window that was read; none
+    /// otherwise, and none without Accessibility.
+    private func pageAddress(pid: pid_t, title: String) -> String? {
         let app = AXUIElementCreateApplication(pid)
         var window: CFTypeRef?
         guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &window) == .success, let window else { return nil }
         let element = window as! AXUIElement
+        var focusedTitle: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &focusedTitle) == .success,
+              focusedTitle as? String == title else { return nil }
         for attribute in [kAXDocumentAttribute, "AXURL"] {
             var value: CFTypeRef?
             guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success, let value else { continue }

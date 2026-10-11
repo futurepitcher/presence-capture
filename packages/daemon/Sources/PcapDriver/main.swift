@@ -59,12 +59,12 @@ func handle(_ op: String, _ args: [String: Any]) throws -> [String: Any] {
     case "revoke":
         let r = try need().revoke(scopeKind: try required(args, "scope_kind"), scopeValue: try required(args, "scope_value"),
                                   reason: string(args, "reason"))
-        return ["revocation_id": r.revocationId, "revoked_capture_ids": r.revokedCaptureIds]
+        return ["revocation_id": r.revocationId, "revoked_capture_ids": r.revokedCaptureIds, "erased_on_disk": r.erasedOnDisk]
     case "retain":
         guard let days = (args["days"] as? NSNumber)?.doubleValue else { throw DriverError(code: "bad_request", message: "days is required") }
         let now = string(args, "now").flatMap(CaptureStore.date) ?? Date()
         guard let r = try need().retain(days: days, now: now) else { return ["revocation_id": NSNull(), "revoked_capture_ids": [String]()] }
-        return ["revocation_id": r.revocationId, "revoked_capture_ids": r.revokedCaptureIds]
+        return ["revocation_id": r.revocationId, "revoked_capture_ids": r.revokedCaptureIds, "erased_on_disk": r.erasedOnDisk]
     case "content":
         return ["text": json(try need().contentText(try required(args, "capture_id")))]
     case "payload":

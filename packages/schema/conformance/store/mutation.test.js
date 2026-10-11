@@ -35,9 +35,12 @@ const MUTANTS = {
   'sealed text survives revocation': ignoreDeletes('capture_content'),
   'sealed payload survives revocation': ignoreDeletes('payload_blob'),
   'deleted pages are not overwritten': (store) => store.db.exec('PRAGMA secure_delete = OFF'),
+  // Claims the log was truncated without truncating it.
   'write-ahead log is never truncated': (store) => {
-    const exec = store.db.exec.bind(store.db);
-    store.db.exec = (sql) => (sql.includes('wal_checkpoint') ? undefined : exec(sql));
+    const prepare = store.db.prepare.bind(store.db);
+    store.db.prepare = (sql) => (sql.includes('wal_checkpoint')
+      ? { get: () => ({ busy: 0, log: 0, checkpointed: 0 }) }
+      : prepare(sql));
   },
   'no erasure receipt is written': (store) => store.db.exec(`
     CREATE TEMP TRIGGER mutant_no_receipt BEFORE INSERT ON main.erasure_receipt

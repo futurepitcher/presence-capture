@@ -36,3 +36,31 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(try store.contentText(earlier), "an hour ago")
     }
 }
+
+import SQLite3
+
+final class HeldLogTests: XCTestCase {
+    /// A reader in another process holding a snapshot keeps the write-ahead log from being
+    /// truncated: the erasure isn't reported done, and finishes once the reader lets go.
+    func testFinishesAnErasureAReaderHeldUp() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = dir.appendingPathComponent("store.sqlite").path
+        let store = try CaptureStore(path: path, masterKey: Seal.newKey())
+        let id = try store.append(NewCapture(captureType: "screen_text", source: "screen", contentText: "read while forgotten"))
+
+        var reader: OpaquePointer?
+        XCTAssertEqual(sqlite3_open_v2(path, &reader, SQLITE_OPEN_READONLY, nil), SQLITE_OK)
+        defer { sqlite3_close(reader) }
+        XCTAssertEqual(sqlite3_exec(reader, "BEGIN; SELECT COUNT(*) FROM capture_event;", nil, nil, nil), SQLITE_OK)
+
+        let revoked = try store.revoke(scopeKind: "capture", scopeValue: id)
+        XCTAssertFalse(revoked.erasedOnDisk, "reported erased while a reader held the log")
+        XCTAssertTrue(store.isErasurePending)
+        XCTAssertFalse(try store.finishErasure(), "finished while the reader still held it")
+
+        XCTAssertEqual(sqlite3_exec(reader, "COMMIT", nil, nil, nil), SQLITE_OK)
+        XCTAssertTrue(try store.finishErasure())
+        XCTAssertFalse(store.isErasurePending)
+    }
+}

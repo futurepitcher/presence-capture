@@ -293,12 +293,38 @@ export function openStore(path = ':memory:', { masterKey } = {}) {
       throw err;
     }
 
-    // The deleted pages, zeroed by secure_delete, are still preceded in the
-    // write-ahead log by the frames that wrote the content. Fold the log into
-    // the database and truncate it, so those frames are gone from disk too.
-    db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    const erasedOnDisk = truncateLog();
+    return { revocationId, revokedCaptureIds: [...affected.keys()], erasedOnDisk };
+  }
 
-    return { revocationId, revokedCaptureIds: [...affected.keys()] };
+  let erasurePending = false;
+
+  /**
+   * The deleted pages, zeroed by secure_delete, are still preceded in the
+   * write-ahead log by the frames that wrote the content. Fold the log into the
+   * database and truncate it, so those frames are gone from disk too.
+   *
+   * A reader in another process holding a snapshot blocks the truncation, and
+   * SQLite says so only in the result row (busy = 1), not as an error. Retried
+   * for about a second; true once the log is truncated. Until it is, the
+   * erasure is not reported done, and finishErasure() completes it.
+   */
+  function truncateLog(attempts = 20) {
+    for (let i = 0; i < attempts; i++) {
+      const { busy } = db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+      if (busy === 0) {
+        erasurePending = false;
+        return true;
+      }
+      if (i < attempts - 1) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+    erasurePending = true;
+    return false;
+  }
+
+  /** Finishes an erasure a reader held up. True once nothing revoked is left in the log. */
+  function finishErasure() {
+    return erasurePending ? truncateLog(1) : true;
   }
 
   /**
@@ -537,7 +563,7 @@ export function openStore(path = ':memory:', { masterKey } = {}) {
   return {
     db,
     appendCapture, contentText, payloadBytes, registerProjection, addProjectionEntry,
-    revoke, retain, issueGrant, revokeGrant, createReader, replay, verifyEgressChain,
+    revoke, retain, finishErasure, get erasurePending() { return erasurePending; }, issueGrant, revokeGrant, createReader, replay, verifyEgressChain,
     close: () => db.close(),
   };
 }

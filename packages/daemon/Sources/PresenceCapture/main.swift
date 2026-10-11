@@ -103,10 +103,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         timers.append(Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             guard let self else { return }
             let held = self.heldFor != nil
-            self.audio?.tick(listening: !held && CGPreflightScreenCaptureAccess())
+            let seesScreen = CGPreflightScreenCaptureAccess()
+            self.audio?.tick(listening: !held && seesScreen)
+            // An erasure a reader held up is finished as soon as the reader lets go (ADR 0002).
+            if store.isErasurePending { _ = try? store.finishErasure() }
             // A list that exists but can't be read: nothing is captured until it can be (R8).
             let fragments = Exclusion.load(self.exclusionPath)
-            if !held, let fragments { self.activity?.tick(fragments: fragments) }
+            // Activity is noted while capturing, and the lock itself is noted while locked (it
+            // carries no app or window). Paused, asleep or another user's: nothing at all.
+            if let fragments, !held || (screenLocked() && !self.paused) {
+                self.activity?.tick(fragments: fragments, seesScreen: seesScreen)
+            }
             Task {
                 await capturer.hold(held)
                 if !held { await capturer.tick(fragments: fragments) }
@@ -214,10 +221,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                           scopeValue: "\(CaptureStore.iso(now.addingTimeInterval(-minutes * 60)))/\(CaptureStore.iso(now))",
                                           reason: "forget \(Int(minutes))m")
             activity?.reset()
-            log.write("forget.done minutes=\(Int(minutes)) revoked=\(result.revokedCaptureIds.count)")
+            log.write("forget.done minutes=\(Int(minutes)) revoked=\(result.revokedCaptureIds.count) on_disk=\(result.erasedOnDisk)")
             let done = NSAlert()
             done.messageText = "Forgotten"
-            done.informativeText = "\(result.revokedCaptureIds.count) captures from \(label) were erased."
+            done.informativeText = result.erasedOnDisk
+                ? "\(result.revokedCaptureIds.count) captures from \(label) were erased."
+                : "\(result.revokedCaptureIds.count) captures from \(label) were revoked and can't be read. An agent was reading the store, so their last traces will be erased from disk as soon as it lets go."
             done.runModal()
         } catch {
             log.write("forget.failed")

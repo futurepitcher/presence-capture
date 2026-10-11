@@ -18,8 +18,14 @@ final class ActivityCapturer {
         self.log = log
     }
 
-    /// Called on each tick while capture isn't held; `fragments` is the user's exclusion list.
-    func tick(fragments: [String]) {
+    /// Called on each tick while capturing, and while locked; `fragments` is the user's exclusion
+    /// list. Without Screen Recording there are no window titles, so a window excluded by its title
+    /// can't be told apart: nothing but the lock is noted until there are.
+    func tick(fragments: [String], seesScreen: Bool) {
+        if !seesScreen && !screenLocked() {
+            last = nil
+            return
+        }
         let state: String
         var app: (name: String, bundle: String?)?
         var window = ""

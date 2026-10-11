@@ -52,6 +52,9 @@ public struct NewCapture: Sendable {
 public struct Revocation: Sendable, Equatable {
     public let revocationId: String
     public let revokedCaptureIds: [String]
+    /// False when a reader in another process held the write-ahead log, so the revoked bytes may
+    /// still be in it: the erasure isn't done until `finishErasure()` says so.
+    public let erasedOnDisk: Bool
 }
 
 /// The capture store SCHEMA.md defines, in one SQLite file. The event log records that something
@@ -61,6 +64,7 @@ public final class CaptureStore: @unchecked Sendable {
     private var db: OpaquePointer?
     private let masterKey: SymmetricKey
     private let lock = NSLock()
+    private var erasurePending = false
 
     public static let epoch = "0000-01-01T00:00:00.000Z"
 
@@ -223,9 +227,32 @@ public final class CaptureStore: @unchecked Sendable {
                 try run("INSERT INTO erasure_receipt (revocation_id, applied_at, keys_destroyed, contents_erased, payloads_erased) VALUES (?, ?, ?, ?, ?)",
                         revocationId, Self.iso(Date()), keys, contents, payloads)
             }
-            try exec("PRAGMA wal_checkpoint(TRUNCATE)")
-            return Revocation(revocationId: revocationId, revokedCaptureIds: ids)
+            return Revocation(revocationId: revocationId, revokedCaptureIds: ids, erasedOnDisk: try truncateLog())
         }
+    }
+
+    /// An erasure a reader held up and that isn't finished yet.
+    public var isErasurePending: Bool { lock.withLock { erasurePending } }
+
+    /// Finishes an erasure a reader held up: true once nothing revoked is left in the log.
+    public func finishErasure() throws -> Bool {
+        try lock.withLock { erasurePending ? try truncateLog(attempts: 1) : true }
+    }
+
+    /// The deleted pages, zeroed by secure_delete, are still preceded in the write-ahead log by
+    /// the frames that wrote the content: the log is folded in and truncated, so they're gone too.
+    /// A reader in another process holding a snapshot blocks that, and SQLite says so only in the
+    /// result row (busy = 1), never as an error. Retried for about a second; true once truncated.
+    private func truncateLog(attempts: Int = 20) throws -> Bool {
+        for attempt in 0..<attempts {
+            if try rows("PRAGMA wal_checkpoint(TRUNCATE)").first?.int(0) == 0 {
+                erasurePending = false
+                return true
+            }
+            if attempt < attempts - 1 { Thread.sleep(forTimeInterval: 0.05) }
+        }
+        erasurePending = true
+        return false
     }
 
     /// Everything captured `days` or more before `now`, revoked with reason "retention" (ADR 0003).
