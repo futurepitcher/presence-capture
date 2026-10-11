@@ -1,0 +1,17 @@
+# Updates arrive as pull requests, so each one is reviewed and runs the
+# conformance suites before it lands. The npm packages have no third-party
+# dependencies today; this watches for any that appear.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly

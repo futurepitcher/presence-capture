@@ -1,0 +1,13 @@
+# Every change needs a maintainer's review. The paths below are where a
+# mistake would cost a user their privacy, so they are listed even while one
+# maintainer owns everything.
+*                                   @futurepitcher
+
+/packages/schema/migrations/        @futurepitcher
+/packages/schema/src/store.js       @futurepitcher
+/packages/schema/src/seal.js        @futurepitcher
+/packages/schema/conformance/       @futurepitcher
+/packages/schema/cases/             @futurepitcher
+/docs/spec/                         @futurepitcher
+/docs/adr/                          @futurepitcher
+/.github/workflows/                 @futurepitcher
