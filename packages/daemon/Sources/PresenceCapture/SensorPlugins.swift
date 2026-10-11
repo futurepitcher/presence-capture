@@ -113,6 +113,8 @@ final class SensorPlugins: @unchecked Sendable {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: config.command[0])
         process.arguments = Array(config.command.dropFirst())
+        // Always started here, so a relative path in its command means the file that was pinned.
+        process.currentDirectoryURL = URL(fileURLWithPath: Pins.sensorWorkingDirectory, isDirectory: true)
         let out = Pipe()
         process.standardOutput = out
         process.standardError = FileHandle.nullDevice

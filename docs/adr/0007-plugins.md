@@ -59,9 +59,12 @@ is. It runs with the user's own permissions. The gate guarantees what it
 *stores*; nothing can guarantee what a native program does on its own.
 
 So **a sensor runs only as approved.**
-- Its pins are the SHA-256 of its executable and of every file its command
-  names (a script), keyed by absolute path. A directory it watches is data
-  and isn't pinned.
+- Its pins are the SHA-256 of its executable and of every regular file its
+  command names, keyed by absolute path: as an argument, absolute or
+  relative, or as the path in a `--flag=path`. Every sensor is started in
+  `/`, so a relative path names the same file when it's pinned as when it
+  runs. Symbolic links are followed, so what's hashed is what runs. A
+  directory it watches, or a device, isn't code and isn't pinned (or read).
 - The macOS app shows the exact command to the person and writes the pins
   when they approve.
 - A sensor whose files have changed since (a swapped script, an upgraded

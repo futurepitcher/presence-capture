@@ -208,6 +208,23 @@ test('sensor pins: a sensor runs only as approved, and not once its script or ex
   }
 });
 
+test('sensor pins: a script named relatively, or as --flag=path, is pinned as the file that runs', async () => {
+  const { computePins, pinError } = await import('../../src/pins.js');
+  const dir = mkdtempSync(join(tmpdir(), 'pc-pins-'));
+  try {
+    writeFileSync(join(dir, 'sensor.mjs'), 'one');
+    writeFileSync(join(dir, 'config.json'), '{}');
+    const command = [process.execPath, 'sensor.mjs', `--config=${join(dir, 'config.json')}`, '--quiet', '/dev/null'];
+    const pins = computePins(command, { cwd: dir });
+    assert.deepEqual(Object.keys(pins).sort(), [process.execPath, join(dir, 'sensor.mjs'), join(dir, 'config.json')].sort(),
+      'the relative script and the --flag=path file are pinned; a device is not');
+    writeFileSync(join(dir, 'sensor.mjs'), 'two');
+    assert.match(pinError(command, pins, { cwd: dir }), /sensor\.mjs has changed/, 'a relative script was swapped without re-approval');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('sensor pins: a directory a sensor watches is data, not pinned', async () => {
   const { computePins } = await import('../../src/pins.js');
   const dir = repo();

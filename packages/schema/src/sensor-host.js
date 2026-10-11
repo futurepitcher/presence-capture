@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { createGate } from './gate.js';
 import { headerError } from './observations.js';
-import { pinError } from './pins.js';
+import { pinError, SENSOR_CWD } from './pins.js';
 
 /** How long a sensor told to stop has before it's killed, and how long after that it's given up on. */
 const GRACE_MS = 2000;
@@ -29,7 +29,8 @@ export function runSensor({ command, store, pins, fragments = [], platform = 'ma
     if (error) return Promise.reject(new Error(`sensor not run: ${error}`));
   }
   return new Promise((resolve, reject) => {
-    const child = spawn(command[0], command.slice(1), { stdio: ['ignore', 'pipe', 'ignore'] });
+    // Always started here, so a relative path in its command means the file that was pinned.
+    const child = spawn(command[0], command.slice(1), { stdio: ['ignore', 'pipe', 'ignore'], cwd: SENSOR_CWD });
     let name = null;
     let gate = null;
     let dropped = 0;
