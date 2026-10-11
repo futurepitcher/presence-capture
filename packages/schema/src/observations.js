@@ -18,6 +18,7 @@ export function headerError(h) {
 export function observationError(o) {
   if (!o || typeof o !== 'object' || Array.isArray(o)) return 'not an object';
   if (!str(o.at) || !ISO.test(o.at) || Number.isNaN(Date.parse(o.at))) return 'at must be an ISO 8601 UTC time';
+  if (o.dedupe != null && (!str(o.dedupe) || o.dedupe.length === 0 || o.dedupe.length > 200)) return 'dedupe must be text of 1 to 200 characters';
   switch (o.kind) {
     case 'screen':
       if (!str(o.app) || !str(o.window) || !str(o.text)) return 'screen needs app, window and text';

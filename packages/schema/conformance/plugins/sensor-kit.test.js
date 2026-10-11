@@ -140,3 +140,50 @@ test('sensor kit: fails a sensor that emits nothing', async () => {
     s.cleanup();
   }
 });
+
+test('observations: the dedupe key is derived as the shared vector says', () => {
+  for (const v of cases.dedupe_vectors) {
+    const store = openStore(':memory:', { masterKey: Buffer.from(v.master_key_hex, 'hex') });
+    assert.equal(store.dedupeKeyFor(v.source, v.value), v.dedupe_key);
+    store.close();
+  }
+});
+
+test('sensor host: a restarted sensor adds nothing it already sent, and nothing revoked comes back', async () => {
+  const dir = repo();
+  const store = openStore();
+  const command = [process.execPath, GIT_ACTIVITY, '--once', dir];
+  try {
+    assert.equal((await runSensor({ command, store })).stats.appended, 2);
+    const again = await runSensor({ command, store });
+    assert.deepEqual([again.stats.appended, again.stats.duplicates], [0, 2]);
+
+    store.revoke({ scopeKind: 'source', scopeValue: 'sensor:git-activity' });
+    const afterRevoke = await runSensor({ command, store });
+    assert.equal(afterRevoke.stats.appended, 0, 'a revoked commit was captured again');
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('sensor host: a sensor that ignores being told to stop is killed, not waited on forever', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pc-stubborn-'));
+  const file = join(dir, 'sensor.mjs');
+  writeFileSync(file, [
+    "console.log(JSON.stringify({ sensor: 'stubborn', protocol: '1' }));",
+    "console.log(JSON.stringify({ at: '2026-10-06T09:00:00.000Z', kind: 'activity', app: 'x', state: 'active' }));",
+    "process.on('SIGTERM', () => {});",
+    'setInterval(() => {}, 1000);',
+  ].join('\n'));
+  const store = openStore();
+  const started = Date.now();
+  try {
+    const { stats } = await runSensor({ command: [process.execPath, file], store, timeoutMs: 300 });
+    assert.equal(stats.appended, 1);
+    assert.ok(Date.now() - started < 6000, `took ${Date.now() - started} ms`);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

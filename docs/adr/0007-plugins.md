@@ -43,6 +43,12 @@ It runs out of process, in any language.
   schema already has. A new kind of capture is an RFC, not a plugin.
 - **While capture is held** (paused, locked, asleep), the host drops a
   sensor's observations rather than queueing them.
+- **An observation may carry `dedupe`,** a stable ID for what it observed. The
+  store keeps it once per source: a restarted sensor adds nothing it already
+  sent, and a revoked observation never comes back. The stored key is an HMAC
+  under the master key, so it says nothing about the ID.
+- **A sensor told to stop that doesn't is killed** after a short grace, so it
+  can't keep a host or the kit waiting.
 - **A sensor is configured, never discovered.** On macOS it's listed in
   `sensors.json` in the app's home, with its full command.
 

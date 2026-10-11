@@ -9,6 +9,10 @@ import { createInterface } from 'node:readline';
 import { createGate } from './gate.js';
 import { headerError } from './observations.js';
 
+/** How long a sensor told to stop has before it's killed, and how long after that it's given up on. */
+const GRACE_MS = 2000;
+const GIVE_UP_MS = 1000;
+
 /**
  * @param {{command: string[], store: object, fragments?: string[], platform?: string,
  *   held?: () => boolean, timeoutMs?: number}} options
@@ -19,11 +23,30 @@ import { headerError } from './observations.js';
 export function runSensor({ command, store, fragments = [], platform = 'macos', held = () => false, timeoutMs }) {
   return new Promise((resolve, reject) => {
     const child = spawn(command[0], command.slice(1), { stdio: ['ignore', 'pipe', 'ignore'] });
-    const timer = timeoutMs ? setTimeout(() => child.kill(), timeoutMs) : null;
     let name = null;
     let gate = null;
     let dropped = 0;
     let failed = null;
+    let settled = false;
+    const timers = [];
+
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      timers.forEach(clearTimeout);
+      if (failed) reject(failed);
+      else if (!gate) reject(new Error('sensor exited without a header'));
+      else resolve({ name, stats: gate.stats, dropped });
+    };
+    // Asked to stop, then killed if it doesn't, then given up on if even that
+    // doesn't close it (a child of its own holding its output open): a sensor
+    // can't keep a host, or the kit, waiting.
+    const stop = () => {
+      child.kill('SIGTERM');
+      timers.push(setTimeout(() => child.kill('SIGKILL'), GRACE_MS));
+      timers.push(setTimeout(settle, GRACE_MS + GIVE_UP_MS));
+    };
+    if (timeoutMs) timers.push(setTimeout(stop, timeoutMs));
 
     createInterface({ input: child.stdout }).on('line', (line) => {
       if (line.trim() === '' || failed) return;
@@ -37,7 +60,7 @@ export function runSensor({ command, store, fragments = [], platform = 'macos', 
         const error = headerError(value);
         if (error) {
           failed = new Error(`sensor header: ${error}`);
-          child.kill();
+          stop();
           return;
         }
         name = value.sensor;
@@ -54,11 +77,6 @@ export function runSensor({ command, store, fragments = [], platform = 'macos', 
     child.on('error', (err) => {
       failed ??= err;
     });
-    child.on('close', () => {
-      if (timer) clearTimeout(timer);
-      if (failed) reject(failed);
-      else if (!gate) reject(new Error('sensor exited without a header'));
-      else resolve({ name, stats: gate.stats, dropped });
-    });
+    child.on('close', settle);
   });
 }

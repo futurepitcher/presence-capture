@@ -40,7 +40,9 @@ function poll() {
       const [hash, committed, subject] = line.split('\x1f');
       if (seen.has(hash)) continue;
       seen.add(hash);
-      emit({ at: new Date(committed).toISOString(), kind: 'activity', app: 'git', window: `${basename(repo)} — ${subject}`, state: 'active' });
+      // The commit hash as dedupe: restarted, it sends the last day's commits
+      // again, and the store keeps each once (and never one that was revoked).
+      emit({ at: new Date(committed).toISOString(), kind: 'activity', app: 'git', window: `${basename(repo)} — ${subject}`, state: 'active', dedupe: hash });
     }
   }
   since = new Date(until.getTime() - 60_000);

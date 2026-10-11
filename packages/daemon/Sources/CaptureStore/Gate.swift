@@ -23,6 +23,9 @@ public enum Observations {
         guard let o = value as? [String: Any] else { return "not an object" }
         guard let at = o["at"] as? String, iso.firstMatch(in: at, range: NSRange(at.startIndex..., in: at)) != nil,
               CaptureStore.date(at) != nil else { return "at must be an ISO 8601 UTC time" }
+        if let dedupe = o["dedupe"], !(dedupe is NSNull) {
+            guard let text = dedupe as? String, (1...200).contains(text.count) else { return "dedupe must be text of 1 to 200 characters" }
+        }
         let text = { (key: String) in o[key] as? String }
         let absentOr = { (key: String, allowed: Set<String>?) -> Bool in
             guard let value = o[key], !(value is NSNull) else { return true }
@@ -59,9 +62,10 @@ public final class Gate: @unchecked Sendable {
         public var excluded = 0
         public var redacted = 0
         public var invalid = 0
+        public var duplicates = 0
 
-        public init(appended: Int = 0, excluded: Int = 0, redacted: Int = 0, invalid: Int = 0) {
-            (self.appended, self.excluded, self.redacted, self.invalid) = (appended, excluded, redacted, invalid)
+        public init(appended: Int = 0, excluded: Int = 0, redacted: Int = 0, invalid: Int = 0, duplicates: Int = 0) {
+            (self.appended, self.excluded, self.redacted, self.invalid, self.duplicates) = (appended, excluded, redacted, invalid, duplicates)
         }
     }
 
@@ -101,6 +105,19 @@ public final class Gate: @unchecked Sendable {
             lock.withLock { counts.appended += 1 }
             return id
         }
+        // An observation marked with `dedupe` lands once per source: a restarted sensor adds nothing
+        // it already sent, and nothing revoked comes back. Nil when it's a duplicate.
+        func first(_ capture: NewCapture) throws -> String? {
+            guard let value = text("dedupe") else { return try append(capture) }
+            var marked = capture
+            marked.dedupeKey = store.dedupeKey(source: capture.source, value: value)
+            do {
+                return try append(marked)
+            } catch StoreError.constraint {
+                lock.withLock { counts.duplicates += 1 }
+                return nil
+            }
+        }
         func json(_ object: [String: Any]) -> String {
             String(decoding: (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data(), as: UTF8.self)
         }
@@ -108,7 +125,7 @@ public final class Gate: @unchecked Sendable {
         let kind = text("kind")!
         if kind == "audio" {
             let device = text("device")!
-            let segment = try append(NewCapture(capturedAt: at, captureType: "audio_segment", source: source ?? "ambient_audio", sourceApp: device))
+            guard let segment = try first(NewCapture(capturedAt: at, captureType: "audio_segment", source: source ?? "ambient_audio", sourceApp: device)) else { return }
             _ = try append(NewCapture(capturedAt: at, captureType: "audio_transcript", source: source ?? "ambient_audio", sourceApp: device,
                                       contentText: clean(text("transcript")!), extraction: "asr", derivedFrom: segment))
             return
@@ -120,16 +137,16 @@ public final class Gate: @unchecked Sendable {
         if Exclusion.isExcluded(app: app, window: window, fragments: fragments) {
             lock.withLock { counts.excluded += 1 }
             if kind == "activity" {
-                _ = try append(NewCapture(capturedAt: at, captureType: "activity", source: source ?? "activity",
-                                          contentText: json(["state": text("state")!, "excluded": true]), extraction: "none"))
+                _ = try first(NewCapture(capturedAt: at, captureType: "activity", source: source ?? "activity",
+                                         contentText: json(["state": text("state")!, "excluded": true]), extraction: "none"))
             }
             return
         }
         if kind == "screen" {
-            _ = try append(NewCapture(capturedAt: at, captureType: "screen_text", source: source ?? "screen", sourceApp: text("bundle") ?? app,
+            _ = try first(NewCapture(capturedAt: at, captureType: "screen_text", source: source ?? "screen", sourceApp: text("bundle") ?? app,
                                       sourceUrl: text("url"), contentText: clean(text("text")!), extraction: text("extraction") ?? "ocr"))
         } else {
-            _ = try append(NewCapture(capturedAt: at, captureType: "activity", source: source ?? "activity", sourceApp: text("bundle") ?? app,
+            _ = try first(NewCapture(capturedAt: at, captureType: "activity", source: source ?? "activity", sourceApp: text("bundle") ?? app,
                                       contentText: json(["app": app, "window": clean(window), "state": text("state")!]), extraction: "none"))
         }
     }

@@ -3,6 +3,10 @@
 A [sensor plugin](../../../docs/adr/0007-plugins.md) that notes each commit
 made in the repositories it's given, as activity: `repo — subject`.
 
+Each commit carries its hash as `dedupe`, so a restarted sensor, which sends
+the last day's commits again, adds nothing, and a revoked commit never comes
+back.
+
 It's an example of how little a sensor is. It writes observations to stdout,
 and the host does the rest: exclusion, redaction (a key pasted into a commit
 message is replaced before anything is written) and sealing. Its captures are

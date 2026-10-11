@@ -51,6 +51,10 @@ final class SensorPlugins: @unchecked Sendable {
             return Array(running.values)
         }
         processes.forEach { $0.terminate() }
+        // One that ignores being told to stop is killed, so it can't outlive the app.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+            for process in processes where process.isRunning { kill(process.processIdentifier, SIGKILL) }
+        }
     }
 
     /// Counts for the hourly log line, a sensor at a time: never what was observed.
