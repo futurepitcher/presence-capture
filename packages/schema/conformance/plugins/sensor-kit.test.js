@@ -235,3 +235,19 @@ test('sensor pins: a directory a sensor watches is data, not pinned', async () =
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('sensor host: an observation holding U+2028 is one observation, not two broken ones', async () => {
+  const s = sensor([
+    { sensor: 'separators', protocol: '1' },
+    { at: '2026-10-06T09:00:00.000Z', kind: 'screen', app: 'Safari', window: 'Docs', text: 'one line and the next' },
+  ]);
+  const store = openStore();
+  try {
+    const { stats } = await runSensor({ command: s.command, store });
+    assert.deepEqual([stats.appended, stats.invalid], [1, 0]);
+    assert.equal(store.contentText(stats.captureIds[0]), 'one line and the next');
+  } finally {
+    store.close();
+    s.cleanup();
+  }
+});

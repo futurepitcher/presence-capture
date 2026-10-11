@@ -11,8 +11,7 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { createInterface } from 'node:readline';
-import { openStore } from '@presence-capture/schema';
+import { eachLine, jsonLine, openStore } from '@presence-capture/schema';
 import { createMcpServer } from './server.js';
 
 function arg(name) {
@@ -37,7 +36,9 @@ const masterKey = /^[0-9a-f]{64}$/i.test(keyText) ? Buffer.from(keyText, 'hex') 
 
 const server = createMcpServer({ store: openStore(storePath, { masterKey }), grantId });
 
-createInterface({ input: process.stdin }).on('line', (line) => {
+// One request a line, split on "\n" alone: captured text holds U+2028, which
+// readline would also split on, cutting a request in two.
+eachLine(process.stdin, (line) => {
   if (line.trim() === '') return;
   let response;
   try {
@@ -45,5 +46,5 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   } catch {
     response = { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } };
   }
-  if (response !== null) process.stdout.write(`${JSON.stringify(response)}\n`);
+  if (response !== null) process.stdout.write(jsonLine(response));
 });

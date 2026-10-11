@@ -5,7 +5,7 @@
  * suite.
  */
 
-import { createDecipheriv } from 'node:crypto';
+import { createDecipheriv, createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -110,4 +110,31 @@ export function recoverable(path, dir, masterKey, revocationId) {
   } finally {
     db.close();
   }
+}
+
+/**
+ * Recompute the egress log's hash chain from the store file, as SCHEMA.md
+ * defines it, with no help from the implementation that wrote it. Null when
+ * it verifies; otherwise where it breaks.
+ */
+export function egressChainError(path) {
+  let prev = '0'.repeat(64);
+  for (const r of query(path, 'SELECT * FROM egress_record ORDER BY egress_id')) {
+    const canonical = JSON.stringify({
+      servedAt: r.served_at,
+      clientId: r.client_id,
+      grantId: r.grant_id,
+      tool: r.tool,
+      queryFingerprint: r.query_fingerprint,
+      captureIds: JSON.parse(r.capture_ids),
+      privacyLevelsServed: JSON.parse(r.privacy_levels_served),
+      rowCount: r.row_count,
+      byteCount: r.byte_count,
+      prevHash: prev,
+    });
+    if (r.prev_hash !== prev) return `record ${r.egress_id}: prev_hash does not follow the chain`;
+    if (createHash('sha256').update(canonical).digest('hex') !== r.record_hash) return `record ${r.egress_id}: record_hash is not over its canonical form`;
+    prev = r.record_hash;
+  }
+  return null;
 }

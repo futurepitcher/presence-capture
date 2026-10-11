@@ -4,12 +4,12 @@
  * one response per line on stdout (docs/spec/DRIVER.md). Opens no socket.
  */
 
-import { createInterface } from 'node:readline';
 import { createDriverHandler } from '../src/driver.js';
+import { eachLine, jsonLine } from '../src/lines.js';
 
 const handle = createDriverHandler();
 
-createInterface({ input: process.stdin }).on('line', (line) => {
+eachLine(process.stdin, (line) => {
   if (line.trim() === '') return;
   let response;
   try {
@@ -17,5 +17,5 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   } catch {
     response = { id: null, ok: false, error: { code: 'bad_request', message: 'not JSON' } };
   }
-  process.stdout.write(`${JSON.stringify(response)}\n`);
+  process.stdout.write(jsonLine(response));
 });

@@ -171,6 +171,29 @@ can forget.
 
 `egress_record` is append-only and hash-chained over `prev_hash`.
 
+- **`record_hash`** is the SHA-256, in hex, of this exact UTF-8 text:
+  ```
+  {"servedAt":…,"clientId":…,"grantId":…,"tool":…,"queryFingerprint":…,"captureIds":[…],"privacyLevelsServed":[…],"rowCount":N,"byteCount":N,"prevHash":…}
+  ```
+  - The keys come in that order, with no whitespace.
+  - Strings are escaped as ECMAScript's `JSON.stringify` escapes them: `"`,
+    `\`, and U+0000 to U+001F only, the control characters as `\b \t \n
+    \f \r` or `\u00xx` in lower-case hex.
+  - The first record's `prevHash` is 64 zeros.
+- **`byte_count`** is the byte length of the served envelopes as a JSON array
+  in that same form, with the envelope's keys in ADR 0001's order.
+- **`query_fingerprint`** is the SHA-256 of `tool ‖ U+0000 ‖ query ‖ U+0000 ‖
+  contains`. The query itself is never kept.
+
+An implementation MUST read the last record and insert the next in one
+transaction that holds the write lock from its start (`BEGIN IMMEDIATE`), so
+two readers in different processes can't both follow the same record.
+Migration 007's unique index on `prev_hash` refuses a fork whatever an
+implementation does.
+
+The store-layer suite recomputes the chain from the file, so a log written by
+one implementation verifies in any other.
+
 ## Privacy levels (R5)
 
 | Level | Meaning | Default servability |

@@ -8,6 +8,8 @@ public enum StoreError: Error, CustomStringConvertible, Equatable {
     case constraint(String)
     /// The master key doesn't open this store.
     case wrongKey
+    /// A read the grant doesn't allow: no grant, a revoked one, an expired one (ADR 0001).
+    case denied(String)
     case sealing
     case sqlite(String)
 
@@ -15,6 +17,7 @@ public enum StoreError: Error, CustomStringConvertible, Equatable {
         switch self {
         case .constraint(let message): return "constraint: \(message)"
         case .wrongKey: return "masterKey does not open this store"
+        case .denied(let message): return "denied: \(message)"
         case .sealing: return "sealing failed"
         case .sqlite(let message): return "capture store: \(message)"
         }
@@ -61,12 +64,12 @@ public struct Revocation: Sendable, Equatable {
 /// was captured; what was captured is sealed per capture, and revocation erases it (ADR 0002).
 /// Retention is a scheduled revocation (ADR 0003). One connection, used one call at a time.
 public final class CaptureStore: @unchecked Sendable {
-    private var db: OpaquePointer?
-    private let masterKey: SymmetricKey
+    var db: OpaquePointer?
+    let masterKey: SymmetricKey
     /// Keys dedupe values, so a dedupe_key, which outlives a revocation in the append-only log,
     /// can't be matched to what it named without the master key.
     private let dedupeSecret: SymmetricKey
-    private let lock = NSLock()
+    let lock = NSLock()
     private var erasurePending = false
 
     public static let epoch = "0000-01-01T00:00:00.000Z"
@@ -79,6 +82,8 @@ public final class CaptureStore: @unchecked Sendable {
         dedupeSecret = HKDF<SHA256>.deriveKey(inputKeyMaterial: masterKey, info: Data("presence-capture dedupe".utf8), outputByteCount: 32)
         try FileManager.default.createDirectory(at: URL(fileURLWithPath: path).deletingLastPathComponent(), withIntermediateDirectories: true)
         guard sqlite3_open(path, &db) == SQLITE_OK else { throw StoreError.sqlite("can't open the store") }
+        // Another process (a reader, another writer) may hold the write lock for a moment: wait for it.
+        sqlite3_busy_timeout(db, 5000)
         try exec("PRAGMA foreign_keys = ON")
         // Deleted content is overwritten, not left on a free page (R11).
         try exec("PRAGMA secure_delete = ON")
@@ -204,7 +209,7 @@ public final class CaptureStore: @unchecked Sendable {
         }
     }
 
-    private func dataKey(_ captureId: String, wrapped: Data) throws -> SymmetricKey {
+    func dataKey(_ captureId: String, wrapped: Data) throws -> SymmetricKey {
         SymmetricKey(data: try Seal.open(wrapped, key: masterKey, aad: "key:\(captureId)"))
     }
 
@@ -267,6 +272,10 @@ public final class CaptureStore: @unchecked Sendable {
     /// A reader in another process holding a snapshot blocks that, and SQLite says so only in the
     /// result row (busy = 1), never as an error. Retried for about a second; true once truncated.
     private func truncateLog(attempts: Int = 20) throws -> Bool {
+        // Retried on its own short schedule, so SQLite's busy wait is off while it tries: with it on,
+        // each attempt would wait out the whole busy timeout.
+        sqlite3_busy_timeout(db, 0)
+        defer { sqlite3_busy_timeout(db, 5000) }
         for attempt in 0..<attempts {
             if try rows("PRAGMA wal_checkpoint(TRUNCATE)").first?.int(0) == 0 {
                 erasurePending = false
@@ -345,8 +354,10 @@ public final class CaptureStore: @unchecked Sendable {
         return try rows(sql).first?.int(0) ?? 1
     }
 
-    private func transaction(_ body: () throws -> Void) throws {
-        try exec("BEGIN")
+    /// `immediate` takes the write lock at once, before anything is read, so a read and the write
+    /// that depends on it can't be split by another process's write.
+    func transaction(immediate: Bool = false, _ body: () throws -> Void) throws {
+        try exec(immediate ? "BEGIN IMMEDIATE" : "BEGIN")
         do {
             try body()
             try exec("COMMIT")
@@ -356,7 +367,7 @@ public final class CaptureStore: @unchecked Sendable {
         }
     }
 
-    private func exec(_ sql: String) throws {
+    func exec(_ sql: String) throws {
         guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else { throw failure() }
     }
 
@@ -385,36 +396,43 @@ public final class CaptureStore: @unchecked Sendable {
         return statement
     }
 
-    private func run(_ sql: String, _ values: Any?...) throws {
+    func run(_ sql: String, _ values: Any?...) throws {
         _ = try runCounting(sql, values)
     }
 
-    private func runCounting(_ sql: String, _ values: [Any?]) throws -> Int {
+    func runCounting(_ sql: String, _ values: [Any?]) throws -> Int {
         let statement = try prepare(sql, values)
         defer { sqlite3_finalize(statement) }
         guard sqlite3_step(statement) == SQLITE_DONE else { throw failure() }
         return Int(sqlite3_changes(db))
     }
 
-    private func rows(_ sql: String, _ values: Any?...) throws -> [Row] {
+    func rows(_ sql: String, _ values: Any?...) throws -> [Row] {
         try rows(sql, values: values)
     }
 
     /// Named apart from the variadic one: an array passed there would bind as a single value.
-    private func rows(_ sql: String, values: [Any?]) throws -> [Row] {
+    func rows(_ sql: String, values: [Any?]) throws -> [Row] {
+        var out: [Row] = []
+        try eachRow(sql, values: values) { out.append($0); return true }
+        return out
+    }
+
+    /// Rows one at a time, as the statement steps, until `body` says stop: a read that needs a few
+    /// rows of a long history never holds the rest.
+    func eachRow(_ sql: String, values: [Any?], _ body: (Row) throws -> Bool) throws {
         let statement = try prepare(sql, values)
         defer { sqlite3_finalize(statement) }
-        var out: [Row] = []
         while true {
             switch sqlite3_step(statement) {
-            case SQLITE_ROW: out.append(Row(statement))
-            case SQLITE_DONE: return out
+            case SQLITE_ROW: if try !body(Row(statement)) { return }
+            case SQLITE_DONE: return
             default: throw failure()
             }
         }
     }
 
-    private struct Row {
+    struct Row {
         private var values: [Any?] = []
         init(_ statement: OpaquePointer?) {
             for column in 0..<sqlite3_column_count(statement) {
@@ -429,6 +447,7 @@ public final class CaptureStore: @unchecked Sendable {
             }
         }
         func text(_ i: Int) -> String { values[i] as? String ?? "" }
+        func optionalText(_ i: Int) -> String? { values[i] as? String }
         func int(_ i: Int) -> Int { values[i] as? Int ?? 0 }
         func data(_ i: Int) -> Data { values[i] as? Data ?? Data() }
     }

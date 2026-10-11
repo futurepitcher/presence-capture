@@ -53,6 +53,9 @@ export function openStore(path = ':memory:', { masterKey } = {}) {
 
   const db = new DatabaseSync(path);
   db.exec('PRAGMA foreign_keys = ON');
+  // Another process (the daemon, another reader) may hold the write lock for a
+  // moment: wait for it rather than fail.
+  db.exec('PRAGMA busy_timeout = 5000');
   // Deleted content is overwritten, not left on a free page (R11).
   db.exec('PRAGMA secure_delete = ON');
   db.exec('PRAGMA journal_mode = WAL');
@@ -398,16 +401,23 @@ export function openStore(path = ':memory:', { masterKey } = {}) {
    * erasure is not reported done, and finishErasure() completes it.
    */
   function truncateLog(attempts = 20) {
-    for (let i = 0; i < attempts; i++) {
-      const { busy } = db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
-      if (busy === 0) {
-        erasurePending = false;
-        return true;
+    // Retried on its own short schedule, so SQLite's busy wait is off while it
+    // tries: with it on, each attempt would wait out the whole busy timeout.
+    db.exec('PRAGMA busy_timeout = 0');
+    try {
+      for (let i = 0; i < attempts; i++) {
+        const { busy } = db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+        if (busy === 0) {
+          erasurePending = false;
+          return true;
+        }
+        if (i < attempts - 1) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
       }
-      if (i < attempts - 1) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+      erasurePending = true;
+      return false;
+    } finally {
+      db.exec('PRAGMA busy_timeout = 5000');
     }
-    erasurePending = true;
-    return false;
   }
 
   /** Finishes an erasure a reader held up. True once nothing revoked is left in the log. */
@@ -448,10 +458,10 @@ export function openStore(path = ':memory:', { masterKey } = {}) {
       grantId,
       grant.clientId,
       now(),
-      grant.expiresAt,
+      canonicalTime(grant.expiresAt, 'expiresAt'),
       JSON.stringify(grant.domains ?? ['*']),
-      grant.timeFrom ?? null,
-      grant.timeTo ?? null,
+      grant.timeFrom == null ? null : canonicalTime(grant.timeFrom, 'timeFrom'),
+      grant.timeTo == null ? null : canonicalTime(grant.timeTo, 'timeTo'),
       JSON.stringify(grant.privacyLevels ?? ['standard']),
       JSON.stringify(grant.captureTypes ?? ['*']),
       JSON.stringify(grant.sources ?? ['*']),
@@ -464,7 +474,23 @@ export function openStore(path = ':memory:', { masterKey } = {}) {
     db.prepare('UPDATE grant_record SET revoked_at = ? WHERE grant_id = ?').run(now(), grantId);
   }
 
+  /**
+   * Chained to the last record, under the write lock: BEGIN IMMEDIATE takes it
+   * before the last record is read, so another process can't take the same one
+   * and fork the chain (migration 007 refuses a fork besides).
+   */
   function appendEgress(record) {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      appendEgressLocked(record);
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  function appendEgressLocked(record) {
     const prev = db
       .prepare('SELECT record_hash FROM egress_record ORDER BY egress_id DESC LIMIT 1')
       .get();

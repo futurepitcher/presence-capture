@@ -175,3 +175,41 @@ test('C1: hostile captured text is returned as data, never as protocol instructi
   assert.equal(res.result.isError, false);
   store.close();
 });
+
+test('stdio: a request holding U+2028 is one request, and so is its reply', async () => {
+  const { spawn } = await import('node:child_process');
+  const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { randomBytes } = await import('node:crypto');
+  const dir = mkdtempSync(join(tmpdir(), 'pc-mcp-'));
+  try {
+    const key = randomBytes(32);
+    writeFileSync(join(dir, 'master.key'), key.toString('hex'));
+    const store = openStore(join(dir, 'store.sqlite'), { masterKey: key });
+    store.appendCapture({
+      captureType: 'screen_text', source: 'screen', privacyLevel: 'standard',
+      contentText: 'a page with a line separator in it', extraction: 'ocr',
+    });
+    const grantId = store.issueGrant({ clientId: 'editor', expiresAt: FUTURE });
+    store.close();
+
+    const server = spawn(process.execPath, [new URL('../src/stdio.js', import.meta.url).pathname,
+      '--store', join(dir, 'store.sqlite'), '--grant', grantId, '--master-key-file', join(dir, 'master.key')]);
+    let out = '';
+    server.stdout.setEncoding('utf8');
+    server.stdout.on('data', (chunk) => { out += chunk; });
+    const search = { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'search', arguments: { contains: 'line separator' } } };
+    const list = { jsonrpc: '2.0', id: 2, method: 'tools/list' };
+    // As a client might send them: JSON.stringify leaves U+2028 unescaped.
+    server.stdin.write(`${JSON.stringify(search)}\n${JSON.stringify(list)}\n`);
+    server.stdin.end();
+    await new Promise((resolve) => server.on('close', resolve));
+
+    const replies = out.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    assert.deepEqual(replies.map((r) => r.id), [1, 2], 'a request was cut in two at U+2028');
+    assert.equal(envelopesFrom(replies[0])[0].presence_capture_untrusted.content, 'a page with a line separator in it');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

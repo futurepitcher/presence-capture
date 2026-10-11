@@ -5,8 +5,8 @@
  */
 
 import { spawn } from 'node:child_process';
-import { createInterface } from 'node:readline';
 import { createGate } from './gate.js';
+import { eachLine } from './lines.js';
 import { headerError } from './observations.js';
 import { pinError, SENSOR_CWD } from './pins.js';
 
@@ -56,7 +56,7 @@ export function runSensor({ command, store, pins, fragments = [], platform = 'ma
     };
     if (timeoutMs) timers.push(setTimeout(stop, timeoutMs));
 
-    createInterface({ input: child.stdout }).on('line', (line) => {
+    eachLine(child.stdout, (line) => {
       if (line.trim() === '' || failed) return;
       let value;
       try {
