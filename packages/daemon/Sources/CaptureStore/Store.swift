@@ -151,10 +151,21 @@ public final class CaptureStore: @unchecked Sendable {
         }
     }
 
-    public func addProjectionEntry(projection: String, captureId: String, entryRef: String) throws {
+    /// Records that a projection holds something derived from a capture, so revocation knows what
+    /// to prune (R3). With `output` (a kind and its JSON), the store keeps what was derived, sealed
+    /// under the capture's own data key (ADR 0007): revoking the capture deletes it and destroys
+    /// the key that sealed it.
+    public func addProjectionEntry(projection: String, captureId: String, entryRef: String, output: (kind: String, json: Data)? = nil) throws {
         try lock.withLock {
-            try run("INSERT INTO projection_entry (projection_name, capture_id, entry_ref, created_at) VALUES (?, ?, ?, ?)",
-                    projection, captureId, entryRef, Self.iso(Date()))
+            var sealed: Data?
+            if let output {
+                guard let wrapped = try rows("SELECT wrapped_key FROM capture_key WHERE capture_id = ?", captureId).first?.data(0) else {
+                    throw StoreError.constraint("no output for a capture that is revoked or unknown")
+                }
+                sealed = try Seal.seal(output.json, key: try dataKey(captureId, wrapped: wrapped), aad: "projection:\(projection):\(captureId):\(entryRef)")
+            }
+            try run("INSERT INTO projection_entry (projection_name, capture_id, entry_ref, created_at, output_kind, output_sealed) VALUES (?, ?, ?, ?, ?, ?)",
+                    projection, captureId, entryRef, Self.iso(Date()), output?.kind, sealed)
         }
     }
 

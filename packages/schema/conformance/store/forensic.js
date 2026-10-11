@@ -21,6 +21,7 @@ import { filesUnder, recoverable, sealedArtifacts } from './inspect.js';
 export const MARKERS = {
   transcript: 'pc-forensic-transcript-7f3a9c2e',
   payload: 'pc-forensic-payload-b81d44f0',
+  projection: 'pc-forensic-projection-c47e2a19',
   control: 'pc-forensic-control-5e6c1a93',
 };
 
@@ -55,7 +56,11 @@ export async function forensicErasureCheck(start) {
       capture_type: 'screen_text', source: 'screen', privacy_level: 'standard',
       content_text: MARKERS.control, extraction: 'ocr',
     });
-    await driver.call('add_projection_entry', { projection: 'text_index', capture_id: transcriptId, entry_ref: 'fts:1' });
+    // What a projector derived from the transcript, kept by the store (ADR 0007).
+    await driver.call('add_projection_entry', {
+      projection: 'text_index', capture_id: transcriptId, entry_ref: 'fts:1',
+      output_kind: 'summary', output_json: JSON.stringify({ summary: MARKERS.projection }),
+    });
     await driver.call('add_projection_entry', { projection: 'text_index', capture_id: controlId, entry_ref: 'fts:2' });
 
     // Plaintext must never reach the disk, revoked or not (CONTRACT: redact,
@@ -73,8 +78,8 @@ export async function forensicErasureCheck(start) {
     // What someone would look for afterwards: the wrapped keys and sealed
     // bytes of the captures about to be revoked.
     const secrets = sealedArtifacts(path, dir, [audioId, transcriptId]);
-    if (secrets.length !== 4) {
-      failures.push(`expected 4 sealed artifacts before revocation (2 keys, text, payload), found ${secrets.length}`);
+    if (secrets.length !== 5) {
+      failures.push(`expected 5 sealed artifacts before revocation (2 keys, text, payload, projection output), found ${secrets.length}`);
     }
 
     const { revocation_id: revocationId } = await driver.call('revoke', {
@@ -93,6 +98,7 @@ export async function forensicErasureCheck(start) {
     const { texts, receipt } = recoverable(path, dir, masterKey, revocationId);
     if (texts.some((t) => t.includes(MARKERS.transcript))) failures.push('revoked transcript still decrypts with the master key');
     if (texts.some((t) => t.includes(MARKERS.payload))) failures.push('revoked payload still decrypts with the master key');
+    if (texts.some((t) => t.includes(MARKERS.projection))) failures.push('a projection output derived from revoked content still decrypts');
     // Without this the check would pass a store that erased everything.
     if (!texts.some((t) => t.includes(MARKERS.control))) failures.push('unrevoked control capture is no longer recoverable');
 

@@ -66,8 +66,12 @@ The daemon is ported from PresenceVoice's working capture app.
 - ✅ Sensor plugins ([ADR 0007](docs/adr/0007-plugins.md)): out of process, in
   any language, through the same gate, with a conformance kit and a
   git-activity example. Hosted by the reference and the macOS app.
-- ☐ Projector and exporter plugins, proposed in ADR 0007, waiting on its
-  acceptance.
+- ✅ Projector plugins ([ADR 0007](docs/adr/0007-plugins.md)): WebAssembly with
+  no imports, a fresh instance per capture, pinned by hash, read through a
+  grant. Outputs kept by the store under the capture's key, so revocation
+  erases them. A kit of attacks the host must refuse or contain. Reference
+  host only so far.
+- ☐ The projector host in the macOS app, and pinned sensors.
 - ☐ A side-by-side parity trial against screenpipe, and a forensic check on
   a live store.
 

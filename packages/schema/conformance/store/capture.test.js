@@ -125,3 +125,16 @@ test('store R9: a store written by this implementation opens in the reference, w
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('store R11: a projection output is sealed under its capture\'s key, as SCHEMA.md defines', () => withStore(async ({ call, path, masterKey }) => {
+  const { capture_id: id } = await call('append', screenText('the source of a summary'));
+  await call('register_projection', { name: 'summaries', kind: 'summary' });
+  await call('add_projection_entry', {
+    projection: 'summaries', capture_id: id, entry_ref: 's:1', output_kind: 'summary', output_json: JSON.stringify({ words: 5 }),
+  });
+  const [row] = query(path, 'SELECT output_kind, output_sealed FROM projection_entry WHERE capture_id = ?', id);
+  assert.equal(row.output_kind, 'summary');
+  const [{ wrapped_key: wrapped }] = query(path, 'SELECT wrapped_key FROM capture_key WHERE capture_id = ?', id);
+  const key = unsealPerSpec(masterKey, wrapped, `key:${id}`);
+  assert.deepEqual(JSON.parse(unsealPerSpec(key, row.output_sealed, `projection:summaries:${id}:s:1`).toString()), { words: 5 });
+}));

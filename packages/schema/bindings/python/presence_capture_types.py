@@ -98,6 +98,7 @@ class EgressRecord(BaseModel):
 
 class EnvelopeProvenance(BaseModel):
     capture_id: str
+    sequence: int
     captured_at: str
     source_app: Optional[str]
     source_url: Optional[str]

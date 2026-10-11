@@ -73,6 +73,9 @@ export function sealedArtifacts(path, dir, captureIds) {
       if (text) out.push([`sealed text of ${id}`, Buffer.from(text.text_sealed)]);
       const payload = sealedPayload(db, dir, id);
       if (payload) out.push([`sealed payload of ${id}`, payload]);
+      for (const row of db.prepare('SELECT entry_ref, output_sealed FROM projection_entry WHERE capture_id = ? AND output_sealed IS NOT NULL').all(id)) {
+        out.push([`sealed projection output ${row.entry_ref} of ${id}`, Buffer.from(row.output_sealed)]);
+      }
     }
     return out;
   } finally {
@@ -97,6 +100,10 @@ export function recoverable(path, dir, masterKey, revocationId) {
       const payload = sealedPayload(db, dir, id);
       const bytes = payload && unsealPerSpec(key, payload, `payload:${id}`);
       if (bytes) texts.push(bytes.toString('utf8'));
+      for (const row of db.prepare('SELECT projection_name, entry_ref, output_sealed FROM projection_entry WHERE capture_id = ? AND output_sealed IS NOT NULL').all(id)) {
+        const output = unsealPerSpec(key, row.output_sealed, `projection:${row.projection_name}:${id}:${row.entry_ref}`);
+        if (output) texts.push(output.toString('utf8'));
+      }
     }
     const receipt = db.prepare('SELECT * FROM erasure_receipt WHERE revocation_id = ?').get(revocationId);
     return { texts, receipt };

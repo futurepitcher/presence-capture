@@ -43,6 +43,8 @@ it, with no help from the implementation that wrote it.
 |------|----------------|
 | `plugins/sensor-kit.js` | A sensor plugin ([ADR 0007](../../../docs/adr/0007-plugins.md)): a valid header, observations that pass `cases/observations.json`, and captures that land as `sensor:<name>` through the gate. Run it with `bin/sensor-kit.js -- <command>` |
 | `plugins/sensor-kit.test.js` | The kit itself: the git-activity example passes, three broken sensors fail, and the host drops observations while held and applies the user's exclusions |
+| `plugins/projector-kit.js` | A projector plugin: loads it as the host would, runs it over a synthetic day through a grant made from its manifest, and revokes what it projected. Run it with `bin/projector-kit.js <module.wasm> <manifest.json>` |
+| `plugins/projector-kit.test.js` | The host refusing modules that import anything, have unbounded memory or aren't the approved hash. The host containing modules that never return, keep state between captures, or return oversized, malformed or out-of-manifest output. `plugins/wasm.js` builds these modules, so no binaries are committed |
 
 ## Reference API layer
 

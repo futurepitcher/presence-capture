@@ -53,8 +53,10 @@ func handle(_ op: String, _ args: [String: Any]) throws -> [String: Any] {
         try need().registerProjection(name: try required(args, "name"), kind: try required(args, "kind"))
         return [:]
     case "add_projection_entry":
+        var output: (kind: String, json: Data)?
+        if let kind = string(args, "output_kind") { output = (kind, Data((string(args, "output_json") ?? "null").utf8)) }
         try need().addProjectionEntry(projection: try required(args, "projection"), captureId: try required(args, "capture_id"),
-                                      entryRef: try required(args, "entry_ref"))
+                                      entryRef: try required(args, "entry_ref"), output: output)
         return [:]
     case "revoke":
         let r = try need().revoke(scopeKind: try required(args, "scope_kind"), scopeValue: try required(args, "scope_value"),
