@@ -53,10 +53,11 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
-      # Links the workspaces. There are no third-party dependencies to fetch:
-      # both suites run on node:sqlite and node:test.
+      # Links the workspaces, exactly as the lockfile says. There are no
+      # third-party dependencies to fetch: both suites run on node:sqlite and
+      # node:test.
       - name: Link workspaces
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       # The reference API layer, then the store layer through the reference
       # driver process: the path another implementation's driver takes.

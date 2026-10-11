@@ -5,8 +5,9 @@ a person's complete working record. We treat that accordingly.
 
 ## Reporting
 
-Report privately via GitHub's **Report a vulnerability** button under the
-Security tab, which opens a private advisory.
+Report privately through a GitHub security advisory:
+<https://github.com/futurepitcher/presence-capture/security/advisories/new>
+(the **Report a vulnerability** button under the Security tab).
 
 Please do not open a public issue for anything that could expose captured data.
 
