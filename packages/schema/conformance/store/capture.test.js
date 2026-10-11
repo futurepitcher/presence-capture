@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
+import { openStore } from '../../src/store.js';
 import { startDriver } from '../driver-client.js';
 import { query, unsealPerSpec } from './inspect.js';
 import { screenText, withStore } from './helpers.js';
@@ -102,6 +103,24 @@ test('store R11: a store will not open with another master key', async () => {
     const right = startDriver();
     await right.call('open', { path, master_key_hex: masterKey });
     await right.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('store R9: a store written by this implementation opens in the reference, which serves it', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pc-interop-'));
+  const path = join(dir, 'store.sqlite');
+  const masterKey = randomBytes(32);
+  try {
+    const driver = startDriver();
+    await driver.call('open', { path, master_key_hex: masterKey.toString('hex') });
+    const { capture_id: id } = await driver.call('append', screenText('written by one, read by another'));
+    await driver.close();
+
+    const reference = openStore(path, { masterKey });
+    assert.equal(reference.contentText(id), 'written by one, read by another');
+    reference.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
