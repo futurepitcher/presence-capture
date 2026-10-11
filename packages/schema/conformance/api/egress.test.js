@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { FUTURE } from './helpers.js';
-import { ENVELOPE_VERSION, openStore } from '../src/store.js';
+import { ENVELOPE_VERSION, openStore } from '../../src/store.js';
 
 function readableStore() {
   const store = openStore();

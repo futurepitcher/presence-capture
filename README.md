@@ -43,7 +43,7 @@ conformance suite, plus a reference implementation that proves the spec works.
 
 ## Design positions
 
-**Try it:** `npm install && npm test` — Node ≥ 22.5, no third-party
+**Try it:** `npm install && npm test` — Node ≥ 22.13, no third-party
 dependencies. 43 assertions across the schema and MCP suites. They define
 conformance, so they are also the fastest way to see what this project claims.
 

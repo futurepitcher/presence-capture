@@ -11,7 +11,7 @@ The daemon has exactly one job: **produce a store that passes
 
 | Need | Why |
 |------|-----|
-| macOS 13+, Apple Silicon | ScreenCaptureKit, VideoToolbox HEVC, Vision OCR |
+| macOS 14+, Apple Silicon; macOS 26 for SpeechAnalyzer and Foundation Models | ScreenCaptureKit, Vision OCR, on-device speech ([ADR 0004](../../docs/adr/0004-apple-on-device-models.md)) |
 | ScreenCaptureKit, **not** `CGWindowListCreateImage` | The legacy API shows no recording privacy indicator and is on a deprecation path. A capture tool that records without the indicator is not acceptable |
 | AVAudioEngine | Ambient audio lane |
 | Vision framework | OCR fallback |
@@ -23,15 +23,23 @@ Per captured artifact, in this order:
 
 1. **Exclusion check first.** Per-application and per-input-device exclusion is
    evaluated *before* bytes exist (R8). A capture that should not have happened
-   must never reach disk, not be deleted afterwards.
+   must never reach disk, not be deleted afterwards. The rules, and how the
+   user's list is parsed, are in
+   [`cases/exclusion.json`](../schema/cases/exclusion.json). A user list that
+   exists but can't be read means nothing is captured until it can be.
 2. **Dedupe.** Compute `dedupe_key` over the frame; a near-identical consecutive
    frame is dropped, not stored (R7).
 3. **Redact.** Secrets are filtered *before* anything reaches disk. Redaction
-   after persistence is not redaction.
-4. **Payload.** Write bytes, compute the SHA-256, insert `capture_payload`.
-   Frames go into HEVC segments via VideoToolbox plus a frame index — not loose
-   images. Budget ~50–70 GB/month at a 2-second interval.
-5. **Capture event.** Insert `capture_event` with `sequence` monotonic.
+   after persistence is not redaction. The daemon's redactor passes
+   [`cases/redaction.json`](../schema/cases/redaction.json).
+4. **Seal.** Generate the capture's data key. Seal its text and any payload
+   bytes with it (AES-256-GCM, AAD `text:` / `payload:<capture_id>`), and wrap
+   the key with the master key from the Keychain. Plaintext never reaches
+   disk (R11). By default there are no pixels to seal: a screen capture is
+   its text ([ADR 0005](../../docs/adr/0005-text-first-capture.md)).
+5. **Capture event.** In one transaction, insert `capture_event` with
+   `sequence` monotonic, plus its `capture_key`, `capture_content` and any
+   payload.
    `source_url` is set only where it was actually established; otherwise `NULL`.
    It MUST NOT be inferred from content.
 6. **Text.** Accessibility-API text first, Vision OCR as fallback. Record which
@@ -44,9 +52,10 @@ Per captured artifact, in this order:
 ## Transcription
 
 - Runs on-device. Nothing leaves the machine.
-- Default ASR MUST be redistributable without a gate or revenue limit. Current
-  choice: **Qwen3-ASR** (Apache-2.0, 52 languages). See the
-  [licensing table](README.md).
+- Default ASR MUST be redistributable without a gate or revenue limit. On
+  macOS that is the OS's own: **SpeechAnalyzer** on macOS 26, on-device
+  `SFSpeechRecognizer` before it. Recognition never falls back to a network
+  service ([ADR 0004](../../docs/adr/0004-apple-on-device-models.md)).
 - Diarization is opt-in and never a default dependency.
 - The transcript inherits the audio's `privacy_level`. It MUST NOT be assigned a
   weaker one.
@@ -58,6 +67,11 @@ These are not features. An implementation that misses one is not conformant:
 - `sacred_mode` captures are written but are unreachable through any read path.
 - `privacy_level` is assigned at write time and is never mutated afterwards —
   `capture_event` is append-only, enforced by trigger.
+- Revocation erases: keys, sealed text and sealed bytes go in the revoking
+  transaction, with an erasure receipt, and the WAL is truncated after
+  ([ADR 0002](../../docs/adr/0002-erasable-revocation.md)).
+- Retention is a scheduled revocation, 14 days by default
+  ([ADR 0003](../../docs/adr/0003-retention-is-revocation.md)).
 - Revocation is the only removal mechanism. The daemon never deletes a capture
   row.
 - The daemon does not serve. It writes. Serving is `packages/mcp`, and the two

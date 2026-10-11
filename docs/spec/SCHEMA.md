@@ -28,29 +28,32 @@ content is classified, and what a consumer does with the result.
 
 ## Requirements
 
-| # | Requirement | Conformance test |
+| # | Requirement | Store layer (`conformance/store/`) |
 |---|-------------|------------------|
-| R1 | Capture events are append-only; payloads are content-addressed and stored apart from metadata | `append-only.test.js` |
+| R1 | Capture events are append-only; payloads are content-addressed and stored apart from metadata | `capture.test.js` |
 | R2 | Revocation is a first-class event, never a row delete | `revocation.test.js` |
-| R3 | Revocation propagates to projections and vector indices, verifiably | `revocation.test.js`, `vector-store.test.js` |
-| R4 | Replay receipts and watermarks record consumer position; replay is deterministic | `replay.test.js` |
-| R5 | Every event carries a privacy level, enforced at read boundaries | `privacy.test.js` |
-| R6 | Classification taxonomy is pluggable | `append-only.test.js` |
-| R7 | Near-identical frames are deduplicated before persistence | `revocation.test.js` |
-| R8 | Per-application exclusion is supported at capture time | daemon-side; not schema-testable |
-| R9 | The event shape is platform-neutral | by inspection |
+| R3 | Revocation propagates to projections and vector indices, verifiably | `revocation.test.js`; vector backends: `api/vector-store.test.js` |
+| R4 | Replay receipts and watermarks record consumer position; replay is deterministic | reference only: `api/replay.test.js` |
+| R5 | Every event carries a privacy level, enforced at read boundaries | `capture.test.js`; read boundary: `api/privacy.test.js` |
+| R6 | Classification taxonomy is pluggable | `capture.test.js` |
+| R7 | Near-identical frames are deduplicated before persistence | `capture.test.js` |
+| R8 | Per-application exclusion is supported at capture time | daemon-side; shared cases in `packages/schema/cases/` |
+| R9 | The event shape is platform-neutral | by inspection, and by the store layer holding every implementation to the same files |
 | R10 | Derived artifacts — transcripts, alignments, embeddings — are projections subject to R3 | `revocation.test.js` |
+| R11 | Revocation erases content: no plaintext ever reaches disk, and a revoked capture's key, text and bytes are gone from every file the store leaves, with a receipt | `erasure.test.js`, `capture.test.js`, `revocation.test.js`; the check itself: `mutation.test.js` |
+| R12 | Retention is a scheduled revocation, never a delete | `retention.test.js` |
 
 ## Entities
 
 ### `capture_payload` (R1)
 
-Bulk bytes, addressed by content so identical captures store once.
+Metadata for a capture's bulk bytes. The bytes themselves are sealed (R11)
+and live in `payload_blob` or a file `storage_uri` names.
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `payload_hash` | TEXT PK | SHA-256 hex over the bytes |
-| `byte_count` | INTEGER | |
+| `payload_hash` | TEXT PK | SHA-256 hex over the **sealed** bytes. Identical plaintext in two captures is sealed under two keys and stored twice, so each can be erased alone ([ADR 0002](../adr/0002-erasable-revocation.md)) |
+| `byte_count` | INTEGER | Sealed size |
 | `media_type` | TEXT | e.g. `image/heic`, `audio/wav` |
 | `storage_uri` | TEXT | Where the bytes live. Implementations MAY use segment-plus-offset form |
 | `created_at` | TEXT | ISO 8601 |
@@ -69,7 +72,6 @@ Bulk bytes, addressed by content so identical captures store once.
 | `privacy_level` | TEXT | `standard`, `sensitive`, `excluded`, `sacred_mode` |
 | `classification` | TEXT NULL | Opaque to the schema (R6) |
 | `payload_hash` | TEXT NULL | FK to `capture_payload` |
-| `content_text` | TEXT NULL | Extracted text. **Attacker-controlled** |
 | `extraction` | TEXT NULL | `accessibility`, `ocr`, `asr`, `none` |
 | `derived_from` | TEXT NULL | FK to `capture_event`. Set on derived artifacts (R10) |
 | `dedupe_key` | TEXT NULL | Unique where not null (R7) |
@@ -77,6 +79,42 @@ Bulk bytes, addressed by content so identical captures store once.
 Implementations MUST reject UPDATE and DELETE against this table. The reference
 implementation enforces this with database triggers rather than application
 convention, because a convention is not a guarantee.
+
+The event records *that* something was captured. *What* was captured is never
+in it: see the next section.
+
+### `capture_key`, `capture_content`, `payload_blob`, `erasure_receipt` (R11)
+
+Content is sealed per capture and erased by revocation
+([ADR 0002](../adr/0002-erasable-revocation.md)).
+
+| Table | Field | Notes |
+|-------|-------|-------|
+| `capture_key` | `capture_id` PK, `wrapped_key` BLOB, `created_at` | The capture's 32-byte data key, sealed by the master key with AAD `key:<capture_id>`. Write-once |
+| `capture_content` | `capture_id` PK, `text_sealed` BLOB, `created_at` | Extracted text sealed by the data key, AAD `text:<capture_id>`. **Attacker-controlled** once unsealed. Write-once |
+| `payload_blob` | `payload_hash` PK, `sealed` BLOB | Payload bytes sealed by the data key, AAD `payload:<capture_id>`. An implementation MAY keep them in files instead, sealed the same way |
+| `erasure_receipt` | `revocation_id` PK, `applied_at`, `keys_destroyed`, `contents_erased`, `payloads_erased` | Append-only |
+
+**Sealing.** AES-256-GCM, combined form `nonce(12) ‖ ciphertext ‖ tag(16)`,
+byte-compatible with CryptoKit's `AES.GCM.SealedBox.combined`. The master key
+MUST NOT be written to the store or beside it; on macOS it lives in the
+Keychain. A store MUST refuse to open with the wrong master key.
+
+**Erasure.** In the transaction that records a revocation, an implementation
+MUST delete the revoked set's sealed payloads, sealed text and keys, and write
+one `erasure_receipt`. Before the revocation is reported done, deleted pages
+MUST be overwritten (`secure_delete`) and any write-ahead log holding the
+earlier frames MUST be checkpointed and truncated. **A revocation with no
+erasure receipt is non-conformant.** Plaintext content MUST NOT reach disk at
+any time.
+
+### Retention (R12)
+
+Retention is a revocation with `scope_kind = time_range`, from the epoch to
+`now − days` inclusive, and `reason = 'retention'`
+([ADR 0003](../adr/0003-retention-is-revocation.md)). It cascades, prunes and
+erases with receipts like any other. An implementation MUST NOT remove content
+by any other means. A run with nothing old enough writes nothing.
 
 ### `revocation`, `revoked_capture` (R2, R3, R10)
 
@@ -134,10 +172,11 @@ can forget.
 
 ## Storage contracts
 
-- **Frames.** Encoded video segments plus a frame index, not loose images.
-  Planning figure from a comparable implementation: **50–70 GB/month** at a
-  2-second interval. Implementations MUST state a retention and compaction
-  contract.
+- **Frames.** Text first; no pixels by default
+  ([ADR 0005](../adr/0005-text-first-capture.md)). A screen capture is a
+  `screen_text` event. An opt-in keyframe buffer may keep `screen_frame`
+  payloads under a short retention of its own, sealed and erased like any
+  other payload. Default budget: under 1 GB a month. Retention is R12.
 - **Vector store.** The interface is defined in
   [`src/vector-store.js`](../../packages/schema/src/vector-store.js);
   **LanceDB** is the shipped default, chosen for being Rust-native over Apache
@@ -148,17 +187,28 @@ can forget.
   than extracting from every frame, and higher fidelity where available.
 - **Audio and transcription.** Transcription is in scope and runs on-device. A
   default ASR MUST be redistributable without a gate or a revenue limit — see
-  the [daemon licensing table](../../packages/daemon/README.md). Diarization is
+  the [daemon licensing table](../../packages/daemon/README.md). On macOS the
+  default is the OS's own recogniser
+  ([ADR 0004](../adr/0004-apple-on-device-models.md)). Diarization is
   opt-in, never a default dependency, because the available models are gated
   behind third-party account terms.
 
 ## Conformance
 
-An implementation is conformant when it passes
-[`packages/schema/conformance`](../../packages/schema/conformance). The suite
-requires Node ≥ 22.5 and has **no dependencies** — clone and run `npm test`.
+An implementation is conformant when it passes the **store layer** of
+[`packages/schema/conformance`](../../packages/schema/conformance), driven
+through the [driver protocol](DRIVER.md). That layer writes through your
+implementation and then reads your store's files directly, so it holds any
+language to the same bytes. The suite requires Node ≥ 22.13 and has **no
+dependencies**:
 
-It currently covers 32 assertions, including the four that distinguish this
+```sh
+PRESENCE_CAPTURE_DRIVER="/path/to/your-driver" npm run conformance:store
+```
+
+The reference implementation also passes an API layer covering its read path
+(grants, envelope and egress, ADR 0001 T1–T12) and replay (R4). Together the
+two layers cover 64 assertions, including the five that distinguish this
 schema:
 
 - **revocation propagation** — derived views and vector entries do not survive
@@ -168,6 +218,10 @@ schema:
 - **replay determinism** — re-derivation from the event stream is reproducible,
   and revocation changes the result deterministically;
 - **privacy enforcement** — `sacred_mode` is unreachable through any read path,
-  and a grant naming it cannot be issued.
+  and a grant naming it cannot be issued;
+- **forensic erasure (R11)** — after a revocation, no file the store leaves
+  holds the revoked content, its key or its sealed bytes, and the master key
+  cannot recover it. Six mutant stores, each with one erasure step broken,
+  must fail this check.
 
 A schema that cannot fail these tests is not this schema.

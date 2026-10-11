@@ -6,7 +6,7 @@
   "license": "Apache-2.0",
   "type": "module",
   "workspaces": ["packages/schema", "packages/mcp"],
-  "engines": { "node": ">=22.5.0" },
+  "engines": { "node": ">=22.13.0" },
   "scripts": {
     "test": "npm run test --workspaces --if-present",
     "conformance": "npm run conformance --workspaces --if-present"

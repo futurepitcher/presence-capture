@@ -1,4 +1,4 @@
-import { openStore } from '../src/store.js';
+import { openStore } from '../../src/store.js';
 
 export const FUTURE = '2099-01-01T00:00:00Z';
 

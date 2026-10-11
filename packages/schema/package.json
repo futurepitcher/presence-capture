@@ -7,15 +7,31 @@
   "exports": {
     ".": "./src/index.js"
   },
-  "files": ["src", "migrations", "conformance"],
+  "bin": {
+    "presence-capture-driver": "./bin/driver.js"
+  },
+  "files": [
+    "src",
+    "cases",
+    "bin",
+    "migrations",
+    "conformance"
+  ],
   "engines": {
-    "node": ">=22.5.0"
+    "node": ">=22.13.0"
   },
   "scripts": {
-    "test": "node --test conformance/*.test.js",
-    "conformance": "node --test conformance/*.test.js"
+    "test": "node --test 'conformance/**/*.test.js'",
+    "conformance": "node --test 'conformance/**/*.test.js'",
+    "conformance:store": "node --test 'conformance/store/*.test.js'"
   },
-  "keywords": ["capture", "event-sourcing", "revocation", "privacy", "mcp"],
+  "keywords": [
+    "capture",
+    "event-sourcing",
+    "revocation",
+    "privacy",
+    "mcp"
+  ],
   "dependencies": {},
   "devDependencies": {}
 }

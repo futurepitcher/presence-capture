@@ -45,12 +45,24 @@ export interface CaptureEvent {
   privacyLevel: PrivacyLevel;
   /** Opaque to the schema. Any taxonomy fits (R6). */
   classification: string | null;
+  /** SHA-256 over the sealed payload bytes. */
   payloadHash: string | null;
-  contentText: string | null;
   extraction: Extraction | null;
   /** Set on derived artifacts: a transcript points at its audio (R10). */
   derivedFrom: string | null;
   dedupeKey: string | null;
+}
+
+/**
+ * The receipt that a revocation reached the content itself (R11): its keys,
+ * sealed text and sealed payloads were erased in the revoking transaction.
+ */
+export interface ErasureReceipt {
+  revocationId: string;
+  appliedAt: string;
+  keysDestroyed: number;
+  contentsErased: number;
+  payloadsErased: number;
 }
 
 export interface Revocation {

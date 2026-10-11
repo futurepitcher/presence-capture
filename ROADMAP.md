@@ -1,80 +1,106 @@
 # Roadmap
 
-Phases are gated, not dated. **P1 blocks P5**: no MCP code ships before the
-serving trust model is accepted.
+Phases are gated, not dated. The Mac-native version ships first, to 0.1.0.
+Windows follows once it has. Both are held to the same conformance suite.
 
-## P0 — Repo foundation
+Done before this roadmap:
+- the serving trust model ([ADR 0001](docs/adr/0001-serving-trust-boundary.md),
+  accepted);
+- schema spec v0.1, with migrations 001–004 and bindings;
+- the local, read-only MCP server (`packages/mcp`).
 
-Public repo, Apache-2.0, NOTICE, contributor docs, security policy, package
-skeletons, CI.
-**Exit:** repo public, CI green, no code of substance yet.
+## M0: Project foundation
 
-## P1 — Serving trust model ✅
+- Governance, with a public pledge that the core stays Apache-2.0.
+- DCO sign-off.
+- An RFC process for spec changes.
+- A fake sensor that replays recorded fixtures, so the store, search, MCP and
+  eval can be worked on without a Mac.
+- OpenSSF Scorecard, signed tags, issue templates and Discussions.
 
-[ADR 0001](docs/adr/0001-serving-trust-boundary.md) — **Accepted 2026-10-09.**
-Threat model (5 adversaries, 5 named attack chains), grant model, hash-chained
-egress log, untrusted-payload envelope, and a limits section stating what is
-detected rather than prevented. Defines the T1–T12 conformance suite that gates
-P5.
+**Exit:** a contributor on Linux runs the suite and the eval against the fake
+sensor.
 
-## P2 — Schema spec v0.1 ✅
+## M1: Make forgetting real ✅
 
-Normative [`docs/spec/SCHEMA.md`](docs/spec/SCHEMA.md) with field-level
-definitions and R1–R10. Migration lineage `001`–`004`. Reference implementation
-over SQLite. Vector-store interface with LanceDB as the shipped default and an
-in-memory reference backend. TypeScript and Pydantic bindings.
+- ✅ Revocation erases content ([ADR 0002](docs/adr/0002-erasable-revocation.md)).
+  Content is sealed per capture, and keys, text and bytes go in the revoking
+  transaction with an erasure receipt.
+- ✅ A forensic check scans every file a store leaves (R11), and six mutant
+  stores prove it fails stores that don't erase.
+- ✅ Retention is a scheduled revocation ([ADR 0003](docs/adr/0003-retention-is-revocation.md)).
+- ✅ Decisions on Apple on-device models ([ADR 0004](docs/adr/0004-apple-on-device-models.md))
+  and text-first capture ([ADR 0005](docs/adr/0005-text-first-capture.md)).
+- ✅ The suite split into a store layer, driven through the
+  [driver protocol](docs/spec/DRIVER.md) any implementation can expose, and the
+  reference API layer.
+- ✅ Shared exclusion and redaction cases in `packages/schema/cases/`, with
+  reference implementations. Near-duplicate cases wait for M2's dedupe
+  decision.
 
-**32-assertion conformance suite, zero dependencies** (`node:sqlite` +
-`node:test`), wired into CI. Covers revocation propagation with per-projection
-receipts, transitive derived-artifact revocation, replay determinism,
-`sacred_mode` unreachability, envelope coverage, provenance forgery resistance,
-and egress hash-chain tamper detection.
+**Exit:** a store written by another implementation can be checked by the
+store-layer suite, forensic check included.
 
-## P3 — Classifier decoupling
+## M2: Native macOS daemon and plugin model
 
-Capture must not depend on any particular classification taxonomy. A
-`CaptureClassifier` interface, with domain taxonomies living in adopters.
-**Exit:** capture module builds and tests green with no taxonomy dependency.
+The daemon is ported from PresenceVoice's working capture app:
+- ScreenCaptureKit, accessibility text, then Vision OCR;
+- SpeechAnalyzer for the mic and system audio;
+- an activity lane;
+- redaction and sealing before disk, with the master key in the Keychain.
 
-## P4 — Reference daemon — needs a Mac
+Sensor, Projector and Exporter plugin interfaces, each with a conformance kit,
+in-process or out of process over the driver protocol.
 
-macOS screen, audio, and activity capture writing schema v0.1, with on-device
-transcription. Accessibility-API text first with Vision OCR fallback, redaction
-before disk, frame dedupe, per-application and per-input-device exclusion.
-Default ASR must be redistributable without a gate or revenue limit.
+**Exit:**
+- a clean Mac produces a store that passes the store-layer suite unmodified;
+- "forget the last 15 minutes" passes the forensic check on a live store.
 
-The contract is specified in [`packages/daemon/CONTRACT.md`](packages/daemon/CONTRACT.md):
-write path, privacy invariants, and definition of done. Implementation requires
-Swift and Objective-C against ScreenCaptureKit, AVAudioEngine and Vision, which
-can only be compiled and tested on macOS.
+## M3: Recall, native MCP, public benchmarks
 
-**Exit:** a clean machine runs the daemon and produces a store that passes
-`packages/schema/conformance` unmodified.
+- Projections for full-text search, vectors (`NLContextualEmbedding`) and
+  activity sessions.
+- A native `pcap-mcp` with `search`, `recent`, `timeline`, `now`, `session`
+  and `transcript`.
+- `pcap eval` for accuracy and latency.
+- `pcap bench` for a reproducible comparison against other capture tools.
 
-## P5 — Local MCP server ✅
+**Exit:** recall@5 ≥ 0.8, search p95 < 300 ms at 30 days of data, numbers
+published.
 
-[`packages/mcp`](packages/mcp): JSON-RPC 2.0 over stdio, no network listener,
-no dependencies. Two read-only tools. Scopes, envelope and egress all enforced
-in the store below the tool layer, so a bug in the protocol layer cannot
-over-serve.
+## M3.5: Upgrade an existing agent
 
-**Exit met:** 11 assertions covering ADR 0001 T1-T12 at the protocol surface,
-plus an end-to-end stdio run returning an enveloped payload to a client
-speaking raw JSON-RPC. An out-of-scope read fails closed with an explicit
-authorization error and is logged.
+For people who already run their own assistant:
+- an event feed;
+- a local HTTP/JSON API with a Python client;
+- on-device daily and session digests;
+- `pcap connect <stack>` recipes;
+- an Omi importer.
 
-## P6 — Public launch — needs a Mac and signing credentials
+Remote access is opt-in, over a private network, behind its own ADR. Every
+surface sits behind the same grants, envelope and egress log as MCP.
 
-Threat model published, 0.1.0 tagged, signed and notarised build on GitHub
-Releases with published checksums and a documented from-source build. Process
-and accepted obligations in [RELEASING.md](RELEASING.md).
+## M4: Mac 0.1.0
 
-**Exit:** a non-developer installs the notarised build and it captures; a
-developer builds from source and gets the same behaviour.
+- A menu-bar app with pause, forget, exclusions, retention and an "agents
+  read…" viewer.
+- A signed, notarised, reproducible build with published hashes and an SBOM.
+- An external privacy and security review.
+- A docs site.
+
+See [RELEASING.md](RELEASING.md).
+
+**Exit:** a non-developer installs it and connects an agent in under five
+minutes.
+
+## Windows
+
+A second native implementation once Mac 0.1.0 has shipped. It uses the
+platform's own on-device APIs and passes the same store-layer suite, plugin
+kits and eval.
 
 ## Not on the roadmap
 
-- Remote or multi-client MCP transport (see P1's threat model)
 - MCP mutations
-- Windows or Linux daemons — the schema is platform-neutral; ports are welcome
+- A public network listener
 - Any hosted service

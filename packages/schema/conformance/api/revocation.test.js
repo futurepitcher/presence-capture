@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { countEntries, seedAudioChain } from './helpers.js';
-import { openStore } from '../src/store.js';
+import { openStore } from '../../src/store.js';
 
 test('R2: revocation is an event, and cannot be unmade', () => {
   const { store, audioId } = seedAudioChain();

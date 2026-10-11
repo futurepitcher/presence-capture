@@ -13,11 +13,16 @@ cd packages/mcp && npm test        # 11 assertions, no dependencies
 Run it against a store:
 
 ```sh
-npx presence-capture-mcp --store ~/.presence-capture/store.db --grant grn_...
+npx presence-capture-mcp --store ~/.presence-capture/store.db --grant grn_... \
+  --master-key-file ~/.presence-capture/master.key
 ```
 
 It speaks newline-delimited JSON-RPC 2.0 on stdin/stdout and **opens no socket
 of any kind**.
+
+Content in the store is sealed (ADR 0002), so the server needs the store's
+master key: 32 bytes, raw or as 64 hex characters, in a file only you can read.
+On macOS the native app keeps it in the Keychain instead.
 
 ## Design
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { FUTURE } from './helpers.js';
-import { AuthorizationError, openStore } from '../src/store.js';
+import { AuthorizationError, openStore } from '../../src/store.js';
 
 function storeWithLevels() {
   const store = openStore();

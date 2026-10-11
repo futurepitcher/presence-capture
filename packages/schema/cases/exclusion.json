@@ -1,0 +1,30 @@
+{
+  "_": "What is never captured (R8). Every implementation's exclusion check gives these answers; the reference (src/exclusion.js) and the macOS daemon both test against this file. A capture is excluded when its app is a system app for the platform, or when any self window or user fragment appears, case-insensitively, in its window title or its app name. A user list that exists but cannot be read is not an empty list: nothing is captured until it can be read (fail closed).",
+  "system_apps": {
+    "macos": ["usernotificationcenter", "securityagent", "coreautha", "loginwindow", "screensaverengine"]
+  },
+  "self_windows": ["presence capture"],
+  "parse": [
+    {
+      "text": "# my list\nSignal\n\n  Banking  # money\n#all of it\n",
+      "fragments": ["signal", "banking"]
+    },
+    {
+      "text": "# comment\n1Password\n\nstart-all.sh  # the capture terminal\nChase\n",
+      "fragments": ["1password", "start-all.sh", "chase"]
+    },
+    { "text": "", "fragments": [] }
+  ],
+  "cases": [
+    { "why": "the lock screen", "platform": "macos", "app": "loginwindow", "window": "", "fragments": [], "excluded": true },
+    { "why": "a password or Touch ID prompt", "platform": "macos", "app": "SecurityAgent", "window": "", "fragments": [], "excluded": true },
+    { "why": "a system notification", "platform": "macos", "app": "UserNotificationCenter", "window": "Notification", "fragments": [], "excluded": true },
+    { "why": "its own window", "platform": "macos", "app": "Presence Capture", "window": "Settings", "fragments": [], "excluded": true },
+    { "why": "its own window, shown in another app", "platform": "macos", "app": "Safari", "window": "Presence Capture — Agents read", "fragments": [], "excluded": true },
+    { "why": "a user fragment naming the app", "platform": "macos", "app": "Signal", "window": "Dana", "fragments": ["signal"], "excluded": true },
+    { "why": "a user fragment in the window title", "platform": "macos", "app": "Arc", "window": "My Bank — Accounts", "fragments": ["bank"], "excluded": true },
+    { "why": "a user fragment, matched without regard to case", "platform": "macos", "app": "Google Chrome", "window": "Chase Online - Accounts", "fragments": ["chase"], "excluded": true },
+    { "why": "a fragment that matches neither title nor app", "platform": "macos", "app": "Claude", "window": "Claude", "fragments": ["bank"], "excluded": false },
+    { "why": "an ordinary window with an empty list", "platform": "macos", "app": "Cursor", "window": "app — zsh", "fragments": [], "excluded": false }
+  ]
+}
