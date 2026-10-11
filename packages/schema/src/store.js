@@ -1,9 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { migrate } from './migrate.js';
+import { newKey, seal, unseal } from './seal.js';
 
 const ENVELOPE_VERSION = '1';
 const GENESIS_HASH = '0'.repeat(64);
+const EPOCH = '0000-01-01T00:00:00.000Z';
 
 const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 const now = () => new Date().toISOString();
@@ -19,12 +21,37 @@ export class AuthorizationError extends Error {
 /**
  * Open a conformant capture store.
  *
+ * Content is sealed under a per-capture key wrapped by `masterKey`, which the
+ * store never writes down. An ephemeral store makes its own; a file store
+ * must be given the one it was created with.
+ *
  * @param {string} [path] file path, or ':memory:' for an ephemeral store
+ * @param {{masterKey?: Buffer}} [options]
  */
-export function openStore(path = ':memory:') {
+export function openStore(path = ':memory:', { masterKey } = {}) {
+  if (!masterKey) {
+    if (path !== ':memory:') throw new Error('a file store needs its masterKey');
+    masterKey = newKey();
+  }
+  if (masterKey.length !== 32) throw new Error('masterKey must be 32 bytes');
+
   const db = new DatabaseSync(path);
   db.exec('PRAGMA foreign_keys = ON');
+  // Deleted content is overwritten, not left on a free page (R11).
+  db.exec('PRAGMA secure_delete = ON');
+  db.exec('PRAGMA journal_mode = WAL');
   migrate(db);
+
+  // Fail at open, not on some later read, when the key is not this store's.
+  const probe = db.prepare('SELECT capture_id, wrapped_key FROM capture_key LIMIT 1').get();
+  if (probe) {
+    try {
+      unseal(masterKey, probe.wrapped_key, `key:${probe.capture_id}`);
+    } catch {
+      db.close();
+      throw new Error('masterKey does not open this store');
+    }
+  }
 
   const nextSequence = () => {
     const { seq } = db
@@ -41,41 +68,94 @@ export function openStore(path = ':memory:') {
 
   // ---------------------------------------------------------------- writes
 
-  function putPayload({ bytes, mediaType, storageUri }) {
-    const payloadHash = sha256(bytes);
-    db.prepare(`
-      INSERT INTO capture_payload (payload_hash, byte_count, media_type, storage_uri, created_at)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT (payload_hash) DO NOTHING
-    `).run(payloadHash, Buffer.byteLength(bytes), mediaType, storageUri, now());
-    return payloadHash;
-  }
-
+  /**
+   * Append a capture. Its text and payload bytes are sealed under a key of its
+   * own before they are written, and the event, key, content and payload are
+   * written in one transaction, so a capture never exists half-sealed.
+   *
+   * The payload hash is over the sealed bytes: content-addressed for
+   * integrity. Identical bytes in two captures are stored twice, because a
+   * shared payload could not be erased for one capture alone (ADR 0002).
+   */
   function appendCapture(event) {
     const captureId = event.captureId ?? `cap_${randomUUID()}`;
-    db.prepare(`
-      INSERT INTO capture_event (
-        capture_id, sequence, captured_at, capture_type, source, source_app,
-        source_url, privacy_level, classification, payload_hash, content_text,
-        extraction, derived_from, dedupe_key
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      captureId,
-      nextSequence(),
-      event.capturedAt ?? now(),
-      event.captureType,
-      event.source,
-      event.sourceApp ?? null,
-      event.sourceUrl ?? null,
-      event.privacyLevel,
-      event.classification ?? null,
-      event.payloadHash ?? null,
-      event.contentText ?? null,
-      event.extraction ?? null,
-      event.derivedFrom ?? null,
-      event.dedupeKey ?? null,
-    );
+    const dataKey = newKey();
+    const createdAt = now();
+
+    db.exec('BEGIN');
+    try {
+      let payloadHash = null;
+      if (event.payload) {
+        const sealed = seal(dataKey, Buffer.from(event.payload.bytes), `payload:${captureId}`);
+        payloadHash = sha256(sealed);
+        db.prepare(`
+          INSERT INTO capture_payload (payload_hash, byte_count, media_type, storage_uri, created_at)
+          VALUES (?, ?, ?, ?, ?)
+        `).run(payloadHash, sealed.length, event.payload.mediaType, `payload_blob:${payloadHash}`, createdAt);
+        db.prepare('INSERT INTO payload_blob (payload_hash, sealed) VALUES (?, ?)').run(payloadHash, sealed);
+      }
+
+      db.prepare(`
+        INSERT INTO capture_event (
+          capture_id, sequence, captured_at, capture_type, source, source_app,
+          source_url, privacy_level, classification, payload_hash,
+          extraction, derived_from, dedupe_key
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        captureId,
+        nextSequence(),
+        event.capturedAt ?? createdAt,
+        event.captureType,
+        event.source,
+        event.sourceApp ?? null,
+        event.sourceUrl ?? null,
+        event.privacyLevel,
+        event.classification ?? null,
+        payloadHash,
+        event.extraction ?? null,
+        event.derivedFrom ?? null,
+        event.dedupeKey ?? null,
+      );
+
+      db.prepare('INSERT INTO capture_key (capture_id, wrapped_key, created_at) VALUES (?, ?, ?)')
+        .run(captureId, seal(masterKey, dataKey, `key:${captureId}`), createdAt);
+
+      if (event.contentText != null) {
+        db.prepare('INSERT INTO capture_content (capture_id, text_sealed, created_at) VALUES (?, ?, ?)')
+          .run(captureId, seal(dataKey, Buffer.from(event.contentText), `text:${captureId}`), createdAt);
+      }
+
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
     return captureId;
+  }
+
+  /** A capture's text, unsealed; null when it has none or it was erased. */
+  function contentText(captureId) {
+    const row = db.prepare(`
+      SELECT k.wrapped_key, c.text_sealed FROM capture_content c
+      JOIN capture_key k ON k.capture_id = c.capture_id
+      WHERE c.capture_id = ?
+    `).get(captureId);
+    if (!row) return null;
+    const dataKey = unseal(masterKey, row.wrapped_key, `key:${captureId}`);
+    return unseal(dataKey, row.text_sealed, `text:${captureId}`).toString('utf8');
+  }
+
+  /** A capture's payload bytes, unsealed; null when it has none or they were erased. */
+  function payloadBytes(captureId) {
+    const row = db.prepare(`
+      SELECT k.wrapped_key, b.sealed FROM capture_event e
+      JOIN payload_blob b ON b.payload_hash = e.payload_hash
+      JOIN capture_key k ON k.capture_id = e.capture_id
+      WHERE e.capture_id = ?
+    `).get(captureId);
+    if (!row) return null;
+    const dataKey = unseal(masterKey, row.wrapped_key, `key:${captureId}`);
+    return unseal(dataKey, row.sealed, `payload:${captureId}`);
   }
 
   function registerProjection({ name, kind }) {
@@ -135,7 +215,8 @@ export function openStore(path = ':memory:') {
   /**
    * Revoke captures. Materialises the revoked set, cascades to derived
    * artifacts (R10), prunes every projection that referenced them, and records
-   * a per-projection receipt proving the prune happened (R3).
+   * a per-projection receipt proving the prune happened (R3). Then erases the
+   * content itself: keys, sealed text and sealed bytes, with a receipt (R11).
    */
   function revoke({ scopeKind, scopeValue, reason }) {
     const revocationId = `rev_${randomUUID()}`;
@@ -181,13 +262,60 @@ export function openStore(path = ':memory:') {
         `).run(projectionName, revocationId, now(), removed);
       }
 
+      // Erase the content. The key goes in the same transaction as the record
+      // of the revocation, so there is no moment at which a revocation is
+      // recorded and its content still readable (R11).
+      let keys = 0;
+      let contents = 0;
+      let payloads = 0;
+      if (ids.length > 0) {
+        const placeholders = ids.map(() => '?').join(',');
+        payloads = Number(db.prepare(`
+          DELETE FROM payload_blob WHERE payload_hash IN (
+            SELECT payload_hash FROM capture_event
+            WHERE capture_id IN (${placeholders}) AND payload_hash IS NOT NULL
+          )
+        `).run(...ids).changes);
+        contents = Number(db.prepare(`DELETE FROM capture_content WHERE capture_id IN (${placeholders})`)
+          .run(...ids).changes);
+        keys = Number(db.prepare(`DELETE FROM capture_key WHERE capture_id IN (${placeholders})`)
+          .run(...ids).changes);
+      }
+      db.prepare(`
+        INSERT INTO erasure_receipt
+          (revocation_id, applied_at, keys_destroyed, contents_erased, payloads_erased)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(revocationId, now(), keys, contents, payloads);
+
       db.exec('COMMIT');
     } catch (err) {
       db.exec('ROLLBACK');
       throw err;
     }
 
+    // The deleted pages, zeroed by secure_delete, are still preceded in the
+    // write-ahead log by the frames that wrote the content. Fold the log into
+    // the database and truncate it, so those frames are gone from disk too.
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+
     return { revocationId, revokedCaptureIds: [...affected.keys()] };
+  }
+
+  /**
+   * Retention is a scheduled revocation (ADR 0003), not a delete: everything
+   * captured more than `days` ago is revoked with reason 'retention', and gets
+   * the same receipts as any other revocation. Returns null when nothing is
+   * old enough, so an hourly schedule does not fill the log with empty ones.
+   */
+  function retain({ days, now: at = new Date() }) {
+    if (!(days > 0)) throw new Error('retention days must be positive');
+    const cutoff = new Date(at.getTime() - days * 86_400_000).toISOString();
+    const { n } = db.prepare(`
+      SELECT COUNT(*) AS n FROM capture_event
+      WHERE captured_at <= ? AND capture_id NOT IN (SELECT capture_id FROM revoked_capture)
+    `).get(cutoff);
+    if (n === 0) return null;
+    return revoke({ scopeKind: 'time_range', scopeValue: `${EPOCH}/${cutoff}`, reason: 'retention' });
   }
 
   // ----------------------------------------------------------------- reads
@@ -289,17 +417,24 @@ export function openStore(path = ':memory:') {
         }
         if (grant.time_from) { clauses.push('e.captured_at >= ?'); params.push(grant.time_from); }
         if (grant.time_to)   { clauses.push('e.captured_at <= ?'); params.push(grant.time_to); }
-        if (contains)        { clauses.push('e.content_text LIKE ?'); params.push(`%${contains}%`); }
 
+        // Content is sealed, so `contains` is matched after unsealing, and
+        // only rows the grant already admits are ever unsealed. Case-insensitive,
+        // as the LIKE it replaces was for ASCII.
         const cap = Math.min(limit ?? grant.max_rows_per_query, grant.max_rows_per_query);
-        const rows = db
-          .prepare(`
-            SELECT e.* FROM capture_event e
-            WHERE ${clauses.join(' AND ')}
-            ORDER BY e.sequence
-            LIMIT ?
-          `)
-          .all(...params, cap);
+        const needle = contains?.toLowerCase();
+        const rows = [];
+        const candidates = db.prepare(`
+          SELECT e.* FROM capture_event e
+          WHERE ${clauses.join(' AND ')}
+          ORDER BY e.sequence
+        `).iterate(...params);
+        for (const row of candidates) {
+          if (rows.length >= cap) break;
+          const text = contentText(row.capture_id);
+          if (needle && !text?.toLowerCase().includes(needle)) continue;
+          rows.push({ ...row, content_text: text });
+        }
 
         // Every payload crosses the boundary wrapped (ADR 0001 §4.3).
         // provenance comes from capture metadata, never from the content.
@@ -343,13 +478,16 @@ export function openStore(path = ':memory:') {
    * replays over the same stream must produce the same hash (R4).
    */
   function replay({ consumer, derive }) {
+    // Each event is handed to derive with its text unsealed as content_text,
+    // the shape a consumer saw before content left the log.
     const events = db
       .prepare(`
         SELECT * FROM capture_event
         WHERE capture_id NOT IN (SELECT capture_id FROM revoked_capture)
         ORDER BY sequence
       `)
-      .all();
+      .all()
+      .map((e) => ({ ...e, content_text: contentText(e.capture_id) }));
 
     const state = events.map((e) => derive(e)).filter((v) => v !== undefined);
     const stateHash = sha256(JSON.stringify(state));
@@ -398,8 +536,8 @@ export function openStore(path = ':memory:') {
 
   return {
     db,
-    putPayload, appendCapture, registerProjection, addProjectionEntry,
-    revoke, issueGrant, revokeGrant, createReader, replay, verifyEgressChain,
+    appendCapture, contentText, payloadBytes, registerProjection, addProjectionEntry,
+    revoke, retain, issueGrant, revokeGrant, createReader, replay, verifyEgressChain,
     close: () => db.close(),
   };
 }

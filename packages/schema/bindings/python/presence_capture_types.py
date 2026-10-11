@@ -44,10 +44,17 @@ class CaptureEvent(BaseModel):
     privacy_level: PrivacyLevel
     classification: Optional[str] = None
     payload_hash: Optional[str] = None
-    content_text: Optional[str] = None
     extraction: Optional[Extraction] = None
     derived_from: Optional[str] = None
     dedupe_key: Optional[str] = None
+
+
+class ErasureReceipt(BaseModel):
+    revocation_id: str
+    applied_at: str
+    keys_destroyed: int
+    contents_erased: int
+    payloads_erased: int
 
 
 class Revocation(BaseModel):
