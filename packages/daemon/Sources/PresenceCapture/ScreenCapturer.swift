@@ -14,9 +14,10 @@ actor ScreenCapturer {
     private let store: CaptureStore
     private let log: @Sendable (String) -> Void
     private var busy = false
-    /// Paused, the screens asleep or another user's session: set by the app, and seen between
-    /// windows too, so a capture under way stops at the next one.
-    private var held = false
+    /// Paused, the screens asleep or another user's session: set by the app on the main thread and
+    /// read here at once, not through this actor (which a capture under way holds, in Accessibility
+    /// or OCR, for as long as they take).
+    private let holding: HoldState
     /// The image hash last kept, by window: an unchanged window isn't kept again.
     private var lastKept: [CGWindowID: String] = [:]
     /// Counts for the hourly log line: never what was read.
@@ -25,8 +26,9 @@ actor ScreenCapturer {
     private(set) var readMs = 0.0
     private(set) var axReads = 0
 
-    init(store: CaptureStore, log: @escaping @Sendable (String) -> Void) {
+    init(store: CaptureStore, holding: HoldState = HoldState(), log: @escaping @Sendable (String) -> Void) {
         self.store = store
+        self.holding = holding
         self.log = log
     }
 
@@ -36,16 +38,18 @@ actor ScreenCapturer {
     }
 
     func hold(_ held: Bool) {
-        self.held = held
+        holding.set(held)
     }
 
     /// Whether a window may be captured now: not held, and not locked (the windows behind the lock
     /// screen are still on screen to ScreenCaptureKit).
-    private var mayCapture: Bool { !held && !screenLocked() }
+    private var mayCapture: Bool { !holding.now.held && !screenLocked() }
 
-    /// Still as the batch began: it may capture, and the app it's capturing is still in front.
-    private func stillOn(_ pid: pid_t) -> Bool {
-        mayCapture && NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
+    /// Still as the batch began: it may capture, it hasn't been held since (even if it was let go
+    /// again: what was read across a Pause isn't kept), and the app is still in front.
+    private func stillOn(_ pid: pid_t, since holds: Int) -> Bool {
+        let now = holding.now
+        return !now.held && now.holds == holds && !screenLocked() && NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
     }
 
     /// One capture, unless the last is still under way or there's no permission to see the screen.
@@ -71,6 +75,7 @@ actor ScreenCapturer {
                 && $0.frame.width >= FrontWindow.minWidth && $0.frame.height >= FrontWindow.minHeight
         }
         let pid = front.processIdentifier
+        let holds = holding.now.holds
         // Remembered while a window is on screen at all, so switching apps and back keeps nothing twice.
         let onScreen = Set(content.windows.map(\.windowID))
         lastKept = lastKept.filter { onScreen.contains($0.key) }
@@ -78,7 +83,7 @@ actor ScreenCapturer {
             let title = window.title ?? ""
             // Exclusion before any bytes exist (R8): an excluded window is never captured at all.
             if Exclusion.isExcluded(app: app, window: title, fragments: fragments) { continue }
-            guard stillOn(pid) else { break }
+            guard stillOn(pid, since: holds) else { break }
             let filter = SCContentFilter(desktopIndependentWindow: window)
             let info = SCShareableContent.info(for: filter)
             let config = SCStreamConfiguration()
@@ -92,7 +97,7 @@ actor ScreenCapturer {
             let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
             // Locked, held or another app in front while it was taken (it may show what's behind the
             // lock screen): not kept, and the rest wait for the next tick.
-            guard stillOn(pid) else { break }
+            guard stillOn(pid, since: holds) else { break }
             // Retitled while it was taken (another tab, perhaps one the list excludes): what it
             // shows may not be what its title says. Not kept, not even read.
             guard currentTitle(window.windowID) == title else { continue }
@@ -116,7 +121,7 @@ actor ScreenCapturer {
                 reads += 1
                 readMs += Date().timeIntervalSince(started) * 1000
             }
-            guard stillOn(pid), currentTitle(window.windowID) == title, let text else { continue }
+            guard stillOn(pid, since: holds), currentTitle(window.windowID) == title, let text else { continue }
             // Nothing in it to keep: remembered as read, so an unchanged blank window isn't read again.
             guard !text.isEmpty else {
                 lastKept[window.windowID] = hash
@@ -128,10 +133,12 @@ actor ScreenCapturer {
             // meanwhile gives no address rather than another page's.
             var url: String?
             if focused, AXIsProcessTrusted(), let page = pageAddress(pid: pid, title: title) {
-                guard stillOn(pid), currentTitle(window.windowID) == title,
+                guard stillOn(pid, since: holds), currentTitle(window.windowID) == title,
                       window.windowID == FrontWindow.of(Set(windows.map(\.windowID)), pid: pid, frontToBack: listedWindows()) else { continue }
                 url = page
             }
+            // Held (Pause, the lock) while it was read, however briefly: not kept. Nothing below waits.
+            guard stillOn(pid, since: holds) else { break }
             do {
                 try store.append(NewCapture(
                     capturedAt: observedAt, captureType: "screen_text", source: "screen", sourceApp: front.bundleIdentifier ?? app,
@@ -192,4 +199,22 @@ actor ScreenCapturer {
 func screenLocked() -> Bool {
     let session = CGSessionCopyCurrentDictionary() as? [String: Any]
     return session?["CGSSessionScreenIsLocked"] as? Bool ?? false
+}
+
+/// Whether capture is held, and how many times it has been: set by the app on the main thread as it
+/// holds or lets go, and read by a capture under way between and after its reads, so a Pause is
+/// seen at once, and work begun before a hold is never kept after it, even once it's let go.
+final class HoldState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var held = false
+    private var holds = 0
+
+    func set(_ held: Bool) {
+        lock.withLock {
+            if held && !self.held { holds += 1 }
+            self.held = held
+        }
+    }
+
+    var now: (held: Bool, holds: Int) { lock.withLock { (held, holds) } }
 }

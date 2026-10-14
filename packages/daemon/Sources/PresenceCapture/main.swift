@@ -52,6 +52,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var sensors: SensorPlugins?
     /// Whether capture is held, for sensor plugins, whose output arrives off the main thread.
     private let heldNow = Flag()
+    /// Held, as screen capture reads it: set here at once, so a capture under way sees a Pause.
+    private let screenHold = HoldState()
     /// Since when the exclusion list has been readable: what's heard is kept only if said since (R8).
     private let exclusionsReadable = ReadableSince()
     private var timers: [Timer] = []
@@ -100,6 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func holdCapture(going: Bool = false) {
         let held = going || heldFor != nil
         heldNow.value = held
+        screenHold.set(held)
         audio?.tick(listening: !held && CGPreflightScreenCaptureAccess() && loadExclusions() != nil)
         if held {
             activity?.reset()
@@ -119,7 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let log = self.log!
         do {
             let store = try CaptureStore(path: home + "/store.sqlite", masterKey: try Keychain.masterKey(log: log.write))
-            let capturer = ScreenCapturer(store: store, log: log.write)
+            let capturer = ScreenCapturer(store: store, holding: screenHold, log: log.write)
             (self.store, self.capturer) = (store, capturer)
             activity = ActivityCapturer(store: store, log: log.write)
             if #available(macOS 26, *) {
@@ -161,6 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             let held = self.heldFor != nil
             self.heldNow.value = held
+            self.screenHold.set(held)
             let seesScreen = CGPreflightScreenCaptureAccess()
             // A list that exists but can't be read: nothing is captured until it can be (R8), what's
             // heard included. Hearing stops, and what it was still transcribing isn't kept.
