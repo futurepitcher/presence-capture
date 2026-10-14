@@ -12,8 +12,7 @@ import CaptureStore
 /// `retentionDays`, `paused`, `hearMicrophone` (off until the person turns it on: whether a room is
 /// heard is theirs to choose), `hearSystemAudio`.
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let home = ProcessInfo.processInfo.environment["PRESENCE_CAPTURE_HOME"]
-        ?? NSHomeDirectory() + "/Library/Application Support/Presence Capture"
+    private let home = CaptureStore.home
     private let defaults = UserDefaults.standard
     private var statusItem: NSStatusItem!
     private var stateItem: NSMenuItem!

@@ -115,7 +115,54 @@ and the app makes the new item from the newest older one, with the same key,
 at its next launch: an access list is never changed, because changing one
 makes macOS ask for authorization, sometimes again and again. Only the
 person's default (login) keychain is searched, so a locked keychain left on
-the search list (a build's signing keychain) never prompts.
+the search list (a build's signing keychain) never prompts. Version 1 trusts
+the app and `pcap-mcp`; version 2 adds `pcap`.
+
+## `pcap`, the command line
+
+A writer to the store, as the app is, and in its bundle, so the Keychain item
+trusts it. What it shows of what agents read is counts and metadata, never
+content.
+
+```sh
+P="/Applications/Presence Capture.app/Contents/MacOS/pcap"   # Homebrew links it as pcap
+"$P" connect claude-code        # or claude-desktop, cursor: a grant, and pcap-mcp in its config
+"$P" grant add my-agent --types screen_text,activity --days 7
+"$P" grant list [--all]
+"$P" grant revoke <grant_id>
+"$P" egress [--days 7]          # what each agent was given, by day, tool and type
+"$P" forget 15m                 # or 1h, 90m, …: revoke the stretch just past, and erase it
+"$P" check                      # the key, the file's structure, the egress chain, erasures
+```
+
+`connect` gives the agent a grant of its own (standard captures of every
+type, for 30 days, unless `--types`, `--levels` or `--days` say otherwise) and
+adds `pcap-mcp`, by its absolute path, with that grant, to the agent's MCP
+config as `presence-capture`. It shows the change and asks before writing
+(`--yes` doesn't ask; `--dry-run` only shows), copies the config aside first,
+beside itself, and revokes the grant of any entry it replaces. A grant whose
+config wasn't written, because the answer was no or the write failed, is
+revoked again.
+
+| Client | Config | How it's changed |
+|--------|--------|------------------|
+| Claude Code | `~/.claude.json`, user scope | `claude mcp remove` and `claude mcp add-json`, Claude Code's own commands; the file is only read |
+| Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` | the file, with every other key kept; quit and reopen Claude Desktop |
+| Cursor | `~/.cursor/mcp.json` | the file, with every other key kept |
+
+By hand, the entry is the same for each (Claude Desktop's has no `type`):
+
+```json
+"presence-capture": {
+  "type": "stdio",
+  "command": "/Applications/Presence Capture.app/Contents/MacOS/pcap-mcp",
+  "args": ["--grant", "<grant_id from pcap grant add>"]
+}
+```
+
+`pcap forget` is the menu's Forget, from the command line. The running app
+isn't told, so the app it was in front of is noted again at the next change,
+not at once.
 
 ## The menu
 
@@ -138,6 +185,10 @@ holds counts only.
 | `CaptureCore` | What can be tested without a screen: Vision OCR, which window is in front, SpeechAnalyzer transcription, utterances |
 | `PresenceCapture` | The menu-bar app, its sensors and the Keychain |
 | `PcapDriver` | `pcap-driver`, the [conformance driver](../../docs/spec/DRIVER.md) over `CaptureStore` |
+| `CaptureRecall` | Recall ([ADR 0008](../../docs/adr/0008-recall-indexes-in-memory.md)): the reader's in-memory index and its six tools |
+| `PcapMCP` | `pcap-mcp`, the native MCP server over `CaptureRecall` |
+| `CaptureConnect` | Connecting an agent: its grant, and `pcap-mcp` in its MCP config, shown and confirmed first. Shared by `pcap connect` and the menu |
+| `PcapCLI` | `pcap`, the command line |
 
 ## Transcripts are projections, not captures
 

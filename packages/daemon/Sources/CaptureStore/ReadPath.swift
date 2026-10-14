@@ -144,8 +144,13 @@ extension CaptureStore {
         }
     }
 
-    public func revokeGrant(_ grantId: String) throws {
-        try lock.withLock { try run("UPDATE grant_record SET revoked_at = ? WHERE grant_id = ?", Self.iso(Date()), grantId) }
+    /// Withdraws a grant: every later read under it is refused. False when there's no such grant, or
+    /// it was already revoked.
+    @discardableResult
+    public func revokeGrant(_ grantId: String) throws -> Bool {
+        try lock.withLock {
+            try runCounting("UPDATE grant_record SET revoked_at = ? WHERE grant_id = ? AND revoked_at IS NULL", [Self.iso(Date()), grantId]) > 0
+        }
     }
 
     /// What the grant allows of what the request asks, enveloped, in sequence order, and logged.
@@ -329,6 +334,20 @@ extension CaptureStore {
         return String(decoding: try Seal.open(row.data(1), key: key, aad: "text:\(captureId)"), as: UTF8.self)
     }
 
+    /// An egress record's hash: the SHA-256 of its canonical text (SCHEMA.md), the same in every
+    /// implementation, so a log written by one verifies in any other.
+    static func egressHash(servedAt: String, clientId: String, grantId: String, tool: String, queryFingerprint: String,
+                           captureIds: [String], privacyLevelsServed: [String], rowCount: Int, byteCount: Int, prevHash: String) -> String {
+        let strings = { (items: [String]) in CanonicalJSON.array(items.map(CanonicalJSON.string)) }
+        let canonical = CanonicalJSON.object([
+            ("servedAt", .string(servedAt)), ("clientId", .string(clientId)), ("grantId", .string(grantId)), ("tool", .string(tool)),
+            ("queryFingerprint", .string(queryFingerprint)), ("captureIds", strings(captureIds)),
+            ("privacyLevelsServed", strings(privacyLevelsServed)), ("rowCount", .int(rowCount)), ("byteCount", .int(byteCount)),
+            ("prevHash", .string(prevHash)),
+        ]).text
+        return SHA256.hash(data: Data(canonical.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
     /// One record of what was served, chained to the one before it (ADR 0001 §4.2, SCHEMA.md), for a
     /// read holding the write lock.
     private func appendEgressLocked(clientId: String, grantId: String, tool: String, queryFingerprint: String,
@@ -336,13 +355,10 @@ extension CaptureStore {
         let previous = try rows("SELECT record_hash FROM egress_record ORDER BY egress_id DESC LIMIT 1").first?.text(0) ?? Self.genesisHash
         let servedAt = Self.iso(Date())
         let strings = { (items: [String]) in CanonicalJSON.array(items.map(CanonicalJSON.string)) }
-        let canonical = CanonicalJSON.object([
-            ("servedAt", .string(servedAt)), ("clientId", .string(clientId)), ("grantId", .string(grantId)), ("tool", .string(tool)),
-            ("queryFingerprint", .string(queryFingerprint)), ("captureIds", strings(captureIds)),
-            ("privacyLevelsServed", strings(privacyLevelsServed)), ("rowCount", .int(captureIds.count)), ("byteCount", .int(byteCount)),
-            ("prevHash", .string(previous)),
-        ]).text
-        let recordHash = SHA256.hash(data: Data(canonical.utf8)).map { String(format: "%02x", $0) }.joined()
+        let recordHash = Self.egressHash(servedAt: servedAt, clientId: clientId, grantId: grantId, tool: tool,
+                                         queryFingerprint: queryFingerprint, captureIds: captureIds,
+                                         privacyLevelsServed: privacyLevelsServed, rowCount: captureIds.count,
+                                         byteCount: byteCount, prevHash: previous)
         try run("""
             INSERT INTO egress_record (served_at, client_id, grant_id, tool, query_fingerprint, capture_ids,
               privacy_levels_served, row_count, byte_count, prev_hash, record_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

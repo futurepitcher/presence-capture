@@ -59,32 +59,17 @@ func fail(_ message: String) -> Never {
 }
 
 let checking = CommandLine.arguments.contains("--check")
-let home = ProcessInfo.processInfo.environment["PRESENCE_CAPTURE_HOME"] ?? NSHomeDirectory() + "/Library/Application Support/Presence Capture"
-let storePath = argument("store") ?? home + "/store.sqlite"
+let storePath = argument("store") ?? CaptureStore.home + "/store.sqlite"
 let grantId = argument("grant") ?? ""
 if !checking && grantId.isEmpty { fail("usage: pcap-mcp --grant <grant_id> [--store <path>] [--master-key-file <path>]") }
 
 /// The key from a file (tests, other stores), or from the Keychain item the app made.
-func masterKeyBytes() -> Data {
-    if let keyFile = argument("master-key-file") {
-        guard let data = FileManager.default.contents(atPath: keyFile) else { fail("the master key file can't be read") }
-        let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.count == 64 ? Data(stride(from: 0, to: 64, by: 2).compactMap { UInt8(text.dropFirst($0).prefix(2), radix: 16) }) : data
-    }
-    // The current version of the shared item, which the app makes trusting this reader.
-    let service = MasterKeyItem.service(bundleIdentifier: Bundle.main.bundleIdentifier)
-    do {
-        guard let data = try MasterKeyItem.read(service: service, account: MasterKeyItem.current) else {
-            fail("the store's key isn't in the Keychain yet (\(service) \(MasterKeyItem.current)): open Presence Capture once, or pass --master-key-file")
-        }
-        return data
-    } catch {
-        fail("the store's key isn't readable from the Keychain (\(service) \(MasterKeyItem.current), \(error)): open Presence Capture once, or pass --master-key-file")
-    }
+let keyBytes: Data
+do {
+    keyBytes = try MasterKeyItem.load(keyFile: argument("master-key-file"), bundleIdentifier: Bundle.main.bundleIdentifier)
+} catch {
+    fail("\(error)")
 }
-
-let keyBytes = masterKeyBytes()
-guard keyBytes.count == 32 else { fail("the master key must be 32 bytes, raw or as 64 hex characters") }
 
 // Opened as a reader: restricted before any SQL runs; never created or migrated here.
 let store: CaptureStore
@@ -106,7 +91,6 @@ func failure(_ id: Any, _ code: Int, _ message: String) -> [String: Any] {
     ["jsonrpc": "2.0", "id": id, "error": ["code": code, "message": message]]
 }
 
-// In memory, built through the grant; every result is served through it again (Recall.swift).
 // In memory, built through the grant; every result is served through it again (CaptureRecall).
 let recall = Recall(store: store, grantId: grantId)
 
