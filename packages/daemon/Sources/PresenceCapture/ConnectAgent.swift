@@ -11,6 +11,10 @@ enum ConnectAgent {
 
     /// One connection at a time from the menu (read and written on the main thread).
     private static var connecting = false
+    /// Entered while a connection's work is under way, so quitting waits for it to finish or roll back.
+    static let underWay = DispatchGroup()
+    /// The app is going: a result is logged, not shown.
+    static var quitting = false
 
     /// `storePath` is the app's store, named in the entry by its absolute path.
     ///
@@ -30,7 +34,9 @@ enum ConnectAgent {
         // pcap by its full path, for any command shown: a DMG install doesn't put it on PATH.
         let pcap = URL(fileURLWithPath: server).deletingLastPathComponent().appendingPathComponent("pcap").path
         connecting = true
+        underWay.enter()
         DispatchQueue.global(qos: .userInitiated).async {
+            defer { underWay.leave() }
             let result = Result {
                 try Connector(pcap: pcap).connect(client, store: store, grant: grant,
                                                   entry: { ServerEntry(pcapMCP: server, grantId: $0, store: path) },
@@ -48,6 +54,11 @@ enum ConnectAgent {
     }
 
     private static func show(_ result: Result<Connection?, Error>, client: Client, leftHere: Bool, log: (String) -> Void) {
+        if quitting {
+            log((try? result.get()).map { $0 == nil ? "connect.declined client=\(client.rawValue)" : "connect.done client=\(client.rawValue)" }
+                ?? "connect.failed client=\(client.rawValue)")
+            return
+        }
         NSApp.activate(ignoringOtherApps: true)
         switch result {
         case .success(nil):

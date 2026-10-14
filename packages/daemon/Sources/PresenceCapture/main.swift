@@ -33,6 +33,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// A Keep Captures For change under way: until it's done, another isn't started, so a slow one
     /// can't finish after a later choice and undo it.
     private var retentionChanging = false
+    /// Quitting: no new work is started, and what was confirmed is finished before the app goes.
+    private var quitting = false
     private var audio: Listener?
     private var store: CaptureStore?
     private var capturer: ScreenCapturer?
@@ -277,7 +279,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// A revocation of the stretch just past (ADR 0002): everything captured in it, and everything
     /// derived from it, erased from disk, with a receipt. It can't be undone, so it's asked first.
     private func forget(minutes: Double, label: String) {
-        guard let store else { return }
+        guard let store, !quitting else { return }
         let alert = NSAlert()
         alert.messageText = "Forget \(label)?"
         alert.informativeText = "Everything captured in \(label), and everything derived from it, is erased from this Mac. This can't be undone."
@@ -297,6 +299,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func forgot(_ outcome: Result<Revocation, Error>, minutes: Double, label: String) {
+        if quitting {
+            log.write((try? outcome.get()).map { "forget.done minutes=\(Int(minutes)) revoked=\($0.revokedCaptureIds.count)" } ?? "forget.failed")
+            return
+        }
         let said = NSAlert()
         switch outcome {
         case .success(let result):
@@ -423,6 +429,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func connect(_ client: Client) {
+        guard !quitting else { return }
         guard let store else { return storeIsClosed() }
         ConnectAgent.run(client, store: store, storePath: home + "/store.sqlite", log: log.write)
     }
@@ -449,6 +456,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// older is revoked: if that fails, the period stays as it was, to try again. A longer one erases
     /// nothing yet.
     @objc private func setRetention(_ sender: NSMenuItem) {
+        guard !quitting else { return }
         let days = sender.tag
         guard !retentionChanging else {
             let busy = NSAlert()
@@ -482,6 +490,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The period is kept only once what's older is revoked.
     private func retained(_ outcome: Result<Revocation?, Error>, days: Int) {
         retentionChanging = false
+        if quitting {
+            // Kept as it would be; just not said, as the app is going.
+            let succeeded = (try? outcome.get()) != nil
+            if succeeded { defaults.set(days, forKey: "retentionDays") }
+            log.write(succeeded ? "retention.set days=\(days)" : "retention.set_failed days=\(days)")
+            return
+        }
         let said = NSAlert()
         switch outcome {
         case .success(let result):
@@ -524,13 +539,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         timers.forEach { $0.invalidate() }
         timers = []
         holdCapture(going: true)
-        Self.finishWriting(activity: activity, audio: audio) { NSApp.reply(toApplicationShouldTerminate: true) }
+        quitting = true
+        ConnectAgent.quitting = true
+        Self.finishWriting(activity: activity, audio: audio, admin: admin, connecting: ConnectAgent.underWay) {
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
         return .terminateLater
     }
 
-    /// Writes what's queued and finishes listening, off the main thread; then `done`, on it.
-    static func finishWriting(activity: ActivityCapturer?, audio: Listener?, done: @escaping () -> Void) {
+    /// Off the main thread, everything confirmed is finished before the app goes: a connection under
+    /// way (made, or rolled back), the store work queued (a Forget, a retention change, a
+    /// withdrawal), what activity has queued, and listening. Then `done`, on the main thread, after
+    /// any result those posted there.
+    static func finishWriting(activity: ActivityCapturer?, audio: Listener?, admin: DispatchQueue, connecting: DispatchGroup,
+                              done: @escaping () -> Void) {
         Task.detached {
+            connecting.wait()
+            admin.sync {}
             activity?.flush()
             await audio?.finish()
             await MainActor.run { done() }
