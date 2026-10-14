@@ -269,3 +269,24 @@ test('store R10: revoking a capture again reaches what an earlier version let be
   const { revoked_capture_ids: revoked } = await call('revoke', { scope_kind: 'capture', scope_value: parent });
   assert.deepEqual(revoked, ['cap_orphan']);
 }));
+
+test('store R10: a capture derived from itself is refused, and one written by an earlier version revokes in bounded time', () => withStore(async ({ call, path }) => {
+  await assert.rejects(call('append', screenText('its own parent', { capture_id: 'cap_self', derived_from: 'cap_self' })), { code: 'constraint' });
+
+  // An earlier version didn't refuse it.
+  const db = new DatabaseSync(path);
+  try {
+    db.prepare(`
+      INSERT INTO capture_event (capture_id, sequence, captured_at, capture_type, source, privacy_level, derived_from)
+      VALUES ('cap_loop', (SELECT COALESCE(MAX(s), 0) + 1 FROM (
+        SELECT MAX(sequence) AS s FROM capture_event UNION ALL SELECT MAX(sequence) AS s FROM revocation)),
+        '2026-10-06T09:00:00.000Z', 'screen_text', 'screen', 'standard', 'cap_loop')
+    `).run();
+  } finally {
+    db.close();
+  }
+  const started = Date.now();
+  const { revoked_capture_ids: revoked } = await call('revoke', { scope_kind: 'capture', scope_value: 'cap_loop' });
+  assert.deepEqual(revoked, ['cap_loop']);
+  assert.ok(Date.now() - started < 5_000, 'a chain that loops back on itself held the revocation up');
+}));

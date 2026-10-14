@@ -223,6 +223,7 @@ public final class CaptureStore: @unchecked Sendable {
         let dataKey = Seal.newKey()
         let createdAt = Self.iso(Date())
         let capturedAt = Self.iso(capture.capturedAt)
+        if capture.derivedFrom == captureId { throw StoreError.constraint("a capture cannot be derived from itself") }
         try refuseForgotten(capturedAt: capturedAt, derivedFrom: capture.derivedFrom)
         var payloadHash: String?
         if let payload = capture.payload {
@@ -383,7 +384,7 @@ public final class CaptureStore: @unchecked Sendable {
                 let reaching = "SELECT capture_id FROM temp.revoking"
                 try run("INSERT INTO revocation (revocation_id, sequence, revoked_at, scope_kind, scope_value, reason) VALUES (?, ?, ?, ?, ?, ?)",
                         revocationId, try nextSequence(), revokedAt, scopeKind, value, reason)
-                try run("INSERT INTO revoked_capture (capture_id, revocation_id, revoked_at, cascaded) SELECT capture_id, ?, ?, depth > 0 FROM temp.revoking",
+                try run("INSERT INTO revoked_capture (capture_id, revocation_id, revoked_at, cascaded) SELECT capture_id, ?, ?, cascaded FROM temp.revoking",
                         revocationId, revokedAt)
                 for projection in try rows("SELECT projection_name FROM projection").map({ $0.text(0) }) {
                     let removed = try runCounting("DELETE FROM projection_entry WHERE projection_name = ? AND capture_id IN (\(reaching))", [projection])
@@ -398,7 +399,7 @@ public final class CaptureStore: @unchecked Sendable {
                 let keys = try runCounting("DELETE FROM capture_key WHERE capture_id IN (\(reaching))", [])
                 try run("INSERT INTO erasure_receipt (revocation_id, applied_at, keys_destroyed, contents_erased, payloads_erased) VALUES (?, ?, ?, ?, ?)",
                         revocationId, Self.iso(Date()), keys, contents, payloads)
-                ids = try rows("SELECT r.capture_id FROM temp.revoking r JOIN capture_event e USING (capture_id) ORDER BY r.depth, e.sequence")
+                ids = try rows("SELECT r.capture_id FROM temp.revoking r JOIN capture_event e USING (capture_id) ORDER BY r.cascaded, e.sequence")
                     .map { $0.text(0) }
             }
             // The revocation is committed: from here on, nothing that fails can make it not have
@@ -492,7 +493,7 @@ public final class CaptureStore: @unchecked Sendable {
     }
 
     /// Fills temp.revoking with what a revocation reaches: the captures its scope names and everything
-    /// derived from them (R10), each with how far down the chain it was reached, less what's already
+    /// derived from them (R10), each with whether it was reached through the chain, less what's already
     /// revoked (erased when it was). The chain is followed through revoked captures too: a store from
     /// before R13 can hold a readable capture derived from one. All in SQL, so a scope of any size (retention's,
     /// from the epoch, takes in every capture ever revoked) never becomes a list of parameters. Kept
@@ -510,19 +511,20 @@ public final class CaptureStore: @unchecked Sendable {
         default:
             throw StoreError.sqlite("unknown scope kind: \(scopeKind)")
         }
-        try exec("CREATE TEMP TABLE IF NOT EXISTS revoking (capture_id TEXT PRIMARY KEY, depth INTEGER NOT NULL)")
+        try exec("CREATE TEMP TABLE IF NOT EXISTS revoking (capture_id TEXT PRIMARY KEY, cascaded INTEGER NOT NULL)")
         try exec("DELETE FROM temp.revoking")
+        // Each capture is reached once, by its id alone: a chain that loops back on itself (a capture
+        // recorded as derived from itself) ends.
         _ = try runCounting("""
-            WITH RECURSIVE reached (capture_id, depth) AS (
-              SELECT capture_id, 0 FROM capture_event WHERE \(clause)
+            WITH RECURSIVE reached (capture_id) AS (
+              SELECT capture_id FROM capture_event WHERE \(clause)
               UNION
-              SELECT e.capture_id, r.depth + 1 FROM capture_event e JOIN reached r ON e.derived_from = r.capture_id
+              SELECT e.capture_id FROM capture_event e JOIN reached r ON e.derived_from = r.capture_id
             )
-            INSERT INTO temp.revoking (capture_id, depth)
-            SELECT capture_id, MIN(depth) FROM reached
+            INSERT INTO temp.revoking (capture_id, cascaded)
+            SELECT capture_id, capture_id NOT IN (SELECT capture_id FROM capture_event WHERE \(clause)) FROM reached
             WHERE capture_id NOT IN (SELECT capture_id FROM revoked_capture)
-            GROUP BY capture_id
-            """, values)
+            """, values + values)
     }
 
     // MARK: SQLite

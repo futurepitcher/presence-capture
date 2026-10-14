@@ -62,6 +62,10 @@ export function createInMemoryVectorStore() {
  */
 export function bindVectorStore(store, vectors, projectionName = 'vectors') {
   store.registerProjection({ name: projectionName, kind: 'vector' });
+  // Vectors of captures the store has revoked that the backend failed to
+  // delete: deleted on the next revocation through this binding, whatever its
+  // scope, since the store won't report them as newly revoked again.
+  let undeleted = new Set();
 
   return {
     index({ captureId, entryRef, vector }) {
@@ -75,7 +79,10 @@ export function bindVectorStore(store, vectors, projectionName = 'vectors') {
     /** Revoke, then prune the backend using the ids the store reports. */
     revoke(scope) {
       const result = store.revoke(scope);
-      const removed = vectors.deleteByCaptureIds(result.revokedCaptureIds);
+      const ids = [...new Set([...undeleted, ...result.revokedCaptureIds])];
+      undeleted = new Set(ids);
+      const removed = vectors.deleteByCaptureIds(ids);
+      undeleted = new Set();
       return { ...result, vectorEntriesRemoved: removed };
     },
   };

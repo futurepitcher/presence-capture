@@ -82,3 +82,19 @@ test('R3: an index whose backend failed can be retried', () => {
   bound.index({ captureId: id, entryRef: 'vec:1', vector: [0.1] });
   assert.equal(backend.size(), 1);
 });
+
+test('R3: vectors a backend failed to delete on revocation are deleted on the next one', () => {
+  const store = openStore();
+  const backend = makeVectorStore();
+  let failures = 1;
+  const flaky = { ...backend, deleteByCaptureIds: (ids) => (failures-- > 0 ? (() => { throw new Error('backend unavailable'); })() : backend.deleteByCaptureIds(ids)) };
+  const bound = bindVectorStore(store, flaky);
+  const id = store.appendCapture({ captureType: 'screen_text', source: 'screen', privacyLevel: 'standard', contentText: 'forgotten' });
+  bound.index({ captureId: id, entryRef: 'vec:1', vector: [0.1] });
+
+  assert.throws(() => bound.revoke({ scopeKind: 'capture', scopeValue: id }), /backend unavailable/);
+  assert.equal(backend.size(), 1);
+  // Retried: the store reports nothing newly revoked, and the backend is still pruned.
+  bound.revoke({ scopeKind: 'capture', scopeValue: id });
+  assert.equal(backend.size(), 0, 'a revoked vector stayed in the backend after the retry');
+});

@@ -203,6 +203,7 @@ export function openStore(path = ':memory:', { masterKey, onTruncated } = {}) {
     const dataKey = newKey();
     const createdAt = now();
     const capturedAt = event.capturedAt == null ? createdAt : canonicalTime(event.capturedAt, 'capturedAt');
+    if (event.derivedFrom != null && event.derivedFrom === captureId) throw new Error('constraint: a capture cannot be derived from itself');
     refuseForgotten(capturedAt, event.derivedFrom);
 
     let payloadHash = null;
@@ -418,19 +419,20 @@ export function openStore(path = ':memory:', { masterKey, onTruncated } = {}) {
     }[scopeKind]?.() ?? [];
     if (!where) throw new Error(`unknown scope kind: ${scopeKind}`);
 
-    db.exec('CREATE TEMP TABLE IF NOT EXISTS revoking (capture_id TEXT PRIMARY KEY, depth INTEGER NOT NULL)');
+    db.exec('CREATE TEMP TABLE IF NOT EXISTS revoking (capture_id TEXT PRIMARY KEY, cascaded INTEGER NOT NULL)');
     db.exec('DELETE FROM temp.revoking');
+    // Each capture is reached once, by its id alone: a chain that loops back
+    // on itself (a capture recorded as derived from itself) ends.
     db.prepare(`
-      WITH RECURSIVE reached (capture_id, depth) AS (
-        SELECT capture_id, 0 FROM capture_event WHERE ${where}
+      WITH RECURSIVE reached (capture_id) AS (
+        SELECT capture_id FROM capture_event WHERE ${where}
         UNION
-        SELECT e.capture_id, r.depth + 1 FROM capture_event e JOIN reached r ON e.derived_from = r.capture_id
+        SELECT e.capture_id FROM capture_event e JOIN reached r ON e.derived_from = r.capture_id
       )
-      INSERT INTO temp.revoking (capture_id, depth)
-      SELECT capture_id, MIN(depth) FROM reached
+      INSERT INTO temp.revoking (capture_id, cascaded)
+      SELECT capture_id, capture_id NOT IN (SELECT capture_id FROM capture_event WHERE ${where}) FROM reached
       WHERE capture_id NOT IN (SELECT capture_id FROM revoked_capture)
-      GROUP BY capture_id
-    `).run(...params);
+    `).run(...params, ...params);
   }
 
   /**
@@ -457,7 +459,7 @@ export function openStore(path = ':memory:', { masterKey, onTruncated } = {}) {
 
       db.prepare(`
         INSERT INTO revoked_capture (capture_id, revocation_id, revoked_at, cascaded)
-        SELECT capture_id, ?, ?, depth > 0 FROM temp.revoking
+        SELECT capture_id, ?, ?, cascaded FROM temp.revoking
       `).run(revocationId, revokedAt);
 
       // Propagate into every projection. This is the property no competitor
@@ -494,7 +496,7 @@ export function openStore(path = ':memory:', { masterKey, onTruncated } = {}) {
         VALUES (?, ?, ?, ?, ?)
       `).run(revocationId, now(), keys, contents, payloads);
       return db.prepare(`
-        SELECT r.capture_id FROM temp.revoking r JOIN capture_event e USING (capture_id) ORDER BY r.depth, e.sequence
+        SELECT r.capture_id FROM temp.revoking r JOIN capture_event e USING (capture_id) ORDER BY r.cascaded, e.sequence
       `).all().map((r) => r.capture_id);
     });
 
