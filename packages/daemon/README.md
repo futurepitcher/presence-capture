@@ -142,7 +142,11 @@ config as `presence-capture`. It shows the change and asks before writing
 (`--yes` doesn't ask; `--dry-run` only shows), copies the config aside first,
 beside itself, and revokes the grant of any entry it replaces. A grant whose
 config wasn't written, because the answer was no or the write failed, is
-revoked again.
+revoked again; one that can't be revoked is reported, with the command that
+revokes it. A config that changes while the change is on screen is shown
+again, as it is now, before anything is written. Connecting another store
+(`--store`, `--master-key-file`, or `PRESENCE_CAPTURE_HOME`) names it in the
+entry, by absolute path, since `pcap-mcp` otherwise opens the app's.
 
 | Client | Config | How it's changed |
 |--------|--------|------------------|

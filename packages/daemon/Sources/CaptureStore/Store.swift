@@ -89,10 +89,12 @@ public final class CaptureStore: @unchecked Sendable {
     public static let epoch = "0000-01-01T00:00:00.000Z"
 
     /// Where the app keeps its store and log, and where `pcap-mcp` and `pcap` look for them:
-    /// ~/Library/Application Support/Presence Capture, or PRESENCE_CAPTURE_HOME.
-    public static var home: String {
-        ProcessInfo.processInfo.environment["PRESENCE_CAPTURE_HOME"] ?? NSHomeDirectory() + "/Library/Application Support/Presence Capture"
-    }
+    /// PRESENCE_CAPTURE_HOME, or the default.
+    public static var home: String { ProcessInfo.processInfo.environment["PRESENCE_CAPTURE_HOME"] ?? defaultHome }
+
+    /// ~/Library/Application Support/Presence Capture: where `pcap-mcp` looks when an agent starts it,
+    /// with none of the person's environment.
+    public static var defaultHome: String { NSHomeDirectory() + "/Library/Application Support/Presence Capture" }
 
     /// Opens (creating when missing) the store at `path`, sealed under `masterKey`, which is never
     /// written down. Refuses a key that isn't this store's.

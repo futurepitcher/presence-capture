@@ -52,6 +52,16 @@ struct Arguments {
         }
     }
 
+    /// Refuses, before anything is opened or changed, an option or flag `command` doesn't take, and
+    /// more or fewer words than it does: a misspelled `--type` never quietly grants every type, and
+    /// `forget 15m --dry-run` never forgets.
+    func check(_ command: String, words count: Int, options allowed: Set<String> = [], flags: Set<String> = []) throws {
+        let store: Set = ["store", "master-key-file"]
+        if let unknown = options.keys.sorted().first(where: { !allowed.union(store).contains($0) }) { throw Failure("\(command) doesn't take --\(unknown)") }
+        if let unknown = set.sorted().first(where: { !flags.contains($0) }) { throw Failure("\(command) doesn't take --\(unknown)") }
+        if words.count != count { throw Failure("\(command): \(words.count < count ? "something's missing" : "too many words: \(words.dropFirst(count).joined(separator: " "))") (pcap help)") }
+    }
+
     func list(_ name: String) -> [String]? {
         options[name].map { $0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } }
     }
@@ -95,14 +105,22 @@ func day(_ date: Date) -> String {
     return format.string(from: date)
 }
 
+/// A path as given, made absolute against where pcap was run.
+func absolute(_ path: String) -> String { URL(fileURLWithPath: path).standardizedFileURL.path }
+
+/// The app's store, or the one --store names, absolute.
+func storePath(_ arguments: Arguments) -> String {
+    arguments.options["store"].map(absolute) ?? CaptureStore.home + "/store.sqlite"
+}
+
 /// The app's store, or the one --store names, opened as a writer. A store that isn't there isn't
 /// made: that's the app's job, at its first launch.
 func openStore(_ arguments: Arguments) throws -> CaptureStore {
-    let path = arguments.options["store"] ?? CaptureStore.home + "/store.sqlite"
+    let path = storePath(arguments)
     guard FileManager.default.fileExists(atPath: path) else { throw Failure("there's no store at \(path): open Presence Capture once to make it") }
     let key: Data
     do {
-        key = try MasterKeyItem.load(keyFile: arguments.options["master-key-file"], bundleIdentifier: Bundle.main.bundleIdentifier)
+        key = try MasterKeyItem.load(keyFile: arguments.options["master-key-file"].map(absolute), bundleIdentifier: Bundle.main.bundleIdentifier)
     } catch {
         throw Failure("\(error)")
     }
@@ -116,11 +134,20 @@ func openStore(_ arguments: Arguments) throws -> CaptureStore {
 /// `pcap-mcp` beside this program (in the app's bundle, Contents/MacOS), followed through a link
 /// such as Homebrew's, or the one --pcap-mcp names.
 func pcapMCP(_ arguments: Arguments) throws -> String {
-    let path = arguments.options["pcap-mcp"]
+    let path = arguments.options["pcap-mcp"].map(absolute)
         ?? (Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])).resolvingSymlinksInPath()
             .deletingLastPathComponent().appendingPathComponent("pcap-mcp").path
     guard FileManager.default.isExecutableFile(atPath: path) else { throw Failure("pcap-mcp isn't at \(path)") }
     return path
+}
+
+/// The server entry for a grant: the store and key file named too, when they aren't the app's own,
+/// since pcap-mcp, started by the agent, opens the app's store with the Keychain's key otherwise.
+func entry(_ arguments: Arguments, server: String) -> (String) -> ServerEntry {
+    let store = storePath(arguments)
+    let other = store == CaptureStore.defaultHome + "/store.sqlite" ? nil : store
+    let keyFile = arguments.options["master-key-file"].map(absolute)
+    return { ServerEntry(pcapMCP: server, grantId: $0, store: other, keyFile: keyFile) }
 }
 
 func ask(_ question: String) -> Bool {
@@ -131,11 +158,13 @@ func ask(_ question: String) -> Bool {
 // MARK: Commands
 
 func connect(_ arguments: Arguments) throws {
+    try arguments.check("connect", words: 2, options: ["types", "levels", "days", "pcap-mcp"], flags: ["yes", "dry-run"])
     guard let name = arguments.words.dropFirst().first, let client = Client(rawValue: name) else {
         throw Failure("connect which? \(Client.allCases.map(\.rawValue).joined(separator: ", "))")
     }
     let connector = Connector()
     let server = try pcapMCP(arguments)
+    let entry = entry(arguments, server: server)
     let grant = try grant(for: client.rawValue, arguments)
     let show = { (plan: ConnectPlan) in
         print("Connect \(client.name) to Presence Capture\n")
@@ -147,7 +176,7 @@ func connect(_ arguments: Arguments) throws {
         print("\n\(plan.diff)\n")
     }
     if arguments.set.contains("dry-run") {
-        show(try connector.plan(client, entry: ServerEntry(pcapMCP: server, grantId: "grn_(issued when it's written)")))
+        show(try connector.plan(client, entry: entry("grn_(issued when it's written)")))
         return
     }
     let interactive = isatty(STDIN_FILENO) == 1
@@ -156,7 +185,7 @@ func connect(_ arguments: Arguments) throws {
     }
     let store = try openStore(arguments)
     defer { store.close() }
-    let connection = try connector.connect(client, store: store, pcapMCP: server, grant: grant) { plan in
+    let connection = try connector.connect(client, store: store, grant: grant, entry: entry) { plan in
         show(plan)
         return arguments.set.contains("yes") || ask("Write this? [y/N]")
     }
@@ -168,18 +197,25 @@ func connect(_ arguments: Arguments) throws {
     if let backup = connection.backup { print("The config as it was: \(backup.path)") }
     if let revoked = connection.revoked { print("The grant it replaced, \(revoked), is revoked.") }
     print(client.afterward)
+    if let left = connection.stillActive {
+        throw Failure("but the grant it replaced, \(left.grantId), couldn't be revoked (\(left.why)), and can still read. Revoke it: pcap grant revoke \(left.grantId)", status: 1)
+    }
 }
 
 func grantCommand(_ arguments: Arguments) throws {
     switch arguments.words.dropFirst().first {
     case "add":
+        try arguments.check("grant add", words: 3, options: ["types", "levels", "days", "pcap-mcp"])
         guard let clientId = arguments.words.dropFirst(2).first, !clientId.isEmpty else { throw Failure("grant add needs a client name, as the agent will be known") }
         let grant = try grant(for: clientId, arguments)
         let store = try openStore(arguments)
         defer { store.close() }
         let grantId = try store.issueGrant(grant)
-        print("\(grantId)\n  \(clientId): \(describe(grant)).\n  Its server: \"\((try? pcapMCP(arguments)) ?? "pcap-mcp")\" --grant \(grantId)")
+        let server = entry(arguments, server: (try? pcapMCP(arguments)) ?? "pcap-mcp")(grantId)
+        let quoted = ([server.command] + server.args).map { $0.contains(" ") ? "\"\($0)\"" : $0 }.joined(separator: " ")
+        print("\(grantId)\n  \(clientId): \(describe(grant)).\n  Its server: \(quoted)")
     case "list":
+        try arguments.check("grant list", words: 2, flags: ["all"])
         let store = try openStore(arguments)
         defer { store.close() }
         let now = Date()
@@ -191,6 +227,7 @@ func grantCommand(_ arguments: Arguments) throws {
             print("\(g.grantId)  \(g.clientId)  \(state)  \(g.privacyLevels.joined(separator: ",")) · \(types) · \(g.maxRowsPerQuery) rows a read")
         }
     case "revoke":
+        try arguments.check("grant revoke", words: 3)
         guard let grantId = arguments.words.dropFirst(2).first else { throw Failure("grant revoke needs a grant id (pcap grant list)") }
         let store = try openStore(arguments)
         defer { store.close() }
@@ -202,6 +239,7 @@ func grantCommand(_ arguments: Arguments) throws {
 }
 
 func egress(_ arguments: Arguments) throws {
+    try arguments.check("egress", words: 1, options: ["days"])
     let days = try arguments.days(default: 7)
     let store = try openStore(arguments)
     defer { store.close() }
@@ -217,6 +255,7 @@ func egress(_ arguments: Arguments) throws {
 }
 
 func forget(_ arguments: Arguments) throws {
+    try arguments.check("forget", words: 2)
     guard let span = arguments.words.dropFirst().first, let unit = span.last, "mh".contains(unit),
           let count = Int(span.dropLast()), count > 0, count <= (unit == "m" ? 1440 : 24) else {
         throw Failure("forget how long? 15m, 1h, …: minutes or hours, up to a day")
@@ -230,6 +269,10 @@ func forget(_ arguments: Arguments) throws {
                                   scopeValue: "\(CaptureStore.iso(now.addingTimeInterval(-Double(minutes) * 60)))/\(CaptureStore.iso(now))",
                                   reason: "forget \(minutes)m")
     let captures = "\(result.revokedCaptureIds.count) \(result.revokedCaptureIds.count == 1 ? "capture" : "captures")"
+    if let error = result.erasureError {
+        print("Forgot the last \(label): \(captures) revoked, and no one can read them.")
+        throw Failure("erasing them from disk failed (\(error)). The erasure stays pending, and is tried again at the app's next tick or the next pcap command", status: 1)
+    }
     if result.erasedOnDisk {
         print("Forgot the last \(label): \(captures) revoked and erased from disk.")
     } else {
@@ -238,6 +281,7 @@ func forget(_ arguments: Arguments) throws {
 }
 
 func check(_ arguments: Arguments) throws {
+    try arguments.check("check", words: 1)
     let store = try openStore(arguments)
     defer { store.close() }
     var healthy = true

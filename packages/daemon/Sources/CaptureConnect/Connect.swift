@@ -28,14 +28,17 @@ public enum Client: String, CaseIterable, Sendable {
 /// The name the server has in every client's config.
 public let serverName = "presence-capture"
 
-/// The server a client is given: `pcap-mcp` by its absolute path, reading through its grant.
+/// The server a client is given: `pcap-mcp` by its absolute path, reading through its grant, from
+/// the store the grant is in.
 public struct ServerEntry: Equatable, Sendable {
     public var command: String
     public var args: [String]
 
-    public init(pcapMCP: String, grantId: String) {
+    /// `store` and `keyFile`, absolute, when they aren't the app's own: the server opens the app's
+    /// store, with its key from the Keychain, unless it's told otherwise.
+    public init(pcapMCP: String, grantId: String, store: String? = nil, keyFile: String? = nil) {
         command = pcapMCP
-        args = ["--grant", grantId]
+        args = ["--grant", grantId] + (store.map { ["--store", $0] } ?? []) + (keyFile.map { ["--master-key-file", $0] } ?? [])
     }
 
     var grantId: String { Connector.grantId(args) ?? "" }
@@ -49,18 +52,32 @@ public struct ServerEntry: Equatable, Sendable {
 }
 
 public enum ConnectError: Error, CustomStringConvertible, Equatable {
-    /// The config exists but isn't a JSON object this can add to: it's left as it is.
+    /// The config exists but can't be read, or isn't a JSON object this can add to: it's left as it is.
     case unreadable(path: String, why: String)
+    /// The config changed after the change to it was worked out: nothing was written.
+    case changed(path: String)
     /// Claude Code's own command isn't installed where it can be found.
     case claudeNotFound(command: String)
     /// `claude` refused; what it said.
     case claudeFailed(command: String, output: String)
+    /// The entry that was there was removed, and the new one couldn't be added: whether the old one
+    /// was put back, and where the config was copied before.
+    case claudeAddFailed(command: String, output: String, restored: Bool, backup: String?)
+    /// A grant that should have been withdrawn couldn't be: it can still read until it's revoked.
+    case grantLeft(grantId: String, after: String, why: String)
 
     public var description: String {
         switch self {
         case .unreadable(let path, let why): return "\(path) can't be added to (\(why)); it's left as it is"
+        case .changed(let path): return "\(path) changed while the change to it was being shown; nothing was written. Connect again to see it as it is now"
         case .claudeNotFound(let command): return "Claude Code's `claude` command wasn't found. Install Claude Code, or run this yourself:\n  \(command)"
         case .claudeFailed(let command, let output): return "`\(command)` failed:\n\(output)"
+        case .claudeAddFailed(let command, let output, let restored, let backup):
+            return "`\(command)` failed:\n\(output)\n" + (restored
+                ? "The connection that was there is put back as it was."
+                : "The connection that was there couldn't be put back\(backup.map { "; Claude Code's config as it was is in \($0)" } ?? "").")
+        case .grantLeft(let grantId, let after, let why):
+            return "\(after); and its grant \(grantId) couldn't be withdrawn (\(why)). Revoke it: pcap grant revoke \(grantId)"
         }
     }
 }
@@ -78,13 +95,16 @@ public struct ConnectPlan: Sendable {
     public let replacing: String?
     /// Anything that changes what the client does with it.
     public let notes: [String]
+    /// What the change was worked out from: the file's bytes, or for Claude Code its entry. It's
+    /// checked again before writing, so a change made meanwhile is never written over unseen.
+    let before: Data?
     let write: Write
 
     enum Write: Sendable {
         /// The file's whole new text.
         case file(String)
-        /// `claude` commands, run in order.
-        case claude(URL, [[String]])
+        /// `claude mcp add-json` with these arguments, after removing the entry there (`before`).
+        case claude(URL, add: [String])
     }
 }
 
@@ -114,17 +134,8 @@ public struct Connector: Sendable {
     /// The change, worked out but not made: the client's config is read, never written.
     public func plan(_ client: Client, entry: ServerEntry) throws -> ConnectPlan {
         let file = file(for: client)
-        let text = try? String(contentsOf: file, encoding: .utf8)
-        var root: [String: Any] = [:]
-        if let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            guard let object = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else {
-                throw ConnectError.unreadable(path: file.path, why: "it isn't a JSON object")
-            }
-            root = object
-        }
-        if root["mcpServers"] != nil, !(root["mcpServers"] is [String: Any]) {
-            throw ConnectError.unreadable(path: file.path, why: "its mcpServers isn't an object")
-        }
+        let bytes = try read(file)
+        let root = try Self.root(bytes, file)
         var servers = root["mcpServers"] as? [String: Any] ?? [:]
         let old = servers[serverName] as? [String: Any]
         let replacing = (old?["args"] as? [String]).flatMap(Self.grantId)
@@ -133,7 +144,6 @@ public struct Connector: Sendable {
         if client == .claudeCode {
             // Changed through `claude mcp`, Claude Code's supported way: its file holds its own state too.
             let add = ["mcp", "add-json", serverName, PrettyJSON.compact(new), "--scope", "user"]
-            let remove = ["mcp", "remove", serverName, "--scope", "user"]
             guard let claude else {
                 throw ConnectError.claudeNotFound(command: (["claude"] + add).map(Self.shellQuoted).joined(separator: " "))
             }
@@ -144,46 +154,107 @@ public struct Connector: Sendable {
                 }
             }
             let before = old.map { PrettyJSON.text($0) } ?? ""
-            return ConnectPlan(client: client, grantId: entry.grantId, file: file, diff: LineDiff.render(before, PrettyJSON.text(new)), replacing: replacing,
-                               notes: notes, write: .claude(claude, old == nil ? [add] : [remove, add]))
+            return ConnectPlan(client: client, grantId: entry.grantId, file: file, diff: LineDiff.render(before, PrettyJSON.text(new)),
+                               replacing: replacing, notes: notes, before: old.map { Data(PrettyJSON.compact($0).utf8) },
+                               write: .claude(claude, add: add))
         }
 
         servers[serverName] = new
-        root["mcpServers"] = servers
-        let after = PrettyJSON.text(root)
-        return ConnectPlan(client: client, grantId: entry.grantId, file: file, diff: LineDiff.render(text ?? "", after), replacing: replacing, notes: [],
-                           write: .file(after))
+        var changed = root
+        changed["mcpServers"] = servers
+        let after = PrettyJSON.text(changed)
+        return ConnectPlan(client: client, grantId: entry.grantId, file: file, diff: LineDiff.render(bytes.map { String(decoding: $0, as: UTF8.self) } ?? "", after),
+                           replacing: replacing, notes: [], before: bytes, write: .file(after))
     }
 
-    /// Makes the change. The config is copied aside first, beside itself; the copy's location is
-    /// returned (nil when there was no config yet). A file is replaced whole, never left half written,
-    /// with the permissions it had.
+    /// A config's bytes; nil only when there's no file. A file that's there but can't be read, or
+    /// isn't UTF-8 text, is refused, never taken for an empty one.
+    private func read(_ file: URL) throws -> Data? {
+        guard FileManager.default.fileExists(atPath: file.path) else { return nil }
+        let bytes: Data
+        do { bytes = try Data(contentsOf: file) } catch { throw ConnectError.unreadable(path: file.path, why: "it can't be read") }
+        guard String(data: bytes, encoding: .utf8) != nil else { throw ConnectError.unreadable(path: file.path, why: "it isn't UTF-8 text") }
+        return bytes
+    }
+
+    /// The config's top level: empty for no file or an empty one; an error for anything else that
+    /// isn't a JSON object with an object of servers.
+    private static func root(_ bytes: Data?, _ file: URL) throws -> [String: Any] {
+        guard let bytes, !String(decoding: bytes, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [:] }
+        guard let root = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] else {
+            throw ConnectError.unreadable(path: file.path, why: "it isn't a JSON object")
+        }
+        if root["mcpServers"] != nil, !(root["mcpServers"] is [String: Any]) {
+            throw ConnectError.unreadable(path: file.path, why: "its mcpServers isn't an object")
+        }
+        return root
+    }
+
+    /// Makes the change, if the config is still as it was when the change was worked out; otherwise
+    /// it throws `changed` and writes nothing. The config is copied aside first, beside itself; the
+    /// copy's location is returned (nil when there was no config yet). A file is replaced whole,
+    /// never left half written, with the permissions it had. Two connections take turns (an advisory
+    /// lock on the config's folder), so the second sees the first's change.
     @discardableResult
     public func apply(_ plan: ConnectPlan) throws -> URL? {
-        let manager = FileManager.default
-        var backup: URL?
-        if manager.fileExists(atPath: plan.file.path) {
-            let stamp = ISO8601DateFormatter.string(from: now(), timeZone: .current, formatOptions: [.withYear, .withMonth, .withDay, .withTime])
-            let base = "\(plan.file.lastPathComponent).presence-capture-backup-\(stamp)"
-            var copy = plan.file.deletingLastPathComponent().appendingPathComponent(base)
-            var n = 1
-            while manager.fileExists(atPath: copy.path) {
-                n += 1
-                copy = plan.file.deletingLastPathComponent().appendingPathComponent("\(base)-\(n)")
+        try locked(plan.file.deletingLastPathComponent()) {
+            let now = try read(plan.file)
+            switch plan.write {
+            case .file: guard now == plan.before else { throw ConnectError.changed(path: plan.file.path) }
+            case .claude:
+                let entry = (try Self.root(now, plan.file)["mcpServers"] as? [String: Any])?[serverName] as? [String: Any]
+                guard entry.map({ Data(PrettyJSON.compact($0).utf8) }) == plan.before else { throw ConnectError.changed(path: plan.file.path) }
             }
-            try manager.copyItem(at: plan.file, to: copy)
-            backup = copy
+            let backup = try copyAside(plan.file)
+            switch plan.write {
+            case .file(let text):
+                let manager = FileManager.default
+                let permissions = (try? manager.attributesOfItem(atPath: plan.file.path))?[.posixPermissions]
+                try Data(text.utf8).write(to: plan.file, options: .atomic)
+                if let permissions { try manager.setAttributes([.posixPermissions: permissions], ofItemAtPath: plan.file.path) }
+            case .claude(let claude, let add):
+                guard let previous = plan.before.map({ String(decoding: $0, as: UTF8.self) }) else {
+                    try run(claude, add)
+                    break
+                }
+                try run(claude, ["mcp", "remove", serverName, "--scope", "user"])
+                do {
+                    try run(claude, add)
+                } catch ConnectError.claudeFailed(let command, let output) {
+                    // Removed, and not replaced: what was there goes back.
+                    let restored = (try? run(claude, ["mcp", "add-json", serverName, previous, "--scope", "user"])) != nil
+                    throw ConnectError.claudeAddFailed(command: command, output: output, restored: restored, backup: backup?.path)
+                }
+            }
+            return backup
         }
-        switch plan.write {
-        case .file(let text):
-            let permissions = (try? manager.attributesOfItem(atPath: plan.file.path))?[.posixPermissions]
-            try manager.createDirectory(at: plan.file.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try Data(text.utf8).write(to: plan.file, options: .atomic)
-            if let permissions { try manager.setAttributes([.posixPermissions: permissions], ofItemAtPath: plan.file.path) }
-        case .claude(let claude, let commands):
-            for arguments in commands { try run(claude, arguments) }
+    }
+
+    private func copyAside(_ file: URL) throws -> URL? {
+        let manager = FileManager.default
+        guard manager.fileExists(atPath: file.path) else { return nil }
+        let stamp = ISO8601DateFormatter.string(from: now(), timeZone: .current, formatOptions: [.withYear, .withMonth, .withDay, .withTime])
+        let base = "\(file.lastPathComponent).presence-capture-backup-\(stamp)"
+        var copy = file.deletingLastPathComponent().appendingPathComponent(base)
+        var n = 1
+        while manager.fileExists(atPath: copy.path) {
+            n += 1
+            copy = file.deletingLastPathComponent().appendingPathComponent("\(base)-\(n)")
         }
-        return backup
+        try manager.copyItem(at: file, to: copy)
+        return copy
+    }
+
+    /// Runs `body` holding an advisory lock on `folder`, which connections take and the clients
+    /// don't: `pcap connect` and the menu's Connect an Agent… take turns.
+    private func locked<T>(_ folder: URL, _ body: () throws -> T) throws -> T {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let fd = open(folder.path, O_RDONLY)
+        guard fd >= 0 else { return try body() }
+        defer { close(fd) }
+        flock(fd, LOCK_EX)
+        defer { flock(fd, LOCK_UN) }
+        return try body()
     }
 
     private func run(_ claude: URL, _ arguments: [String]) throws {
@@ -234,40 +305,64 @@ public struct Connector: Sendable {
     }
 }
 
-/// A client connected: the grant it reads through, where its old config was copied, and the
-/// grant of the entry it replaced, now revoked.
+/// A client connected: the grant it reads through, where its old config was copied, and the grant
+/// of the entry it replaced: revoked, or, if that failed, still active and to be revoked by hand.
 public struct Connection: Sendable {
     public let grantId: String
     public let expiresAt: Date
     public let backup: URL?
     public let revoked: String?
+    /// The replaced entry's grant, which couldn't be revoked, and why.
+    public let stillActive: (grantId: String, why: String)?
 }
 
 extension Connector {
     /// What `pcap connect` and the menu's Connect an Agent… do, in order. A grant for the client is
     /// issued; the change to its config is worked out and given to `confirm`, which shows it and asks;
     /// then it's made, and the grant of the entry it replaced is revoked. Nil when the person
-    /// declines. A grant whose config wasn't written (declined, or the write failed) is revoked again,
-    /// so none is left that nothing uses.
-    public func connect(_ client: Client, store: CaptureStore, pcapMCP: String, grant: NewGrant,
+    /// declines. A grant whose config wasn't written (declined, or the write failed) is withdrawn
+    /// again; one that can't be is an error naming it, never left quietly. A config that changed
+    /// while the change was shown is worked out and shown again, up to three times.
+    ///
+    /// `entry` makes the server entry for the grant.
+    public func connect(_ client: Client, store: CaptureStore, grant: NewGrant, entry: (String) -> ServerEntry,
                         confirm: (ConnectPlan) throws -> Bool) throws -> Connection? {
         let grantId = try store.issueGrant(grant)
-        let plan: ConnectPlan
-        let backup: URL?
+        func withdraw(after reason: String) throws {
+            do { try store.revokeGrant(grantId) } catch { throw ConnectError.grantLeft(grantId: grantId, after: reason, why: "\(error)") }
+        }
+        let made: (plan: ConnectPlan, backup: URL?)?
         do {
-            plan = try self.plan(client, entry: ServerEntry(pcapMCP: pcapMCP, grantId: grantId))
-            guard try confirm(plan) else {
-                try store.revokeGrant(grantId)
-                return nil
-            }
-            backup = try apply(plan)
+            made = try confirmAndApply(client, entry: entry(grantId), confirm: confirm)
         } catch {
-            _ = try? store.revokeGrant(grantId)
+            try withdraw(after: "\(error)")
             throw error
         }
+        guard let made else {
+            try withdraw(after: "Nothing was written")
+            return nil
+        }
         // The config now names the new grant; the old one reads for nothing, so it goes.
-        let revoked = plan.replacing.flatMap { old in old != grantId && ((try? store.revokeGrant(old)) ?? false) ? old : nil }
-        return Connection(grantId: grantId, expiresAt: grant.expiresAt, backup: backup, revoked: revoked)
+        var revoked: String?
+        var stillActive: (grantId: String, why: String)?
+        if let old = made.plan.replacing, old != grantId {
+            do { if try store.revokeGrant(old) { revoked = old } } catch { stillActive = (old, "\(error)") }
+        }
+        return Connection(grantId: grantId, expiresAt: grant.expiresAt, backup: made.backup, revoked: revoked, stillActive: stillActive)
+    }
+
+    private func confirmAndApply(_ client: Client, entry: ServerEntry, confirm: (ConnectPlan) throws -> Bool) throws -> (plan: ConnectPlan, backup: URL?)? {
+        var attempt = 0
+        while true {
+            attempt += 1
+            let plan = try self.plan(client, entry: entry)
+            guard try confirm(plan) else { return nil }
+            do {
+                return (plan, try apply(plan))
+            } catch ConnectError.changed(let path) {
+                if attempt == 3 { throw ConnectError.changed(path: path) }
+            }
+        }
     }
 }
 
