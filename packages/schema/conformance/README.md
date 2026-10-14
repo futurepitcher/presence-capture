@@ -31,6 +31,7 @@ Unset, it drives the reference driver process (`bin/driver.js`), the same way.
 | `store/capture.test.js` | R1, R5, R6, R7, R11 (sealing format, key refusal) |
 | `store/revocation.test.js` | R2, R3, R10, R11 (erasure receipts) |
 | `store/retention.test.js` | R12 |
+| `store/reads.test.js` | ADR 0001 and 0008: reads by id (order, the grant, its cap, egress) and of projection outputs (by `output_sequence`, never reused; nothing excluded or revoked) |
 | `store/held-log.test.js` | R11: an erasure a reader holds up isn't reported done, and is finished durably, by any writer, once it can be |
 | `store/writers.test.js` | With a second writer: R2 (a revocation's scope resolved under the write lock), R13 (older ranges included), R1 (`append_all`, all or nothing; two writers opening one store), R11 (the key refused with everything revoked), ADR 0001 (a grant revoked elsewhere, a malformed limit, a long search that leaves the write lock free) |
 | `store/erasure.test.js` | R11: the forensic check |

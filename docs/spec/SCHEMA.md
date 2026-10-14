@@ -196,6 +196,15 @@ Revoking the capture deletes the entry, and destroys the key that sealed its
 output (R11). An output can't be added for a capture that's revoked
 ([ADR 0007](../adr/0007-plugins.md)).
 
+Each output also takes `output_sequence` (migration 010): the next number in
+the store's one sequence, shared with `capture_event.sequence` and
+`revocation.sequence`, so an implementation MUST take the next number over all
+three. An output is often written well after its capture, and a reader follows
+outputs by this number, not by the capture's
+([ADR 0008](../adr/0008-recall-indexes-in-memory.md)). It's never given twice:
+an output is deleted only by a revocation, which takes a later number itself.
+An entry with no output has none.
+
 On revocation an implementation MUST, in one transaction:
 
 1. delete every `projection_entry` for the revoked set, and
@@ -222,6 +231,20 @@ non-grantable **by construction** rather than by an application check someone
 can forget.
 
 `egress_record` is append-only and hash-chained over `prev_hash`.
+
+A grant admits captures by privacy level, type, domain, source and time, never
+a revoked one, and caps what one read serves (`max_rows_per_query`). Three
+reads go through it, and each is served in the ADR 0001 envelope and recorded
+in the egress log:
+
+- **what it admits**, in `sequence` order, optionally after a sequence and
+  matching a substring of the text;
+- **captures by id**, in the order named, each at most once: how a ranked
+  result is served;
+- **projection outputs** of admitted captures, in `output_sequence` order after
+  a number. The envelope's provenance adds `projection`, `entry_ref`,
+  `output_kind` and `output_sequence` after the capture's own, and its content
+  is the output's JSON as text.
 
 - **`record_hash`** is the SHA-256, in hex, of this exact UTF-8 text:
   ```
@@ -293,7 +316,7 @@ PRESENCE_CAPTURE_DRIVER="/path/to/your-driver" npm run conformance:store
 
 The reference implementation also passes an API layer covering its read path
 (grants, envelope and egress, ADR 0001 T1–T12) and replay (R4). The store
-layer has 59 tests and the API layer 80, among them the five that distinguish
+layer has 64 tests and the API layer 80, among them the five that distinguish
 this schema:
 
 - **revocation propagation** — derived views and vector entries do not survive

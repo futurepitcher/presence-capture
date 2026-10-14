@@ -167,6 +167,8 @@ export function openStore(path = ':memory:', { masterKey, onTruncated } = {}) {
           SELECT MAX(sequence) AS s FROM capture_event
           UNION ALL
           SELECT MAX(sequence) AS s FROM revocation
+          UNION ALL
+          SELECT MAX(output_sequence) AS s FROM projection_entry
         )
       `)
       .get();
@@ -352,10 +354,12 @@ export function openStore(path = ':memory:', { masterKey, onTruncated } = {}) {
     }
     // Recording again that an entry exists changes nothing, so an index that
     // failed after recording can retry. An entry with an output is kept once.
+    // An output takes the next number in the store's sequence (migration 010),
+    // so a reader that follows outputs finds one written after its capture.
     db.prepare(`
-      INSERT INTO projection_entry (projection_name, capture_id, entry_ref, created_at, output_kind, output_sealed)
-      VALUES (?, ?, ?, ?, ?, ?) ${output ? '' : 'ON CONFLICT (projection_name, capture_id, entry_ref) DO NOTHING'}
-    `).run(projection, captureId, entryRef, now(), kind, sealed);
+      INSERT INTO projection_entry (projection_name, capture_id, entry_ref, created_at, output_kind, output_sealed, output_sequence)
+      VALUES (?, ?, ?, ?, ?, ?, ?) ${output ? '' : 'ON CONFLICT (projection_name, capture_id, entry_ref) DO NOTHING'}
+    `).run(projection, captureId, entryRef, now(), kind, sealed, output ? nextSequence() : null);
   }
 
   /** What a projection keeps for a capture, unsealed: [{entryRef, kind, value}]. */
@@ -677,7 +681,11 @@ export function openStore(path = ':memory:', { masterKey, onTruncated } = {}) {
    */
   function createReader(grantId) {
     if (!grantRecord(grantId)) throw new AuthorizationError('no grant: default deny');
-    return { read: (request) => read(grantId, request) };
+    return {
+      read: (request) => read(grantId, request),
+      readCaptures: (request) => readCaptures(grantId, request),
+      readOutputs: (request) => readOutputs(grantId, request),
+    };
   }
 
   /** The grant a read is made under, as it is now: refused when it's missing, revoked or expired. */
@@ -689,59 +697,43 @@ export function openStore(path = ':memory:', { masterKey, onTruncated } = {}) {
     return grant;
   }
 
-  function read(grantId, { tool, query = '', contains = null, limit = null, afterSequence = null }) {
-    // Checked before it's compared: Math.min with anything but a number is
-    // NaN, which no count reaches, and the grant's cap would be lost.
+  // Checked before it's compared: Math.min with anything but a number is NaN,
+  // which no count reaches, and the grant's cap would be lost.
+  function checkLimit(limit) {
     if (limit != null && !(Number.isInteger(limit) && limit >= 0)) throw new RangeError('limit must be a whole number, 0 or more');
+  }
 
-    // What the grant admits is chosen and unsealed under a read snapshot,
-    // which never holds the write lock: a search through a long history
-    // doesn't keep the daemon, or a Forget, waiting while it reads.
+  /**
+   * Every read has two parts. What the grant admits is chosen and unsealed
+   * under a read snapshot, which never holds the write lock, so a search
+   * through a long history doesn't keep the daemon, or a Forget, waiting.
+   * Then it's served only once the grant is checked again and the serving
+   * recorded, in one transaction under the write lock: a grant revoked
+   * meanwhile serves nothing, a capture revoked meanwhile isn't served (R2),
+   * and every row served is in the egress log (ADR 0001).
+   */
+  function twoPhase(grantId, choose, { tool, query, contains }) {
     db.exec('BEGIN');
     let rows;
     try {
-      rows = admitted(authorizedGrant(grantId), { contains, limit, afterSequence });
+      rows = choose(authorizedGrant(grantId));
       db.exec('COMMIT');
     } catch (err) {
       db.exec('ROLLBACK');
       throw err;
     }
-
-    // Served only once the grant is checked again and the serving recorded, in
-    // one transaction under the write lock: a grant revoked meanwhile serves
-    // nothing, a capture revoked meanwhile isn't served (R2), and every row
-    // served is in the egress log (ADR 0001).
     return immediate(() => {
       const grant = authorizedGrant(grantId);
-      const served = rows.filter((r) => !isRevoked(r.capture_id));
-
-      // Every payload crosses the boundary wrapped (ADR 0001 §4.3).
-      // provenance comes from capture metadata, never from the content.
-      const envelopes = served.map((r) => ({
-        presence_capture_untrusted: {
-          envelope_version: ENVELOPE_VERSION,
-          provenance: {
-            capture_id: r.capture_id,
-            sequence: r.sequence,
-            captured_at: r.captured_at,
-            source_app: r.source_app,
-            source_url: r.source_url,
-            capture_type: r.capture_type,
-            privacy_level: r.privacy_level,
-            extraction: r.extraction,
-          },
-          content: r.content_text,
-        },
-      }));
-
+      const served = rows.filter((r) => !isRevoked(r.envelope.presence_capture_untrusted.provenance.capture_id));
+      const envelopes = served.map((r) => r.envelope);
       appendEgressLocked({
         servedAt: now(),
         clientId: grant.client_id,
         grantId: grant.grant_id,
         tool,
         queryFingerprint: sha256(`${tool}\u0000${query}\u0000${contains ?? ''}`),
-        captureIds: served.map((r) => r.capture_id),
-        privacyLevelsServed: [...new Set(served.map((r) => r.privacy_level))],
+        captureIds: served.map((r) => r.envelope.presence_capture_untrusted.provenance.capture_id),
+        privacyLevelsServed: [...new Set(served.map((r) => r.envelope.presence_capture_untrusted.provenance.privacy_level))],
         rowCount: served.length,
         byteCount: Buffer.byteLength(JSON.stringify(envelopes)),
       });
@@ -749,8 +741,93 @@ export function openStore(path = ':memory:', { masterKey, onTruncated } = {}) {
     });
   }
 
-  /** The captures a grant admits, in sequence order, with their text unsealed, up to its cap. */
-  function admitted(grant, { contains, limit, afterSequence }) {
+  /** What the grant admits, in sequence order, with its text, up to its cap. */
+  function read(grantId, { tool, query = '', contains = null, limit = null, afterSequence = null }) {
+    checkLimit(limit);
+    return twoPhase(grantId, (grant) => {
+      const { clauses, params } = admits(grant);
+      if (afterSequence != null) { clauses.push('e.sequence > ?'); params.push(afterSequence); }
+      // Content is sealed, so `contains` is matched after unsealing, and only
+      // rows the grant already admits are ever unsealed. Case-insensitive, as
+      // the LIKE it replaces was for ASCII.
+      const cap = Math.min(limit ?? grant.max_rows_per_query, grant.max_rows_per_query);
+      const needle = contains?.toLowerCase();
+      const rows = [];
+      const candidates = db.prepare(`SELECT e.* FROM capture_event e WHERE ${clauses.join(' AND ')} ORDER BY e.sequence`).iterate(...params);
+      for (const row of candidates) {
+        if (rows.length >= cap) break;
+        const text = contentText(row.capture_id);
+        if (needle && !text?.toLowerCase().includes(needle)) continue;
+        rows.push({ envelope: envelopeOf(row, text) });
+      }
+      return rows;
+    }, { tool, query, contains });
+  }
+
+  /**
+   * The captures named, in the order named, through the grant: how a ranked
+   * result (a search's) is served. What the grant doesn't admit, or is
+   * revoked, is left out, a capture named twice is served once, and no more
+   * than the grant's cap is served.
+   */
+  function readCaptures(grantId, { tool, query = '', captureIds }) {
+    if (!Array.isArray(captureIds) || captureIds.some((id) => typeof id !== 'string')) {
+      throw new RangeError('captureIds must be a list of capture ids');
+    }
+    return twoPhase(grantId, (grant) => {
+      const { clauses, params } = admits(grant);
+      const one = db.prepare(`SELECT e.* FROM capture_event e WHERE ${[...clauses, 'e.capture_id = ?'].join(' AND ')}`);
+      const rows = [];
+      for (const id of new Set(captureIds)) {
+        if (rows.length >= grant.max_rows_per_query) break;
+        const row = one.get(...params, id);
+        if (row) rows.push({ envelope: envelopeOf(row, contentText(id)) });
+      }
+      return rows;
+    }, { tool, query, contains: null });
+  }
+
+  /**
+   * Projection outputs (an embedding, a summary) of the captures the grant
+   * admits, in the order they were written (output_sequence, migration 010),
+   * after `afterOutputSequence`, up to the grant's cap. Each is enveloped with
+   * its capture's provenance, and its content is the output's JSON as text.
+   */
+  function readOutputs(grantId, { tool, kind = null, afterOutputSequence = 0, limit = null }) {
+    checkLimit(limit);
+    if (!Number.isInteger(afterOutputSequence)) throw new RangeError('afterOutputSequence must be a whole number');
+    return twoPhase(grantId, (grant) => {
+      const { clauses, params } = admits(grant);
+      clauses.push('p.output_sealed IS NOT NULL', 'p.output_sequence > ?');
+      params.push(afterOutputSequence);
+      if (kind != null) { clauses.push('p.output_kind = ?'); params.push(kind); }
+      const cap = Math.min(limit ?? grant.max_rows_per_query, grant.max_rows_per_query);
+      const rows = [];
+      const candidates = db.prepare(`
+        SELECT e.*, p.projection_name, p.entry_ref, p.output_kind, p.output_sealed, p.output_sequence, k.wrapped_key
+        FROM projection_entry p
+        JOIN capture_event e ON e.capture_id = p.capture_id
+        JOIN capture_key k ON k.capture_id = p.capture_id
+        WHERE ${clauses.join(' AND ')} ORDER BY p.output_sequence
+      `).iterate(...params);
+      for (const row of candidates) {
+        if (rows.length >= cap) break;
+        const dataKey = unseal(masterKey, row.wrapped_key, `key:${row.capture_id}`);
+        const text = unseal(dataKey, row.output_sealed, `projection:${row.projection_name}:${row.capture_id}:${row.entry_ref}`).toString('utf8');
+        const envelope = envelopeOf(row, text, {
+          projection: row.projection_name,
+          entry_ref: row.entry_ref,
+          output_kind: row.output_kind,
+          output_sequence: row.output_sequence,
+        });
+        rows.push({ envelope });
+      }
+      return rows;
+    }, { tool, query: kind ?? '', contains: null });
+  }
+
+  /** The SQL a grant admits captures by: privacy levels, types, domains, sources and time. */
+  function admits(grant) {
     const levels = JSON.parse(grant.privacy_levels);
     const types = JSON.parse(grant.capture_types);
     const domains = JSON.parse(grant.domains);
@@ -778,26 +855,32 @@ export function openStore(path = ':memory:', { masterKey, onTruncated } = {}) {
     }
     if (grant.time_from) { clauses.push('e.captured_at >= ?'); params.push(grant.time_from); }
     if (grant.time_to)   { clauses.push('e.captured_at <= ?'); params.push(grant.time_to); }
-    if (afterSequence != null) { clauses.push('e.sequence > ?'); params.push(afterSequence); }
+    return { clauses, params };
+  }
 
-    // Content is sealed, so `contains` is matched after unsealing, and
-    // only rows the grant already admits are ever unsealed. Case-insensitive,
-    // as the LIKE it replaces was for ASCII.
-    const cap = Math.min(limit ?? grant.max_rows_per_query, grant.max_rows_per_query);
-    const needle = contains?.toLowerCase();
-    const rows = [];
-    const candidates = db.prepare(`
-      SELECT e.* FROM capture_event e
-      WHERE ${clauses.join(' AND ')}
-      ORDER BY e.sequence
-    `).iterate(...params);
-    for (const row of candidates) {
-      if (rows.length >= cap) break;
-      const text = contentText(row.capture_id);
-      if (needle && !text?.toLowerCase().includes(needle)) continue;
-      rows.push({ ...row, content_text: text });
-    }
-    return rows;
+  /**
+   * Every payload crosses the boundary wrapped (ADR 0001 §4.3). Provenance
+   * comes from capture metadata, never from the content; an output adds where
+   * it came from after the capture's own.
+   */
+  function envelopeOf(row, content, output = {}) {
+    return {
+      presence_capture_untrusted: {
+        envelope_version: ENVELOPE_VERSION,
+        provenance: {
+          capture_id: row.capture_id,
+          sequence: row.sequence,
+          captured_at: row.captured_at,
+          source_app: row.source_app,
+          source_url: row.source_url,
+          capture_type: row.capture_type,
+          privacy_level: row.privacy_level,
+          extraction: row.extraction,
+          ...output,
+        },
+        content,
+      },
+    };
   }
 
   // ---------------------------------------------------------------- replay

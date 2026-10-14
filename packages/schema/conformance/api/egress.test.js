@@ -128,8 +128,8 @@ test('T8: the egress log is not reachable through a read path', () => {
   const rows = store.createReader(grantId).read({ tool: 'search', limit: 100 });
   const types = rows.map((r) => r.presence_capture_untrusted.provenance.capture_type);
   assert.ok(!types.some((t) => t.includes('egress')));
-  // The reader exposes exactly one method, so there is no surface to ask for it.
-  assert.deepEqual(Object.keys(store.createReader(grantId)), ['read']);
+  // The reader exposes reads of captures and their outputs and nothing else, so there is no surface to ask for it.
+  assert.deepEqual(Object.keys(store.createReader(grantId)), ['read', 'readCaptures', 'readOutputs']);
   store.close();
 });
 

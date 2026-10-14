@@ -96,6 +96,16 @@ func handle(_ op: String, _ args: [String: Any]) throws -> [String: Any] {
             tool: try required(args, "tool"), query: string(args, "query") ?? "", contains: string(args, "contains"),
             limit: (args["limit"] as? NSNumber)?.intValue, afterSequence: (args["after_sequence"] as? NSNumber)?.intValue)
         return ["envelopes": try need().read(grantId: try required(args, "grant_id"), request).map(\.foundation)]
+    case "read_ids":
+        guard let ids = args["capture_ids"] as? [String] else { throw DriverError(code: "bad_request", message: "capture_ids must be a list of capture ids") }
+        return ["envelopes": try need().readCaptures(grantId: try required(args, "grant_id"), tool: try required(args, "tool"),
+                                                      query: string(args, "query") ?? "", captureIds: ids).map(\.foundation)]
+    case "read_outputs":
+        let after = args["after_output_sequence"].flatMap { $0 is NSNull ? nil : $0 }
+        guard after == nil || after is NSNumber else { throw DriverError(code: "bad_request", message: "after_output_sequence must be a whole number") }
+        return ["envelopes": try need().readOutputs(grantId: try required(args, "grant_id"), tool: try required(args, "tool"), kind: string(args, "kind"),
+                                                      afterOutputSequence: (after as? NSNumber)?.intValue ?? 0,
+                                                      limit: (args["limit"] as? NSNumber)?.intValue).map(\.foundation)]
     case "content":
         return ["text": json(try need().contentText(try required(args, "capture_id")))]
     case "payload":
