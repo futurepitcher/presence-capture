@@ -58,7 +58,7 @@ export function createRecall({ store, grantId }) {
   memory.exec(`
     CREATE TABLE doc (
       capture_id TEXT PRIMARY KEY, sequence INTEGER NOT NULL, captured_at TEXT NOT NULL,
-      capture_type TEXT NOT NULL, source_app TEXT, content TEXT
+      capture_type TEXT NOT NULL, source TEXT, source_app TEXT, content TEXT
     );
     CREATE INDEX doc_time ON doc (captured_at);
     CREATE VIRTUAL TABLE words USING fts5(capture_id UNINDEXED, content);
@@ -72,15 +72,18 @@ export function createRecall({ store, grantId }) {
   function refresh() {
     const latest = store.db.prepare('SELECT COALESCE(MAX(sequence), 0) AS s FROM capture_event').get().s;
     const insertDoc = memory.prepare(`
-      INSERT INTO doc (capture_id, sequence, captured_at, capture_type, source_app, content) VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO doc (capture_id, sequence, captured_at, capture_type, source, source_app, content) VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (capture_id) DO NOTHING
     `);
+    // Where each capture came from (the envelope doesn't say): dictation is the microphone too,
+    // though its source_app is the app it was typed into.
+    const sourceOf = store.db.prepare('SELECT source FROM capture_event WHERE capture_id = ?');
     const insertWords = memory.prepare('INSERT INTO words (capture_id, content) VALUES (?, ?)');
     while (afterSequence < latest) {
       const page = reader().read({ tool: 'index', query: 'index', afterSequence });
       if (page.length === 0) break;
       for (const { presence_capture_untrusted: { provenance: p, content } } of page) {
-        insertDoc.run(p.capture_id, p.sequence, p.captured_at, p.capture_type, p.source_app, content);
+        insertDoc.run(p.capture_id, p.sequence, p.captured_at, p.capture_type, sourceOf.get(p.capture_id)?.source ?? null, p.source_app, content);
         if (content) insertWords.run(p.capture_id, content);
         afterSequence = Math.max(afterSequence, p.sequence);
       }
@@ -170,11 +173,12 @@ export function createRecall({ store, grantId }) {
       if (device != null && device !== 'input' && device !== 'output') throw new RangeError('device must be input or output');
       const end = timeArg(to, 'to', new Date().toISOString());
       const start = timeArg(from, 'from', new Date(Date.parse(end) - HOUR).toISOString());
+      // The microphone is ambient speech from it and dictation; this Mac is what it played.
+      const which = { input: "AND (source_app = 'input' OR source = 'dictation')", output: "AND source_app = 'output'" }[device] ?? '';
       const rows = memory.prepare(`
-        SELECT capture_id FROM doc WHERE capture_type = 'audio_transcript' AND captured_at >= ? AND captured_at <= ?
-          AND (? IS NULL OR source_app = ?)
+        SELECT capture_id FROM doc WHERE capture_type = 'audio_transcript' AND captured_at >= ? AND captured_at <= ? ${which}
         ORDER BY captured_at, sequence LIMIT ?
-      `).all(start, end, device ?? null, device ?? null, limitArg(limit, 100));
+      `).all(start, end, limitArg(limit, 100));
       return serve('transcript', `${start}/${end}/${device ?? ''}`, ids(rows));
     },
 

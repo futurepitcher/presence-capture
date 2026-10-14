@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import AVFoundation
 import CaptureConnect
+import CaptureCore
 import Combine
 import SwiftUI
 
@@ -17,6 +18,18 @@ struct Permissions: Equatable {
     }
 }
 
+/// Dictation's step in the first-run window (R2b), as the app gives it.
+struct DictationControls {
+    let on: () -> Bool
+    let turnOn: () -> Void
+    let key: () -> DictationKey
+    let setKey: (DictationKey) -> Void
+    let remember: () -> Bool
+    let setRemember: (Bool) -> Void
+    /// What macOS does with the Globe key itself, if anything.
+    let globeClash: () -> String?
+}
+
 /// The first-run window (R2): each permission, what it's for, and a button that asks for it. Nothing
 /// is asked until its button is pressed. Then connecting an agent, the five-minute path's last step.
 struct OnboardingView: View {
@@ -25,6 +38,8 @@ struct OnboardingView: View {
     let canHear: Bool
     /// Whether Hear the Microphone is on: allowed and not heard is a step not yet done.
     let hearing: () -> Bool
+    /// Dictation, on macOS 26; nil before.
+    var dictation: DictationControls? = nil
     let allowScreen: () -> Void
     let allowMicrophone: () -> Void
     let allowAccessibility: () -> Void
@@ -33,6 +48,9 @@ struct OnboardingView: View {
 
     @State private var allowed = Permissions(screen: false, microphone: false, accessibility: false)
     @State private var heard = false
+    @State private var dictating = false
+    @State private var key = DictationKey.fn
+    @State private var remembering = true
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -58,8 +76,9 @@ struct OnboardingView: View {
             step(3, "Accessibility", required: false, done: allowed.accessibility,
                  "Reads the address of the page in front and the text of the window in front, more exactly than from pixels.",
                  button: "Allow Accessibility…", action: allowAccessibility)
+            if let dictation { dictationStep(dictation) }
             VStack(alignment: .leading, spacing: 8) {
-                Text("4. Connect an agent").bold()
+                Text("\(dictation == nil ? 4 : 5). Connect an agent").bold()
                 Text("It gets a grant of its own, for 30 days. You see the change to its settings before it's made.")
                     .font(.callout).foregroundStyle(.secondary)
                 HStack {
@@ -76,8 +95,52 @@ struct OnboardingView: View {
         }
         .padding(24)
         .frame(width: 560)
-        .onAppear { (allowed, heard) = (permissions(), hearing()) }
-        .onReceive(tick) { _ in (allowed, heard) = (permissions(), hearing()) }
+        .onAppear(perform: update)
+        .onReceive(tick) { _ in update() }
+    }
+
+    private func update() {
+        (allowed, heard) = (permissions(), hearing())
+        if let dictation { (dictating, key, remembering) = (dictation.on(), dictation.key(), dictation.remember()) }
+    }
+
+    /// Hold a key and speak: its own permissions, the key, and whether what's said is remembered
+    /// (on by default, shown here with its switch, as the maintainer chose).
+    private func dictationStep(_ dictation: DictationControls) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("4. Dictation (optional, experimental)").bold()
+                    Text("Hold a key and speak, in any app: what you say is typed where the cursor is, heard on this Mac. "
+                         + "It asks for the microphone, Input Monitoring (for the key alone: no other key is ever seen) and Accessibility (to type).")
+                        .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                if dictating {
+                    Label("On", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                } else {
+                    Button("Turn On Dictation…") { dictation.turnOn(); update() }
+                }
+            }
+            if dictating {
+                Picker("Hold", selection: Binding(get: { key }, set: { dictation.setKey($0); update() })) {
+                    ForEach(DictationKey.allCases, id: \.self) { Text($0.name).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 420)
+                if key == .fn, let clash = dictation.globeClash() {
+                    Text("When you press Fn (Globe), macOS also \(clash). Hold Right Option or Right Command instead, or set "
+                         + "“Press 🌐 key to” to “Do Nothing” in System Settings → Keyboard.")
+                        .font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                    Button("Open Keyboard Settings") {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension") { NSWorkspace.shared.open(url) }
+                    }
+                }
+                Toggle("Remember what I dictate", isOn: Binding(get: { remembering }, set: { dictation.setRemember($0); update() }))
+                Text("Kept like anything else captured, and forgotten the same way. Never from excluded apps or password fields.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
     }
 
     private func step(_ number: Int, _ title: String, required: Bool, done: Bool, _ why: String, button: String?,
