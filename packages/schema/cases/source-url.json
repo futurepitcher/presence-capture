@@ -13,6 +13,16 @@
       "output": "https://example.com/inbox"
     },
     {
+      "name": "a combining mark after ? or # still ends the address there",
+      "input": "https://example.com/search?́q=private%20meeting#́top",
+      "output": "https://example.com/search"
+    },
+    {
+      "name": "a combining mark after @ still drops the userinfo",
+      "input": "https://zac:pw@́example.com/inbox",
+      "output": "https://́example.com/inbox"
+    },
+    {
       "name": "a host with a port kept",
       "input": "http://localhost:8080/admin?x=1",
       "output": "http://localhost:8080/admin"

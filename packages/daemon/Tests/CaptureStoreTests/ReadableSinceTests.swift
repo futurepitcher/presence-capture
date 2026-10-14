@@ -34,3 +34,47 @@ final class StoreFolderTests: XCTestCase {
         XCTAssertEqual((try FileManager.default.attributesOfItem(atPath: folder.path))[.posixPermissions] as? Int, 0o700)
     }
 }
+
+/// A writer that waits for the store says, once it has it, whether it still may write.
+final class AppendAdmissionTests: XCTestCase {
+    func testAWriteThatWaitedIsntMadeIfItsNoLongerAdmitted() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = dir.appendingPathComponent("store.sqlite").path
+        let key = SymmetricKey(size: .bits256)
+        let store = try CaptureStore(path: path, masterKey: key)
+        let other = try CaptureStore(path: path, masterKey: key)
+        // Another writer holds the store; a capture's write waits behind it.
+        try other.exec("BEGIN IMMEDIATE")
+        let admitted = Locked(true)
+        let finished = expectation(description: "the write gave up")
+        var outcome: Error?
+        DispatchQueue.global().async {
+            do {
+                _ = try store.append(NewCapture(capturedAt: Date(), captureType: "screen_text", source: "screen", contentText: "shown after Pause"),
+                                     admit: { admitted.value })
+            } catch {
+                outcome = error
+            }
+            finished.fulfill()
+        }
+        // Paused (and let go again, even) while it waited: its moment is no longer admitted.
+        usleep(200_000)
+        admitted.value = false
+        try other.exec("COMMIT")
+        wait(for: [finished], timeout: 10)
+        XCTAssertEqual(outcome as? StoreError, .notAdmitted)
+        XCTAssertEqual(try store.rows("SELECT COUNT(*) FROM capture_event").first?.int(0), 0, "written after it stopped being admitted")
+    }
+}
+
+/// A value read and written from any thread, for tests.
+final class Locked<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: T
+    init(_ value: T) { stored = value }
+    var value: T {
+        get { lock.withLock { stored } }
+        set { lock.withLock { stored = newValue } }
+    }
+}

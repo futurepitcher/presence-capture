@@ -15,6 +15,9 @@ public enum StoreError: Error, CustomStringConvertible, Equatable {
     case revoked(String)
     case sealing
     case sqlite(String)
+    /// The writer's own `admit` said no, once the store was held for it (capture paused while the
+    /// write waited): nothing is written.
+    case notAdmitted
 
     public var description: String {
         switch self {
@@ -24,6 +27,7 @@ public enum StoreError: Error, CustomStringConvertible, Equatable {
         case .revoked(let message): return "revoked: \(message)"
         case .sealing: return "sealing failed"
         case .sqlite(let message): return "capture store: \(message)"
+        case .notAdmitted: return "not admitted"
         }
     }
 }
@@ -209,8 +213,8 @@ public final class CaptureStore: @unchecked Sendable {
     /// Appends a capture: event, key, sealed text and sealed payload in one transaction, so a
     /// capture never exists half-sealed. The payload hash is over the sealed bytes.
     @discardableResult
-    public func append(_ capture: NewCapture) throws -> String {
-        try appendAll([capture])[0]
+    public func append(_ capture: NewCapture, admit: () -> Bool = { true }) throws -> String {
+        try appendAll([capture], admit: admit)[0]
     }
 
     /// Appends several captures in one transaction: all of them or none. A later one can name an
@@ -218,12 +222,18 @@ public final class CaptureStore: @unchecked Sendable {
     /// segment and its transcript land together, and a duplicate segment (its dedupe key) or a
     /// failed transcript leaves nothing.
     @discardableResult
-    public func appendAll(_ captures: [NewCapture]) throws -> [String] {
+    /// `admit` is asked once the store is held for the write (its lock, then SQLite's), just before
+    /// anything is written: a writer that may have waited there (another writer holding the store)
+    /// says whether it still may write. No, and nothing is (`StoreError.notAdmitted`).
+    public func appendAll(_ captures: [NewCapture], admit: () -> Bool = { true }) throws -> [String] {
         try lock.withLock {
             var ids: [String] = []
             // Under the write lock from the start, so no revocation can commit between the check
             // that nothing here was forgotten and the write.
-            try transaction(immediate: true) { ids = try captures.map(appendLocked) }
+            try transaction(immediate: true) {
+                guard admit() else { throw StoreError.notAdmitted }
+                ids = try captures.map(appendLocked)
+            }
             return ids
         }
     }

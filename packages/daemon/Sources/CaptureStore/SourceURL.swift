@@ -14,13 +14,15 @@ public enum SourceURL {
     public static func clean(_ url: String?) -> String? {
         guard let url else { return nil }
         var out = control.stringByReplacingMatches(in: url, range: NSRange(url.startIndex..., in: url), withTemplate: "")
-        out = String(out.prefix { $0 != "#" })
-        out = String(out.prefix { $0 != "?" })
+        // Cut by scalar, as the reference cuts by code unit: a mark combined with "?" or "#" makes
+        // another Character, but it's still where the query or fragment begins.
+        out = String(String.UnicodeScalarView(out.unicodeScalars.prefix { $0 != "#" }))
+        out = String(String.UnicodeScalarView(out.unicodeScalars.prefix { $0 != "?" }))
         guard let match = authority.firstMatch(in: out, range: NSRange(out.startIndex..., in: out)),
               let scheme = Range(match.range(at: 1), in: out), let host = Range(match.range(at: 2), in: out),
               let rest = Range(match.range(at: 3), in: out) else { return nil }
-        let hostPart = out[host]
-        let withoutUser = hostPart.lastIndex(of: "@").map { hostPart[hostPart.index(after: $0)...] } ?? hostPart
+        let hostPart = out[host].unicodeScalars
+        let withoutUser = hostPart.lastIndex(of: "@").map { String(String.UnicodeScalarView(hostPart[hostPart.index(after: $0)...])) } ?? String(hostPart)
         out = String(out[scheme]) + withoutUser + String(out[rest])
         out = String(String.UnicodeScalarView(Redact.redact(out).unicodeScalars.prefix(maxLength)))
         return out.isEmpty ? nil : out

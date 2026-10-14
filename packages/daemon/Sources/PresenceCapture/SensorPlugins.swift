@@ -181,9 +181,16 @@ final class SensorPlugins: @unchecked Sendable {
             }
         }
         do {
-            try process.run()
-            lock.withLock { running[config.name] = process }
-            log("sensors.started name=\(config.name)")
+            // Started and registered in one step that stop() also takes: a launch (a relaunch a
+            // minute on, say) either finishes before stop looks, and is stopped with the rest, or
+            // finds it stopping and doesn't start.
+            let started = try lock.withLock { () -> Bool in
+                guard !stopping else { return false }
+                try process.run()
+                running[config.name] = process
+                return true
+            }
+            if started { log("sensors.started name=\(config.name)") }
         } catch {
             log("sensors.launch_failed name=\(config.name)")
         }

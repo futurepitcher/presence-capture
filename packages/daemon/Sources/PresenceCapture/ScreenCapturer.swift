@@ -136,12 +136,21 @@ actor ScreenCapturer {
             // Held (Pause, the lock) while it was read, however briefly: not kept. Nothing below waits.
             guard stillOn(pid, since: holds) else { break }
             do {
+                // Asked again once the store is held for it: a write that waited on another writer
+                // isn't made if capture was held meanwhile, even if it's been let go since.
+                let holding = self.holding
+                let stillPid = pid
                 try store.append(NewCapture(
                     capturedAt: observedAt, captureType: "screen_text", source: "screen", sourceApp: front.bundleIdentifier ?? app,
-                    sourceUrl: url, contentText: Redact.redact(text), extraction: extraction))
+                    sourceUrl: url, contentText: Redact.redact(text), extraction: extraction)) {
+                    let now = holding.now
+                    return !now.held && now.holds == holds && !screenLocked() && NSWorkspace.shared.frontmostApplication?.processIdentifier == stillPid
+                }
             } catch StoreError.revoked {
                 log("append.refused_revoked kind=screen")
                 continue
+            } catch StoreError.notAdmitted {
+                break
             }
             // Remembered only once it's kept: a window whose text was refused (its moment was
             // forgotten), or not written at all, is read again while it's on screen.
