@@ -100,6 +100,38 @@ public final class CaptureStore: @unchecked Sendable {
         }
     }
 
+    /// Opens an existing store as a reader (ADR 0008): restricted by SQLite to reads and egress
+    /// records before any SQL runs, so opening it can't change it. It never creates, migrates or
+    /// sets a persistent option: a store that's missing, or that the app hasn't migrated to this
+    /// version, is refused. Migrating is the writer's job.
+    public init(readerPath path: String, masterKey: SymmetricKey) throws {
+        guard masterKey.bitCount == 256 else { throw StoreError.sqlite("masterKey must be 32 bytes") }
+        self.masterKey = masterKey
+        dedupeSecret = HKDF<SHA256>.deriveKey(inputKeyMaterial: masterKey, info: Data("presence-capture dedupe".utf8), outputByteCount: 32)
+        guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else {
+            sqlite3_close(db)
+            db = nil
+            throw StoreError.sqlite("no store at that path")
+        }
+        installReaderAuthorizer()
+        sqlite3_busy_timeout(db, 5000)
+        let applied = Set((try? rows("SELECT name FROM schema_migration").map { $0.text(0) }) ?? [])
+        guard Migrations.all.allSatisfy({ applied.contains($0.name) }) else {
+            sqlite3_close(db)
+            db = nil
+            throw StoreError.sqlite("the store isn't migrated to this version: open it with Presence Capture first")
+        }
+        if let probe = try rows("SELECT capture_id, wrapped_key FROM capture_key LIMIT 1").first {
+            do {
+                _ = try Seal.open(probe.data(1), key: masterKey, aad: "key:\(probe.text(0))")
+            } catch {
+                sqlite3_close(db)
+                db = nil
+                throw StoreError.wrongKey
+            }
+        }
+    }
+
     deinit { sqlite3_close(db) }
 
     public func close() {

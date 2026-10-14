@@ -13,7 +13,8 @@ If your implementation passes the store-layer suite, it's conformant, in any
 language.
 
 ```sh
-PRESENCE_CAPTURE_DRIVER="/path/to/your-driver --flags" npm run conformance:store
+PRESENCE_CAPTURE_DRIVER="/path/to/your driver" npm run conformance:store             # one executable, spaces and all
+PRESENCE_CAPTURE_DRIVER='["/usr/bin/env", "python3", "driver.py"]' npm run conformance:store   # a command with arguments
 ```
 
 Unset, the suite drives the reference driver

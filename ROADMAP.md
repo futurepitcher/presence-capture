@@ -93,6 +93,16 @@ memory, and everything at rest is sealed.
 - `pcap eval` for accuracy and latency.
 - `pcap bench` for a reproducible comparison against other capture tools.
 
+- ✅ The native read path, held to the store layer, with an egress log that's
+  identical byte for byte across implementations.
+- ✅ `pcap-mcp`: the native MCP server, which SQLite restricts to reads and
+  egress records. It passes the same MCP conformance as the reference, now
+  run against any server over stdio.
+- ☐ Keychain trust for `pcap-mcp`, in-memory search, and `timeline`, `now`,
+  `session` and `transcript`.
+- ☐ Embeddings in the daemon, the macOS projector host, `pcap eval` and
+  `pcap bench`.
+
 **Exit:** recall@5 ≥ 0.8, search p95 < 300 ms at 30 days of data, numbers
 published.
 

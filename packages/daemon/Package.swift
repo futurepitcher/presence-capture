@@ -10,6 +10,7 @@ let package = Package(
     products: [
         .executable(name: "PresenceCapture", targets: ["PresenceCapture"]),
         .executable(name: "pcap-driver", targets: ["PcapDriver"]),
+        .executable(name: "pcap-mcp", targets: ["PcapMCP"]),
         .library(name: "CaptureStore", targets: ["CaptureStore"]),
     ],
     targets: [
@@ -20,6 +21,8 @@ let package = Package(
         .executableTarget(name: "PresenceCapture", dependencies: ["CaptureStore", "CaptureCore"]),
         // The conformance driver (docs/spec/DRIVER.md) over CaptureStore.
         .executableTarget(name: "PcapDriver", dependencies: ["CaptureStore"]),
+        // The native MCP server (ADR 0008): reads through grants; writes only egress records.
+        .executableTarget(name: "PcapMCP", dependencies: ["CaptureStore"]),
         .testTarget(name: "CaptureStoreTests", dependencies: ["CaptureStore"]),
         .testTarget(name: "CaptureCoreTests", dependencies: ["CaptureCore"]),
     ],

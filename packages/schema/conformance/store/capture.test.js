@@ -138,3 +138,12 @@ test('store R11: a projection output is sealed under its capture\'s key, as SCHE
   const key = unsealPerSpec(masterKey, wrapped, `key:${id}`);
   assert.deepEqual(JSON.parse(unsealPerSpec(key, row.output_sealed, `projection:summaries:${id}:s:1`).toString()), { words: 5 });
 }));
+
+test('driver command: one path is never split, and a JSON array carries arguments', async () => {
+  const { commandFrom } = await import('../driver-client.js');
+  assert.deepEqual(commandFrom('/Applications/Presence Capture.app/Contents/MacOS/pcap-driver'),
+    ['/Applications/Presence Capture.app/Contents/MacOS/pcap-driver']);
+  assert.deepEqual(commandFrom('["/usr/bin/env", "python3", "driver.py"]'), ['/usr/bin/env', 'python3', 'driver.py']);
+  assert.equal(commandFrom('  '), null);
+  assert.throws(() => commandFrom('[1, 2]'), /array of strings/);
+});
