@@ -416,15 +416,26 @@ public final class CaptureStore: @unchecked Sendable {
     @discardableResult
     public func revoke(scopeKind: String, scopeValue: String, reason: String? = nil) throws -> Revocation {
         try lock.withLock {
-            let revocationId = "rev_\(UUID().uuidString.lowercased())"
-            let revokedAt = Self.iso(Date())
             // Kept in canonical form, so later appends compare against it as text (refuseForgotten).
             let value = scopeKind == "time_range" ? try Self.canonicalRange(scopeValue) : scopeValue
+            return try revokeLocked(scopeKind: scopeKind, reason: reason) { value }!
+        }
+    }
+
+    /// A revocation, holding the store's lock. `scope` gives its value once SQLite's write lock is
+    /// held too, or nil for nothing to revoke: then nothing is written, and this is nil.
+    private func revokeLocked(scopeKind: String, reason: String?, scope: () throws -> String?) throws -> Revocation? {
+        do {
+            let revocationId = "rev_\(UUID().uuidString.lowercased())"
+            let revokedAt = Self.iso(Date())
             var ids: [String] = []
+            var revoked = false
             // The scope is resolved under the write lock, in the transaction that records it: a capture
             // another writer appends meanwhile is either in the set, or appended after this commits and
             // refused (refuseForgotten).
             try transaction(immediate: true) {
+                guard let value = try scope() else { return }
+                revoked = true
                 try resolve(scopeKind: scopeKind, scopeValue: value)
                 let reaching = "SELECT capture_id FROM temp.revoking"
                 try run("INSERT INTO revocation (revocation_id, sequence, revoked_at, scope_kind, scope_value, reason) VALUES (?, ?, ?, ?, ?, ?)",
@@ -447,6 +458,7 @@ public final class CaptureStore: @unchecked Sendable {
                 ids = try rows("SELECT r.capture_id FROM temp.revoking r JOIN capture_event e USING (capture_id) ORDER BY r.cascaded, e.sequence")
                     .map { $0.text(0) }
             }
+            guard revoked else { return nil }
             // The revocation is committed: from here on, nothing that fails can make it not have
             // happened. A failure finishing the erasure leaves it pending (its receipt has no
             // completed_at), to be finished by the next writer, and says so, rather than reading as
@@ -527,14 +539,24 @@ public final class CaptureStore: @unchecked Sendable {
     /// Nil, and nothing written, when nothing is that old.
     @discardableResult
     public func retain(days: Double, now: Date = Date()) throws -> Revocation? {
-        guard days > 0 else { throw StoreError.sqlite("retention days must be positive") }
-        let cutoff = Self.iso(now.addingTimeInterval(-days * 86_400))
-        let pending = try lock.withLock {
-            try rows("SELECT COUNT(*) FROM capture_event WHERE captured_at <= ? AND capture_id NOT IN (SELECT capture_id FROM revoked_capture)", cutoff)
-                .first?.int(0) ?? 0
+        try retain(policy: { days }, now: { now })
+    }
+
+    /// Retention by a period read once the store is held for writing (its lock and SQLite's): a
+    /// period lengthened while this waited for another writer is the one used, never the one it
+    /// started with.
+    @discardableResult
+    public func retain(policy: () -> Double, now: () -> Date = Date.init) throws -> Revocation? {
+        try lock.withLock {
+            try revokeLocked(scopeKind: "time_range", reason: "retention") {
+                let days = policy()
+                guard days > 0 else { throw StoreError.sqlite("retention days must be positive") }
+                let cutoff = Self.iso(now().addingTimeInterval(-days * 86_400))
+                let pending = try rows("SELECT COUNT(*) FROM capture_event WHERE captured_at <= ? AND capture_id NOT IN (SELECT capture_id FROM revoked_capture)",
+                                       cutoff).first?.int(0) ?? 0
+                return pending > 0 ? try Self.canonicalRange("\(Self.epoch)/\(cutoff)") : nil
+            }
         }
-        guard pending > 0 else { return nil }
-        return try revoke(scopeKind: "time_range", scopeValue: "\(Self.epoch)/\(cutoff)", reason: "retention")
     }
 
     /// Fills temp.revoking with what a revocation reaches: the captures its scope names and everything

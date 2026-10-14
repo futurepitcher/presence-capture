@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import AVFoundation
+import CaptureConnect
 import CaptureStore
 
 /// Presence Capture: a menu-bar app that reads the screen, hears this Mac and notes what's in front,
@@ -23,6 +24,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hearMicrophoneItem: NSMenuItem!
     private var hearSystemAudioItem: NSMenuItem!
     private var approveSensorsItem: NSMenuItem!
+    private var retentionMenu: NSMenu!
+    private let windows = Windows()
+    /// Store administration (retention, finishing an erasure, Forget, grants) runs here, never on the
+    /// main thread: a store waiting on SQLite's lock (up to five seconds) must not hold up the main
+    /// thread, where locking, sleep and Pause are heard.
+    private let admin = DispatchQueue(label: "presence.capture.admin")
+    /// A Keep Captures For change under way: until it's done, another isn't started, so a slow one
+    /// can't finish after a later choice and undo it.
+    private var retentionChanging = false
+    /// Quitting: no new work is started, and what was confirmed is finished before the app goes.
+    private var quitting = false
     private var audio: Listener?
     private var store: CaptureStore?
     private var capturer: ScreenCapturer?
@@ -53,6 +65,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Why capture is held now, if it is, read afresh each time: paused, the screens asleep,
     /// another user's session in front, or locked.
     private var heldFor: String? {
+        // For good: nothing a notification says resumes capture once Quit is chosen.
+        if quitting { return "Quitting" }
         if paused { return "Paused" }
         if CGDisplayIsAsleep(CGMainDisplayID()) != 0 { return "Waiting (screens asleep)" }
         let session = CGSessionCopyCurrentDictionary() as? [String: Any]
@@ -106,8 +120,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             problem = error is MasterKeyError ? "The store's key couldn't be read from or kept in the Keychain" : "The capture store couldn't be opened"
         }
         watchSleep()
-        // Permissions are asked for from the menu, when the person chooses to: never at launch.
+        // Permissions are asked for when the person chooses to, from the menu or the first-run
+        // window's buttons: never at launch.
         refresh()
+        if !defaults.bool(forKey: "onboarded") { showOnboarding() }
+        // Grants left able to read that weren't said before the app last went: said now.
+        for warning in Unseen.all() { say(warning) }
     }
 
     private func schedule(capturer: ScreenCapturer, store: CaptureStore) {
@@ -118,7 +136,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let seesScreen = CGPreflightScreenCaptureAccess()
             self.audio?.tick(listening: !held && seesScreen)
             // An erasure a reader held up is finished as soon as the reader lets go (ADR 0002).
-            if store.isErasurePending { _ = try? store.finishErasure() }
+            self.admin.async { if store.isErasurePending { _ = try? store.finishErasure() } }
             // A list that exists but can't be read: nothing is captured until it can be (R8).
             let fragments = Exclusion.load(self.exclusionPath)
             // Activity is noted while capturing, and the lock itself is noted while locked (it
@@ -149,12 +167,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Retention is a revocation (ADR 0003): what's older than the period is erased, with receipts.
+    /// The period is read once the store is held for writing, not when the sweep is queued or starts:
+    /// one waiting behind other store work never erases by a period the person has since lengthened.
     private func retain(_ store: CaptureStore) {
-        do {
-            let result = try store.retain(days: Double(retentionDays))
-            log.write("retention.done revoked=\(result?.revokedCaptureIds.count ?? 0)")
-        } catch {
-            log.write("retention.failed")
+        let (defaults, log) = (self.defaults, self.log!)
+        admin.async {
+            do {
+                let result = try store.retain(policy: { Double(defaults.integer(forKey: "retentionDays").nonZero ?? 14) })
+                log.write("retention.done revoked=\(result?.revokedCaptureIds.count ?? 0)")
+            } catch {
+                log.write("retention.failed")
+            }
+        }
+    }
+
+    /// Store work on the admin queue, awaited (for the windows).
+    private func onAdmin<T>(_ work: @escaping () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            admin.async { continuation.resume(with: Result(catching: work)) }
         }
     }
 
@@ -189,13 +219,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let screenItem = NSMenuItem(title: "Allow Screen Recording…", action: #selector(allowScreen), keyEquivalent: "")
         microphoneItem = NSMenuItem(title: "Allow Microphone…", action: #selector(allowMicrophone), keyEquivalent: "")
         accessibilityItem = NSMenuItem(title: "Allow Accessibility (page addresses)…", action: #selector(allowAccessibility), keyEquivalent: "")
-        for item in [stateItem!, audioItem!, .separator(), pauseItem!, forgetQuarter, forgetHour, .separator(),
-                     hearMicrophoneItem!, hearSystemAudioItem!, exclusions, approveSensorsItem!, .separator(), screenItem, microphoneItem!, accessibilityItem!, .separator()] {
+        let connect = NSMenuItem(title: "Connect an Agent", action: nil, keyEquivalent: "")
+        connect.submenu = NSMenu()
+        for client in Client.allCases {
+            let item = NSMenuItem(title: "\(client.name)…", action: #selector(connectAgent(_:)), keyEquivalent: "")
+            item.representedObject = client.rawValue
+            item.target = self
+            connect.submenu?.addItem(item)
+        }
+        let agents = NSMenuItem(title: "Agents Read…", action: #selector(showAgentsRead), keyEquivalent: "")
+        let retention = NSMenuItem(title: "Keep Captures For", action: nil, keyEquivalent: "")
+        retentionMenu = NSMenu()
+        for days in Self.retentionChoices {
+            let item = NSMenuItem(title: Self.span(days).capitalized, action: #selector(setRetention(_:)), keyEquivalent: "")
+            item.tag = days
+            item.target = self
+            retentionMenu.addItem(item)
+        }
+        retention.submenu = retentionMenu
+        let setUp = NSMenuItem(title: "Set Up Presence Capture…", action: #selector(showOnboarding), keyEquivalent: "")
+        let updates = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
+        for item in [stateItem!, audioItem!, .separator(), pauseItem!, forgetQuarter, forgetHour, .separator(), connect, agents, .separator(),
+                     hearMicrophoneItem!, hearSystemAudioItem!, retention, exclusions, approveSensorsItem!, .separator(),
+                     screenItem, microphoneItem!, accessibilityItem!, setUp, updates, .separator()] {
             menu.addItem(item)
         }
         menu.addItem(NSMenuItem(title: "Quit Presence Capture", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         for item in menu.items where item.action != nil && item.action != #selector(NSApplication.terminate(_:)) { item.target = self }
         statusItem.menu = menu
+    }
+
+    /// The periods the menu offers for Keep Captures For, in days.
+    static let retentionChoices = [1, 7, 14, 30, 90, 365]
+
+    static func span(_ days: Int) -> String {
+        days == 365 ? "1 year" : days == 1 ? "1 day" : "\(days) days"
     }
 
     private func refresh() {
@@ -207,6 +265,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         audioItem.title = audio?.state ?? "Not listening (needs macOS 26)"
         microphoneItem.isHidden = audio == nil || AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         hearMicrophoneItem.state = hearMicrophone ? .on : .off
+        for item in retentionMenu.items { item.state = item.tag == retentionDays ? .on : .off }
         hearSystemAudioItem.state = hearSystemAudio ? .on : .off
         let waiting = sensors?.unapproved.count ?? 0
         approveSensorsItem.isHidden = waiting == 0
@@ -226,7 +285,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// A revocation of the stretch just past (ADR 0002): everything captured in it, and everything
     /// derived from it, erased from disk, with a receipt. It can't be undone, so it's asked first.
     private func forget(minutes: Double, label: String) {
-        guard let store else { return }
+        guard let store, !quitting else { return }
         let alert = NSAlert()
         alert.messageText = "Forget \(label)?"
         alert.informativeText = "Everything captured in \(label), and everything derived from it, is erased from this Mac. This can't be undone."
@@ -235,25 +294,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let now = Date()
-        do {
-            let result = try store.revoke(scopeKind: "time_range",
-                                          scopeValue: "\(CaptureStore.iso(now.addingTimeInterval(-minutes * 60)))/\(CaptureStore.iso(now))",
-                                          reason: "forget \(Int(minutes))m")
+        admin.async {
+            let outcome = Result {
+                try store.revoke(scopeKind: "time_range",
+                                 scopeValue: "\(CaptureStore.iso(now.addingTimeInterval(-minutes * 60)))/\(CaptureStore.iso(now))",
+                                 reason: "forget \(Int(minutes))m")
+            }
+            DispatchQueue.main.async { [weak self] in self?.forgot(outcome, minutes: minutes, label: label) }
+        }
+    }
+
+    private func forgot(_ outcome: Result<Revocation, Error>, minutes: Double, label: String) {
+        if quitting {
+            log.write((try? outcome.get()).map { "forget.done minutes=\(Int(minutes)) revoked=\($0.revokedCaptureIds.count)" } ?? "forget.failed")
+            return
+        }
+        let said = NSAlert()
+        switch outcome {
+        case .success(let result):
             activity?.reset()
             log.write("forget.done minutes=\(Int(minutes)) revoked=\(result.revokedCaptureIds.count) on_disk=\(result.erasedOnDisk)" + (result.erasureError == nil ? "" : " erasure_failed"))
-            let done = NSAlert()
-            done.messageText = "Forgotten"
-            done.informativeText = result.erasedOnDisk
+            said.messageText = "Forgotten"
+            said.informativeText = result.erasedOnDisk
                 ? "\(result.revokedCaptureIds.count) captures from \(label) were erased."
                 : "\(result.revokedCaptureIds.count) captures from \(label) were revoked and can't be read. Their last traces will be erased from disk as soon as the store can finish: an agent may be reading it."
-            done.runModal()
-        } catch {
+        case .failure:
             log.write("forget.failed")
-            let failed = NSAlert()
-            failed.messageText = "Nothing was forgotten"
-            failed.informativeText = "The store couldn't revoke \(label). Nothing was changed."
-            failed.runModal()
+            said.messageText = "Nothing was forgotten"
+            said.informativeText = "The store couldn't revoke \(label). Nothing was changed."
         }
+        NSApp.activate(ignoringOtherApps: true)
+        said.runModal()
     }
 
     @objc private func toggleMicrophone() {
@@ -320,17 +391,174 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refresh()
     }
 
-    @objc private func allowMicrophone() {
-        if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
+    @objc private func allowMicrophone() { askForMicrophone(thenHear: false) }
+
+    /// Asks once; after that, System Settings is where it's allowed. From the first-run window,
+    /// allowing it is also choosing to be heard, so Hear the Microphone is turned on with it.
+    private func askForMicrophone(thenHear: Bool) {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .notDetermined:
             AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
                 DispatchQueue.main.async {
+                    if granted && thenHear { self?.defaults.set(true, forKey: "hearMicrophone") }
                     if granted { self?.holdCapture() }
                     self?.refresh()
                 }
             }
-        } else if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
-            NSWorkspace.shared.open(url)
+        case .authorized:
+            if thenHear { defaults.set(true, forKey: "hearMicrophone") }
+            holdCapture()
+            refresh()
+        default:
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") { NSWorkspace.shared.open(url) }
         }
+    }
+
+    // MARK: Agents, retention, set-up and updates (R2)
+
+    /// The first-run window: each permission explained, and connecting an agent. Shown at the
+    /// first launch, and from the menu. Closing it, by Done or otherwise, means it isn't shown again.
+    @objc private func showOnboarding() {
+        windows.show("onboarding", title: "Welcome to Presence Capture", closed: { [weak self] in self?.defaults.set(true, forKey: "onboarded") }) {
+            OnboardingView(permissions: { Permissions.now }, canHear: audio != nil, hearing: { [weak self] in self?.hearMicrophone ?? false },
+                           allowScreen: { [weak self] in self?.allowScreen() },
+                           allowMicrophone: { [weak self] in self?.askForMicrophone(thenHear: true) },
+                           allowAccessibility: { [weak self] in self?.allowAccessibility() },
+                           connect: { [weak self] client in self?.connect(client) },
+                           done: { [weak self] in self?.windows.close("onboarding") })
+        }
+    }
+
+    @objc private func connectAgent(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let client = Client(rawValue: raw) else { return }
+        connect(client)
+    }
+
+    private func connect(_ client: Client) {
+        guard !quitting else { return }
+        guard let store else { return storeIsClosed() }
+        ConnectAgent.run(client, store: store, storePath: home + "/store.sqlite", log: log.write)
+    }
+
+    /// Every grant, and what each agent was given: counts from the egress log, never content.
+    @objc private func showAgentsRead() {
+        guard let store else { return storeIsClosed() }
+        let log = self.log!
+        windows.show("agents", title: "Agents Read") {
+            AgentsReadView(load: { [weak self] in
+                               guard let self else { return AgentsReadView.Snapshot() }
+                               return try await self.onAdmin {
+                                   AgentsReadView.Snapshot(grants: try store.grants(), egress: try store.egress(since: Date().addingTimeInterval(-7 * 86_400)))
+                               }
+                           },
+                           revoke: { [weak self] grantId in
+                               guard let self else { return }
+                               let pcap = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("pcap").path ?? "pcap"
+                               let command = [pcap, "grant", "revoke", grantId, "--store", self.home + "/store.sqlite"].map(Connector.shellQuoted).joined(separator: " ")
+                               let warning = "Grant \(grantId) couldn't be withdrawn, and can still read. Withdraw it again in Agents Read…, or in Terminal:\n\(command)"
+                               do {
+                                   // Kept the moment it fails, before anything is shown: the window may close, or the app quit.
+                                   if try await self.onAdmin({ do { return try store.revokeGrant(grantId) } catch { Unseen.keep(warning); throw error } }) {
+                                       log.write("grant.revoked")
+                                   }
+                               } catch {
+                                   log.write("grant.revoke_failed")
+                                   self.say(warning)
+                                   throw error
+                               }
+                           })
+        }
+    }
+
+    /// A shorter period erases what's older now, so it's asked first, and it's kept only once what's
+    /// older is revoked: if that fails, the period stays as it was, to try again. A longer one erases
+    /// nothing yet.
+    @objc private func setRetention(_ sender: NSMenuItem) {
+        guard !quitting else { return }
+        let days = sender.tag
+        guard !retentionChanging else {
+            let busy = NSAlert()
+            busy.messageText = "Keep Captures For is still being changed"
+            busy.informativeText = "Older captures are being erased for the last change. Choose again once it's done."
+            NSApp.activate(ignoringOtherApps: true)
+            busy.runModal()
+            return
+        }
+        guard days != retentionDays else { return }
+        guard days < retentionDays else {
+            defaults.set(days, forKey: "retentionDays")
+            log.write("retention.set days=\(days)")
+            return refresh()
+        }
+        guard let store else { return storeIsClosed() }
+        let alert = NSAlert()
+        alert.messageText = "Keep captures for \(Self.span(days))?"
+        alert.informativeText = "Everything captured more than \(Self.span(days)) ago is erased from this Mac now, and from then on as it ages. This can't be undone."
+        alert.addButton(withTitle: "Erase Older Captures")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        retentionChanging = true
+        admin.async {
+            let outcome = Result { try store.retain(days: Double(days)) }
+            DispatchQueue.main.async { [weak self] in self?.retained(outcome, days: days) }
+        }
+    }
+
+    /// Whether a confirmed retention change stands: any success, one with nothing older to revoke
+    /// (nil) included.
+    static func retentionChanged(_ outcome: Result<Revocation?, Error>) -> Bool {
+        if case .success = outcome { return true }
+        return false
+    }
+
+    /// The period is kept only once what's older is revoked.
+    private func retained(_ outcome: Result<Revocation?, Error>, days: Int) {
+        retentionChanging = false
+        if quitting {
+            // Kept as it would be (a success with nothing to revoke included); just not said.
+            if Self.retentionChanged(outcome) { defaults.set(days, forKey: "retentionDays") }
+            log.write(Self.retentionChanged(outcome) ? "retention.set days=\(days)" : "retention.set_failed days=\(days)")
+            return
+        }
+        let said = NSAlert()
+        switch outcome {
+        case .success(let result):
+            defaults.set(days, forKey: "retentionDays")
+            log.write("retention.set days=\(days) revoked=\(result?.revokedCaptureIds.count ?? 0) on_disk=\(result?.erasedOnDisk ?? true)")
+            guard let result, !result.erasedOnDisk else { return refresh() }
+            said.messageText = "Older captures are revoked"
+            said.informativeText = result.erasureError.map { "No one can read them. Erasing them from disk failed (\($0)); it's tried again on its own." }
+                ?? "No one can read them. Their last traces are erased from disk as soon as the store can finish: an agent may be reading it."
+        case .failure:
+            log.write("retention.set_failed days=\(days)")
+            said.messageText = "Nothing was erased"
+            said.informativeText = "The store couldn't revoke what's older than \(Self.span(days)), so captures are still kept for \(Self.span(retentionDays)). Try again in a moment."
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        said.runModal()
+        refresh()
+    }
+
+    @objc private func checkForUpdates() { Updates.check() }
+
+    /// A warning the person hasn't seen, shown, then let go. While quitting it waits for the next launch.
+    private func say(_ warning: String) {
+        guard !quitting else { return }
+        let alert = NSAlert()
+        alert.messageText = "A grant is still able to read"
+        alert.informativeText = warning
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+        Unseen.seen(warning)
+    }
+
+    private func storeIsClosed() {
+        let alert = NSAlert()
+        alert.messageText = "The store isn't open"
+        alert.informativeText = problem ?? "Presence Capture couldn't open its store."
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
     }
 
     @objc private func allowAccessibility() {
@@ -340,15 +568,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// What was heard up to now is kept before the app goes.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Capture stops first, at once; then what was heard and noted is written, off the main
+        // thread (the store may be waiting on SQLite), and the app goes once it is.
+        quitting = true
+        ConnectAgent.quitting = true
+        // A confirmation on screen is answered no.
+        if ConnectAgent.confirming { NSApp.abortModal() }
         sensors?.stop()
-        guard let audio else { return .terminateNow }
         timers.forEach { $0.invalidate() }
         timers = []
-        Task { @MainActor in
-            await audio.finish()
+        holdCapture(going: true)
+        Self.finishWriting(activity: activity, audio: audio, admin: admin, connecting: ConnectAgent.underWay) {
             NSApp.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
+    }
+
+    /// Off the main thread, everything confirmed is finished before the app goes: a connection under
+    /// way (made, or rolled back), the store work queued (a Forget, a retention change, a
+    /// withdrawal), what activity has queued, and listening. Then `done`, on the main thread, after
+    /// any result those posted there.
+    static func finishWriting(activity: ActivityCapturer?, audio: Listener?, admin: DispatchQueue, connecting: DispatchGroup,
+                              done: @escaping () -> Void) {
+        Task.detached {
+            await withCheckedContinuation { done in connecting.notify(queue: .global()) { done.resume() } }
+            await withCheckedContinuation { done in admin.async { done.resume() } }
+            activity?.flush()
+            await audio?.finish()
+            await MainActor.run { done() }
+        }
     }
 }
 
