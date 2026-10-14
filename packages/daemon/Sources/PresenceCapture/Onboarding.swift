@@ -23,6 +23,8 @@ struct OnboardingView: View {
     let permissions: () -> Permissions
     /// Hearing needs macOS 26 (SpeechAnalyzer).
     let canHear: Bool
+    /// Whether Hear the Microphone is on: allowed and not heard is a step not yet done.
+    let hearing: () -> Bool
     let allowScreen: () -> Void
     let allowMicrophone: () -> Void
     let allowAccessibility: () -> Void
@@ -30,6 +32,7 @@ struct OnboardingView: View {
     let done: () -> Void
 
     @State private var allowed = Permissions(screen: false, microphone: false, accessibility: false)
+    @State private var heard = false
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -44,9 +47,9 @@ struct OnboardingView: View {
                  "Reads the text on your screen, on this Mac with Apple's Vision, and hears what this Mac plays. No images are kept.",
                  button: "Allow Screen Recording…", action: allowScreen)
             if canHear {
-                step(2, "Microphone", required: false, done: allowed.microphone,
+                step(2, "Microphone", required: false, done: allowed.microphone && heard,
                      "Hears the room, as words, on this Mac. No audio is kept. Off until you allow it here; turn it off any time with Hear the Microphone.",
-                     button: "Allow and Hear the Microphone…", action: allowMicrophone)
+                     button: allowed.microphone ? "Hear the Microphone" : "Allow and Hear the Microphone…", action: allowMicrophone)
             } else {
                 step(2, "Microphone", required: false, done: false, "Hearing needs macOS 26.", button: nil, action: {})
             }
@@ -71,8 +74,8 @@ struct OnboardingView: View {
         }
         .padding(24)
         .frame(width: 560)
-        .onAppear { allowed = permissions() }
-        .onReceive(tick) { _ in allowed = permissions() }
+        .onAppear { (allowed, heard) = (permissions(), hearing()) }
+        .onReceive(tick) { _ in (allowed, heard) = (permissions(), hearing()) }
     }
 
     private func step(_ number: Int, _ title: String, required: Bool, done: Bool, _ why: String, button: String?,

@@ -9,46 +9,58 @@ enum ConnectAgent {
     /// What a connection from the menu may read: standard captures of every type, for 30 days.
     static let days = 30
 
-    /// `storePath` is the app's store; named in the entry only when it isn't where pcap-mcp looks
-    /// by itself (PRESENCE_CAPTURE_HOME moved it).
-    static func run(_ client: Client, store: CaptureStore, storePath: String, log: @escaping (String) -> Void) {
+    /// One connection at a time from the menu (read and written on the main thread).
+    private static var connecting = false
+
+    /// `storePath` is the app's store, named in the entry by its absolute path.
+    ///
+    /// The work runs off the main thread: the store, another connection's turn and `claude` can each
+    /// take a while, and the main thread is where locking, sleep and Pause are heard. Only the
+    /// confirmation and the result are shown on it.
+    static func run(_ client: Client, store: CaptureStore, storePath: String, log: @escaping @Sendable (String) -> Void) {
         NSApp.activate(ignoringOtherApps: true)
+        guard !connecting else { return tell("A connection is under way", "Finish it before starting another.") }
         // Beside the app's own executable: Contents/MacOS in the bundle, the build folder in development.
         guard let server = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("pcap-mcp").path,
               FileManager.default.isExecutableFile(atPath: server) else {
             return tell("Nothing was connected", "pcap-mcp, the server agents start, isn't in the app. Reinstall Presence Capture.")
         }
         let grant = NewGrant(clientId: client.rawValue, expiresAt: Date().addingTimeInterval(Double(days) * 86_400))
-        do {
-            let other = storePath == CaptureStore.defaultHome + "/store.sqlite" ? nil : storePath
-            guard let connection = try Connector().connect(client, store: store, grant: grant,
-                                                           entry: { ServerEntry(pcapMCP: server, grantId: $0, store: other) },
-                                                           confirm: { confirm($0, grant: grant) }) else {
-                log("connect.declined client=\(client.rawValue)")
-                return
+        let path = URL(fileURLWithPath: storePath).standardizedFileURL.path
+        connecting = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = Result {
+                try Connector().connect(client, store: store, grant: grant,
+                                        entry: { ServerEntry(pcapMCP: server, grantId: $0, store: path) },
+                                        confirm: { plan in DispatchQueue.main.sync { confirm(plan, grant: grant) } })
             }
+            DispatchQueue.main.async {
+                connecting = false
+                show(result, client: client, log: log)
+            }
+        }
+    }
+
+    private static func show(_ result: Result<Connection?, Error>, client: Client, log: (String) -> Void) {
+        NSApp.activate(ignoringOtherApps: true)
+        switch result {
+        case .success(nil):
+            log("connect.declined client=\(client.rawValue)")
+        case .success(let connection?):
             log("connect.done client=\(client.rawValue) replaced=\(connection.revoked != nil)")
             var said = ["\(client.name) reads Presence Capture through a grant of its own until \(date(connection.expiresAt)). Withdraw it any time in Agents Read….",
                         client.afterward]
             if let backup = connection.backup { said.append("Its config as it was is copied to \(backup.path).") }
             if connection.revoked != nil { said.append("The grant of the connection it replaced is withdrawn.") }
-            if connection.stillActive != nil {
+            if let left = connection.stillActive {
                 log("connect.replaced_grant_left client=\(client.rawValue)")
-                said.append("The grant of the connection it replaced couldn't be withdrawn, and can still read: withdraw it in Agents Read….")
+                said.append("The grant of the connection it replaced couldn't be withdrawn (\(left.why)), and can still read. Withdraw it in Agents Read…, or with:\n\(left.revoke)")
             }
             tell("\(client.name) is connected", said.joined(separator: "\n\n"))
-        } catch ConnectError.claudeNotFound(let command) {
+        case .failure(ConnectError.claudeNotFound):
             log("connect.failed client=\(client.rawValue) why=no_claude")
-            let alert = NSAlert()
-            alert.messageText = "Claude Code's command wasn't found"
-            alert.informativeText = "Nothing was connected. Install Claude Code, then try again, or run this in Terminal:\n\n\(command)"
-            alert.addButton(withTitle: "Copy the Command")
-            alert.addButton(withTitle: "OK")
-            if alert.runModal() == .alertFirstButtonReturn {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(command, forType: .string)
-            }
-        } catch {
+            tell("Claude Code's command wasn't found", "Nothing was connected. Install Claude Code, then choose Connect an Agent → Claude Code again.")
+        case .failure(let error):
             log("connect.failed client=\(client.rawValue)")
             tell("Nothing was connected", "\(error)")
         }

@@ -17,6 +17,8 @@ struct AgentsReadView: View {
 
     @State private var snapshot = Snapshot()
     @State private var problem: String?
+    /// A withdrawal that failed: kept through a reload, since the grant can still read.
+    @State private var failure: String?
     @State private var withdrawing: GrantInfo?
 
     var body: some View {
@@ -27,6 +29,7 @@ struct AgentsReadView: View {
                 Button("Refresh", action: reload)
             }
             if let problem { Text(problem).foregroundStyle(.red) }
+            if let failure { Text(failure).foregroundStyle(.red) }
             grantsSection
             Divider()
             readsSection
@@ -39,7 +42,12 @@ struct AgentsReadView: View {
         .confirmationDialog("Withdraw this grant?", isPresented: Binding(get: { withdrawing != nil }, set: { if !$0 { withdrawing = nil } }),
                             presenting: withdrawing) { grant in
             Button("Withdraw \(Self.name(grant.clientId))'s Grant", role: .destructive) {
-                do { try revoke(grant.grantId) } catch { problem = "The grant couldn't be withdrawn." }
+                do {
+                    try revoke(grant.grantId)
+                    failure = nil
+                } catch {
+                    failure = "\(Self.name(grant.clientId))'s grant couldn't be withdrawn, and can still read. Try again in a moment."
+                }
                 reload()
             }
         } message: { grant in

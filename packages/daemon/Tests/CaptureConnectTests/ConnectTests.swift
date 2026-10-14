@@ -18,9 +18,12 @@ final class ConnectTests: XCTestCase {
         try? FileManager.default.removeItem(at: home)
     }
 
-    private func connector(claude: URL? = nil) -> Connector {
-        Connector(home: home, claude: claude, now: { Date(timeIntervalSince1970: 1_800_000_000) })
+    private func connector(claude: URL? = nil, environment: [String: String] = [:]) -> Connector {
+        Connector(environment: ["HOME": home.path, "PATH": "/usr/bin:/bin"].merging(environment) { $1 }, home: home, claude: .some(claude),
+                  now: { Date(timeIntervalSince1970: 1_800_000_000) })
     }
+
+    private var storePath: String { home.appendingPathComponent("store/store.sqlite").path }
 
     private func write(_ text: String, to client: Client, permissions: Int = 0o600) throws -> URL {
         let file = connector().file(for: client)
@@ -64,7 +67,7 @@ final class ConnectTests: XCTestCase {
             {"mcpServers": {"other": {"command": "/usr/bin/other", "args": ["--x"]}}, "preferences": {"theme": "dark", "ratio": 1.5, "on": true}}
             """
         let file = try write(original, to: .claudeDesktop)
-        let plan = try connector().plan(.claudeDesktop, entry: ServerEntry(pcapMCP: server, grantId: "grn_new"))
+        let plan = try connector().plan(.claudeDesktop, entry: ServerEntry(pcapMCP: server, grantId: "grn_new", store: storePath))
         XCTAssertNil(plan.replacing)
         XCTAssertTrue(plan.diff.contains("+     \"presence-capture\": {"), plan.diff)
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), original, "planning wrote the config")
@@ -77,7 +80,7 @@ final class ConnectTests: XCTestCase {
         XCTAssertEqual((servers["other"] as? [String: Any])?["args"] as? [String], ["--x"], "another server was changed")
         let entry = try XCTUnwrap(servers["presence-capture"] as? [String: Any])
         XCTAssertEqual(entry["command"] as? String, server, "the path with spaces was changed")
-        XCTAssertEqual(entry["args"] as? [String], ["--grant", "grn_new"])
+        XCTAssertEqual(entry["args"] as? [String], ["--grant", "grn_new", "--store", storePath])
         XCTAssertNil(entry["type"], "Claude Desktop's documented entry has no type")
         let preferences = try XCTUnwrap(after["preferences"] as? [String: Any])
         XCTAssertEqual(preferences["ratio"] as? Double, 1.5)
@@ -87,7 +90,7 @@ final class ConnectTests: XCTestCase {
     }
 
     func testCursorWithNoConfigYetGetsOneAndNoBackup() throws {
-        let plan = try connector().plan(.cursor, entry: ServerEntry(pcapMCP: server, grantId: "grn_new"))
+        let plan = try connector().plan(.cursor, entry: ServerEntry(pcapMCP: server, grantId: "grn_new", store: storePath))
         XCTAssertNil(try connector().apply(plan))
         let entry = try XCTUnwrap((try json(connector().file(for: .cursor))["mcpServers"] as? [String: Any])?["presence-capture"] as? [String: Any])
         XCTAssertEqual(entry["type"] as? String, "stdio")
@@ -96,7 +99,7 @@ final class ConnectTests: XCTestCase {
 
     func testAnEntryAlreadyThereIsReplacedAndItsGrantNamed() throws {
         _ = try write(#"{"mcpServers": {"presence-capture": {"command": "/old/pcap-mcp", "args": ["--grant", "grn_old"]}}}"#, to: .cursor)
-        let plan = try connector().plan(.cursor, entry: ServerEntry(pcapMCP: server, grantId: "grn_new"))
+        let plan = try connector().plan(.cursor, entry: ServerEntry(pcapMCP: server, grantId: "grn_new", store: storePath))
         XCTAssertEqual(plan.replacing, "grn_old")
         XCTAssertTrue(plan.diff.contains("-") && plan.diff.contains("grn_old") && plan.diff.contains("+") && plan.diff.contains("grn_new"), plan.diff)
     }
@@ -104,7 +107,7 @@ final class ConnectTests: XCTestCase {
     func testAConfigThatIsntAJSONObjectIsLeftAlone() throws {
         for text in ["{ not json", "[1, 2]", #"{"mcpServers": ["a list"]}"#] {
             let file = try write(text, to: .claudeDesktop)
-            XCTAssertThrowsError(try connector().plan(.claudeDesktop, entry: ServerEntry(pcapMCP: server, grantId: "grn_new"))) { error in
+            XCTAssertThrowsError(try connector().plan(.claudeDesktop, entry: ServerEntry(pcapMCP: server, grantId: "grn_new", store: storePath))) { error in
                 guard case ConnectError.unreadable = error else { return XCTFail("\(error)") }
             }
             XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), text)
@@ -116,7 +119,7 @@ final class ConnectTests: XCTestCase {
     func testClaudeCodeIsAddedAtUserScopeThroughItsOwnCommand() throws {
         let (claude, log) = try fakeClaude()
         let file = try write(#"{"projects": {"/code/app": {"mcpServers": {"presence-capture": {"command": "x"}}}}, "numStartups": 3}"#, to: .claudeCode)
-        let plan = try connector(claude: claude).plan(.claudeCode, entry: ServerEntry(pcapMCP: server, grantId: "grn_new"))
+        let plan = try connector(claude: claude).plan(.claudeCode, entry: ServerEntry(pcapMCP: server, grantId: "grn_new", store: storePath))
         XCTAssertNil(plan.replacing)
         XCTAssertEqual(plan.notes, ["In /code/app, its own presence-capture entry is used instead of this one."])
         XCTAssertNotNil(try connector(claude: claude).apply(plan), "~/.claude.json wasn't copied aside")
@@ -127,7 +130,7 @@ final class ConnectTests: XCTestCase {
         XCTAssertEqual(Array(ran[0].suffix(2)), ["--scope", "user"])
         let entry = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(ran[0][3].utf8)) as? [String: Any])
         XCTAssertEqual(entry["command"] as? String, server)
-        XCTAssertEqual(entry["args"] as? [String], ["--grant", "grn_new"])
+        XCTAssertEqual(entry["args"] as? [String], ["--grant", "grn_new", "--store", storePath])
         XCTAssertEqual(entry["type"] as? String, "stdio")
         XCTAssertTrue(try String(contentsOf: file, encoding: .utf8).contains("numStartups"), "Claude Code's own file was rewritten")
     }
@@ -135,29 +138,40 @@ final class ConnectTests: XCTestCase {
     func testClaudeCodesExistingEntryIsRemovedThenAdded() throws {
         let (claude, log) = try fakeClaude()
         _ = try write(#"{"mcpServers": {"presence-capture": {"type": "stdio", "command": "/old", "args": ["--grant", "grn_old"]}}}"#, to: .claudeCode)
-        let plan = try connector(claude: claude).plan(.claudeCode, entry: ServerEntry(pcapMCP: server, grantId: "grn_new"))
+        let plan = try connector(claude: claude).plan(.claudeCode, entry: ServerEntry(pcapMCP: server, grantId: "grn_new", store: storePath))
         XCTAssertEqual(plan.replacing, "grn_old")
         try connector(claude: claude).apply(plan)
         XCTAssertEqual(try commands(log).map { Array($0.prefix(2)) }, [["mcp", "remove"], ["mcp", "add-json"]])
     }
 
-    func testWithoutClaudeTheCommandToRunIsGivenQuoted() throws {
-        XCTAssertThrowsError(try connector(claude: nil).plan(.claudeCode, entry: ServerEntry(pcapMCP: server, grantId: "grn_new"))) { error in
-            guard case ConnectError.claudeNotFound(let command) = error else { return XCTFail("\(error)") }
-            XCTAssertTrue(command.hasPrefix("claude mcp add-json presence-capture '{"), command)
-            XCTAssertTrue(command.hasSuffix(" --scope user"), command)
+    func testWithoutClaudeNothingIsIssued() throws {
+        let store = try store()
+        XCTAssertThrowsError(try connector(claude: nil).connect(.claudeCode, store: store, grant: grant(.claudeCode), entry: entry) { _ in true }) { error in
+            XCTAssertEqual(error as? ConnectError, .claudeNotFound)
         }
+        XCTAssertTrue(try store.grants().isEmpty, "a grant was issued for a connection that couldn't be made")
+    }
+
+    func testAClaudeConfigFolderOfItsOwnIsRefusedBeforeAnything() throws {
+        let store = try store()
+        let (claude, log) = try fakeClaude()
+        XCTAssertThrowsError(try connector(claude: claude, environment: ["CLAUDE_CONFIG_DIR": home.appendingPathComponent("elsewhere").path])
+            .connect(.claudeCode, store: store, grant: grant(.claudeCode), entry: entry) { _ in true }) { error in
+            guard case ConnectError.unsupported = error else { return XCTFail("\(error)") }
+        }
+        XCTAssertTrue(try store.grants().isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: log.path), "claude was run")
     }
 
     // MARK: The whole connect, with a store
 
     private func store() throws -> CaptureStore {
-        try CaptureStore(path: home.appendingPathComponent("store/store.sqlite").path, masterKey: Seal.newKey())
+        try CaptureStore(path: storePath, masterKey: Seal.newKey())
     }
 
     private func grant(_ client: Client) -> NewGrant { NewGrant(clientId: client.rawValue, expiresAt: Date().addingTimeInterval(86_400)) }
 
-    private func entry(_ grantId: String) -> ServerEntry { ServerEntry(pcapMCP: server, grantId: grantId) }
+    private func entry(_ grantId: String) -> ServerEntry { ServerEntry(pcapMCP: server, grantId: grantId, store: storePath) }
 
     func testDecliningWritesNothingAndWithdrawsTheGrant() throws {
         let store = try store()
@@ -182,7 +196,7 @@ final class ConnectTests: XCTestCase {
         let active = try store.grants().filter { $0.isActive() }.map(\.grantId)
         XCTAssertEqual(active, [second.grantId])
         let entry = (try json(connector().file(for: .cursor))["mcpServers"] as? [String: Any])?["presence-capture"] as? [String: Any]
-        XCTAssertEqual(entry?["args"] as? [String], ["--grant", second.grantId])
+        XCTAssertEqual(entry?["args"] as? [String], ["--grant", second.grantId, "--store", storePath])
     }
 
     func testAFailedWriteWithdrawsTheGrant() throws {
@@ -256,10 +270,40 @@ final class ConnectTests: XCTestCase {
         }
     }
 
+    func testReconnectingToAnotherStoreNamesTheOldGrantAndWhereItIs() throws {
+        let store = try store()
+        let elsewhere = home.appendingPathComponent("other/store.sqlite").path
+        _ = try write(#"{"mcpServers": {"presence-capture": {"command": "/x", "args": ["--grant", "grn_old", "--store", "\#(elsewhere)", "--master-key-file", "/k"]}}}"#, to: .cursor)
+        let connection = try XCTUnwrap(try connector().connect(.cursor, store: store, grant: grant(.cursor), entry: entry) { _ in true })
+        XCTAssertNil(connection.revoked)
+        XCTAssertEqual(connection.stillActive?.grantId, "grn_old")
+        XCTAssertTrue(connection.stillActive?.revoke.contains("--store \(elsewhere) --master-key-file /k") ?? false, connection.stillActive?.revoke ?? "")
+
+        // In this store, but not a grant it has: said, not taken for revoked.
+        _ = try write(#"{"mcpServers": {"presence-capture": {"command": "/x", "args": ["--grant", "grn_unknown", "--store", "\#(storePath)"]}}}"#, to: .cursor)
+        let again = try XCTUnwrap(try connector().connect(.cursor, store: store, grant: grant(.cursor), entry: entry) { _ in true })
+        XCTAssertEqual(again.stillActive?.why, "it isn't in this store")
+    }
+
+    func testAClaudeThatCantBeStartedAfterRemovingIsStillReportedWithTheBackup() throws {
+        let store = try store()
+        let (claude, _) = try fakeClaude()
+        // On `mcp remove` it removes itself, as an update replacing it mid-connection could.
+        try Data("#!/bin/sh\ncase \"$2\" in remove) rm -f \"$0\";; esac\nexit 0\n".utf8).write(to: claude)
+        _ = try write(#"{"mcpServers": {"presence-capture": {"type": "stdio", "command": "/old", "args": ["--grant", "grn_old"]}}}"#, to: .claudeCode)
+        XCTAssertThrowsError(try connector(claude: claude).connect(.claudeCode, store: store, grant: grant(.claudeCode), entry: entry) { _ in true }) { error in
+            guard case ConnectError.claudeAddFailed(_, _, let restored, let backup) = error else { return XCTFail("not reported as a failed add: \(error)") }
+            XCTAssertFalse(restored)
+            XCTAssertNotNil(backup)
+        }
+    }
+
     func testAnEntryNamesTheStoreAndKeyFileWhenTheyArentTheApps() {
-        XCTAssertEqual(ServerEntry(pcapMCP: server, grantId: "grn_a").args, ["--grant", "grn_a"])
+        XCTAssertEqual(ServerEntry(pcapMCP: server, grantId: "grn_a", store: "/s/store.sqlite").args, ["--grant", "grn_a", "--store", "/s/store.sqlite"])
         XCTAssertEqual(ServerEntry(pcapMCP: server, grantId: "grn_a", store: "/s/store.sqlite", keyFile: "/s/key").args,
                        ["--grant", "grn_a", "--store", "/s/store.sqlite", "--master-key-file", "/s/key"])
+        XCTAssertEqual(Connector.revokeCommand(["--grant", "grn_a", "--store", "/s/my store.sqlite", "--master-key-file", "/s/key"]),
+                       "pcap grant revoke grn_a --store '/s/my store.sqlite' --master-key-file /s/key")
     }
 
     // MARK: pcap, the command line

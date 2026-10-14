@@ -137,16 +137,19 @@ P="/Applications/Presence Capture.app/Contents/MacOS/pcap"   # Homebrew links it
 
 `connect` gives the agent a grant of its own (standard captures of every
 type, for 30 days, unless `--types`, `--levels` or `--days` say otherwise) and
-adds `pcap-mcp`, by its absolute path, with that grant, to the agent's MCP
-config as `presence-capture`. It shows the change and asks before writing
+adds `pcap-mcp`, by its absolute path, with that grant and the store's
+absolute path (and `--master-key-file`, when one was given), to the agent's
+MCP config as `presence-capture`. It shows the change and asks before writing
 (`--yes` doesn't ask; `--dry-run` only shows), copies the config aside first,
 beside itself, and revokes the grant of any entry it replaces. A grant whose
 config wasn't written, because the answer was no or the write failed, is
 revoked again; one that can't be revoked is reported, with the command that
-revokes it. A config that changes while the change is on screen is shown
-again, as it is now, before anything is written. Connecting another store
-(`--store`, `--master-key-file`, or `PRESENCE_CAPTURE_HOME`) names it in the
-entry, by absolute path, since `pcap-mcp` otherwise opens the app's.
+revokes it in its own store. A config that changes while the change is on
+screen is shown again, as it is now, before anything is written; two
+connections take turns, and neither waits more than ten seconds for the other
+or a minute for `claude`. With `CLAUDE_CONFIG_DIR` set, Claude Code keeps its
+settings where this can't be sure of finding them, so `connect claude-code`
+refuses: add the entry by hand.
 
 | Client | Config | How it's changed |
 |--------|--------|------------------|
@@ -154,7 +157,8 @@ entry, by absolute path, since `pcap-mcp` otherwise opens the app's.
 | Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` | the file, with every other key kept; quit and reopen Claude Desktop |
 | Cursor | `~/.cursor/mcp.json` | the file, with every other key kept |
 
-By hand, the entry is the same for each (Claude Desktop's has no `type`):
+By hand, the entry is the same for each (Claude Desktop's has no `type`).
+With no `--store`, `pcap-mcp` opens the app's store:
 
 ```json
 "presence-capture": {
@@ -177,7 +181,7 @@ not at once.
 | Connect an Agent → Claude Code… / Claude Desktop… / Cursor… | What `pcap connect` does: a grant of its own for 30 days, and `pcap-mcp` in the agent's MCP config. The change is shown, with its diff, and asked about; the config is copied aside first |
 | Agents Read… | Every agent's grant, with Withdraw…, and what each was given, day by day, by tool and kind: counts from the egress log, never content |
 | Hear the Microphone / Hear System Audio | Each input device on or off |
-| Keep Captures For → 1 Day … 1 Year | Retention (ADR 0003). A shorter period erases what's older at once, so it's asked first |
+| Keep Captures For → 1 Day … 1 Year | Retention (ADR 0003). A shorter period erases what's older at once, so it's asked first, and it's kept only once that's revoked: if the store can't, the period stays as it was |
 | Edit Excluded Apps and Windows… | Your list, one fragment a line, applied within seconds. If it can't be read, nothing is captured |
 | Set Up Presence Capture… | The first-run window, again: each permission, what it's for, and connecting an agent |
 | Check for Updates… | Asks GitHub for the latest release and offers its page if it's newer. Only when chosen: it's the one request the app makes |

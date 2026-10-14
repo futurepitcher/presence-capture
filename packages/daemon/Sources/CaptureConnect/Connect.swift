@@ -29,19 +29,19 @@ public enum Client: String, CaseIterable, Sendable {
 public let serverName = "presence-capture"
 
 /// The server a client is given: `pcap-mcp` by its absolute path, reading through its grant, from
-/// the store the grant is in.
+/// the store the grant is in, named by its absolute path: an agent's environment is its own, so
+/// nothing is left for pcap-mcp to work out.
 public struct ServerEntry: Equatable, Sendable {
     public var command: String
     public var args: [String]
 
-    /// `store` and `keyFile`, absolute, when they aren't the app's own: the server opens the app's
-    /// store, with its key from the Keychain, unless it's told otherwise.
-    public init(pcapMCP: String, grantId: String, store: String? = nil, keyFile: String? = nil) {
+    /// `store` absolute; `keyFile`, absolute, only for a store whose key isn't the Keychain's.
+    public init(pcapMCP: String, grantId: String, store: String, keyFile: String? = nil) {
         command = pcapMCP
-        args = ["--grant", grantId] + (store.map { ["--store", $0] } ?? []) + (keyFile.map { ["--master-key-file", $0] } ?? [])
+        args = ["--grant", grantId, "--store", store] + (keyFile.map { ["--master-key-file", $0] } ?? [])
     }
 
-    var grantId: String { Connector.grantId(args) ?? "" }
+    var grantId: String { Connector.option("--grant", args) ?? "" }
 
     /// As the client's config holds it. Claude Desktop's documented form has no `type`.
     func json(for client: Client) -> [String: Any] {
@@ -56,28 +56,35 @@ public enum ConnectError: Error, CustomStringConvertible, Equatable {
     case unreadable(path: String, why: String)
     /// The config changed after the change to it was worked out: nothing was written.
     case changed(path: String)
+    /// Another connection held the config for longer than `Connector.lockWait`: nothing was written.
+    case busy(path: String)
+    /// Something about this Mac means the client's config can't be found for sure: nothing was done.
+    case unsupported(String)
     /// Claude Code's own command isn't installed where it can be found.
-    case claudeNotFound(command: String)
+    case claudeNotFound
     /// `claude` refused; what it said.
     case claudeFailed(command: String, output: String)
     /// The entry that was there was removed, and the new one couldn't be added: whether the old one
     /// was put back, and where the config was copied before.
     case claudeAddFailed(command: String, output: String, restored: Bool, backup: String?)
-    /// A grant that should have been withdrawn couldn't be: it can still read until it's revoked.
-    case grantLeft(grantId: String, after: String, why: String)
+    /// A grant that should have been withdrawn couldn't be: it can still read until it's revoked,
+    /// with the command that does it.
+    case grantLeft(grantId: String, after: String, why: String, revoke: String)
 
     public var description: String {
         switch self {
         case .unreadable(let path, let why): return "\(path) can't be added to (\(why)); it's left as it is"
         case .changed(let path): return "\(path) changed while the change to it was being shown; nothing was written. Connect again to see it as it is now"
-        case .claudeNotFound(let command): return "Claude Code's `claude` command wasn't found. Install Claude Code, or run this yourself:\n  \(command)"
+        case .busy(let path): return "another connection is changing \(path); nothing was written. Try again in a moment"
+        case .unsupported(let why): return why
+        case .claudeNotFound: return "Claude Code's `claude` command wasn't found. Install Claude Code, then connect again"
         case .claudeFailed(let command, let output): return "`\(command)` failed:\n\(output)"
         case .claudeAddFailed(let command, let output, let restored, let backup):
             return "`\(command)` failed:\n\(output)\n" + (restored
                 ? "The connection that was there is put back as it was."
                 : "The connection that was there couldn't be put back\(backup.map { "; Claude Code's config as it was is in \($0)" } ?? "").")
-        case .grantLeft(let grantId, let after, let why):
-            return "\(after); and its grant \(grantId) couldn't be withdrawn (\(why)). Revoke it: pcap grant revoke \(grantId)"
+        case .grantLeft(let grantId, let after, let why, let revoke):
+            return "\(after); and its grant \(grantId) couldn't be withdrawn (\(why)). Revoke it:\n  \(revoke)"
         }
     }
 }
@@ -93,6 +100,8 @@ public struct ConnectPlan: Sendable {
     public let diff: String
     /// The grant the entry this replaces reads through, revoked once the change is made.
     public let replacing: String?
+    /// That entry's arguments: which store its grant is in.
+    let replacedArgs: [String]
     /// Anything that changes what the client does with it.
     public let notes: [String]
     /// What the change was worked out from: the file's bytes, or for Claude Code its entry. It's
@@ -115,12 +124,31 @@ public struct Connector: Sendable {
     /// Claude Code's `claude` command, when it's installed.
     public var claude: URL?
     public var now: @Sendable () -> Date
+    /// The environment `claude` runs with, and whose settings say where configs are.
+    public var environment: [String: String]
 
-    public init(home: URL = Connector.home(), claude: URL? = Connector.findClaude(),
+    /// How long to wait for another connection's turn, and for `claude` to finish, before giving up:
+    /// a connection never holds the app (or a terminal) indefinitely.
+    public static let lockWait: TimeInterval = 10
+    public static let claudeWait: TimeInterval = 60
+
+    public init(environment: [String: String] = ProcessInfo.processInfo.environment, home: URL? = nil, claude: URL?? = nil,
                 now: @escaping @Sendable () -> Date = { Date() }) {
+        let home = home ?? Connector.home(environment: environment)
+        self.environment = environment
         self.home = home
-        self.claude = claude
+        self.claude = claude ?? Connector.findClaude(environment: environment, home: home)
         self.now = now
+    }
+
+    /// What has to hold before anything is issued or written for `client`.
+    public func check(_ client: Client) throws {
+        guard client == .claudeCode else { return }
+        // It moves Claude Code's settings to a place of its own, which this can't be sure of finding.
+        if environment["CLAUDE_CONFIG_DIR"] != nil {
+            throw ConnectError.unsupported("CLAUDE_CONFIG_DIR is set, so Claude Code keeps its settings where this can't be sure of finding them. Unset it, or add the entry by hand (packages/daemon/README.md)")
+        }
+        if claude == nil { throw ConnectError.claudeNotFound }
     }
 
     public func file(for client: Client) -> URL {
@@ -133,20 +161,20 @@ public struct Connector: Sendable {
 
     /// The change, worked out but not made: the client's config is read, never written.
     public func plan(_ client: Client, entry: ServerEntry) throws -> ConnectPlan {
+        try check(client)
         let file = file(for: client)
         let bytes = try read(file)
         let root = try Self.root(bytes, file)
         var servers = root["mcpServers"] as? [String: Any] ?? [:]
         let old = servers[serverName] as? [String: Any]
-        let replacing = (old?["args"] as? [String]).flatMap(Self.grantId)
+        let replacedArgs = old?["args"] as? [String] ?? []
+        let replacing = Self.option("--grant", replacedArgs)
         let new = entry.json(for: client)
 
         if client == .claudeCode {
             // Changed through `claude mcp`, Claude Code's supported way: its file holds its own state too.
             let add = ["mcp", "add-json", serverName, PrettyJSON.compact(new), "--scope", "user"]
-            guard let claude else {
-                throw ConnectError.claudeNotFound(command: (["claude"] + add).map(Self.shellQuoted).joined(separator: " "))
-            }
+            guard let claude else { throw ConnectError.claudeNotFound }
             var notes: [String] = []
             for (project, settings) in (root["projects"] as? [String: Any] ?? [:]).sorted(by: { $0.key < $1.key }) {
                 if ((settings as? [String: Any])?["mcpServers"] as? [String: Any])?[serverName] != nil {
@@ -155,7 +183,7 @@ public struct Connector: Sendable {
             }
             let before = old.map { PrettyJSON.text($0) } ?? ""
             return ConnectPlan(client: client, grantId: entry.grantId, file: file, diff: LineDiff.render(before, PrettyJSON.text(new)),
-                               replacing: replacing, notes: notes, before: old.map { Data(PrettyJSON.compact($0).utf8) },
+                               replacing: replacing, replacedArgs: replacedArgs, notes: notes, before: old.map { Data(PrettyJSON.compact($0).utf8) },
                                write: .claude(claude, add: add))
         }
 
@@ -164,7 +192,7 @@ public struct Connector: Sendable {
         changed["mcpServers"] = servers
         let after = PrettyJSON.text(changed)
         return ConnectPlan(client: client, grantId: entry.grantId, file: file, diff: LineDiff.render(bytes.map { String(decoding: $0, as: UTF8.self) } ?? "", after),
-                           replacing: replacing, notes: [], before: bytes, write: .file(after))
+                           replacing: replacing, replacedArgs: replacedArgs, notes: [], before: bytes, write: .file(after))
     }
 
     /// A config's bytes; nil only when there's no file. A file that's there but can't be read, or
@@ -220,9 +248,13 @@ public struct Connector: Sendable {
                 try run(claude, ["mcp", "remove", serverName, "--scope", "user"])
                 do {
                     try run(claude, add)
-                } catch ConnectError.claudeFailed(let command, let output) {
-                    // Removed, and not replaced: what was there goes back.
+                } catch {
+                    // Removed, and not replaced, however it failed: what was there goes back.
                     let restored = (try? run(claude, ["mcp", "add-json", serverName, previous, "--scope", "user"])) != nil
+                    let (command, output): (String, String)
+                    if case ConnectError.claudeFailed(let c, let o) = error { (command, output) = (c, o) } else {
+                        (command, output) = ((["claude"] + add).map(Self.shellQuoted).joined(separator: " "), "\(error)")
+                    }
                     throw ConnectError.claudeAddFailed(command: command, output: output, restored: restored, backup: backup?.path)
                 }
             }
@@ -246,13 +278,17 @@ public struct Connector: Sendable {
     }
 
     /// Runs `body` holding an advisory lock on `folder`, which connections take and the clients
-    /// don't: `pcap connect` and the menu's Connect an Agent… take turns.
+    /// don't: `pcap connect` and the menu's Connect an Agent… take turns, waiting at most `lockWait`.
     private func locked<T>(_ folder: URL, _ body: () throws -> T) throws -> T {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let fd = open(folder.path, O_RDONLY)
         guard fd >= 0 else { return try body() }
         defer { close(fd) }
-        flock(fd, LOCK_EX)
+        let deadline = Date().addingTimeInterval(Self.lockWait)
+        while flock(fd, LOCK_EX | LOCK_NB) != 0 {
+            guard Date() < deadline else { throw ConnectError.busy(path: folder.path) }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
         defer { flock(fd, LOCK_UN) }
         return try body()
     }
@@ -262,7 +298,7 @@ public struct Connector: Sendable {
         process.executableURL = claude
         process.arguments = arguments
         // An app's PATH is short; `claude` may be a script that needs node beside it.
-        var environment = ProcessInfo.processInfo.environment
+        var environment = self.environment
         let path = [claude.deletingLastPathComponent().path, "/opt/homebrew/bin", "/usr/local/bin", environment["PATH"] ?? "/usr/bin:/bin"]
         environment["PATH"] = path.joined(separator: ":")
         environment["HOME"] = home.path
@@ -271,11 +307,25 @@ public struct Connector: Sendable {
         process.standardOutput = output
         process.standardError = output
         process.standardInput = FileHandle.nullDevice
+        let ended = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in ended.signal() }
         try process.run()
-        let said = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        process.waitUntilExit()
+        // Read as it comes, so a chatty `claude` never blocks on a full pipe.
+        var said = Data()
+        let reading = DispatchQueue(label: "presence.connect.claude")
+        let done = DispatchSemaphore(value: 0)
+        reading.async {
+            said = output.fileHandleForReading.readDataToEndOfFile()
+            done.signal()
+        }
+        let command = (["claude"] + arguments).map(Self.shellQuoted).joined(separator: " ")
+        guard ended.wait(timeout: .now() + Self.claudeWait) == .success else {
+            process.terminate()
+            throw ConnectError.claudeFailed(command: command, output: "it didn't finish within \(Int(Self.claudeWait)) seconds")
+        }
+        done.wait()
         guard process.terminationStatus == 0 else {
-            throw ConnectError.claudeFailed(command: (["claude"] + arguments).map(Self.shellQuoted).joined(separator: " "), output: said)
+            throw ConnectError.claudeFailed(command: command, output: String(decoding: said, as: UTF8.self))
         }
     }
 
@@ -293,11 +343,21 @@ public struct Connector: Sendable {
             .first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
 
-    /// The grant an entry's arguments name.
-    static func grantId(_ args: [String]) -> String? {
-        guard let index = args.firstIndex(of: "--grant"), index + 1 < args.count else { return nil }
+    /// An option's value in an entry's arguments.
+    static func option(_ name: String, _ args: [String]) -> String? {
+        guard let index = args.firstIndex(of: name), index + 1 < args.count else { return nil }
         return args[index + 1]
     }
+
+    /// The command that revokes the grant an entry's arguments name, in the store they name.
+    public static func revokeCommand(_ args: [String]) -> String {
+        var words = ["pcap", "grant", "revoke", option("--grant", args) ?? "<grant_id>"]
+        if let store = option("--store", args) { words += ["--store", store] }
+        if let key = option("--master-key-file", args) { words += ["--master-key-file", key] }
+        return words.map(shellQuoted).joined(separator: " ")
+    }
+
+    static func standardized(_ path: String) -> String { URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path }
 
     /// A word as a shell reads it back, for a command shown to the person to run.
     static func shellQuoted(_ word: String) -> String {
@@ -312,8 +372,8 @@ public struct Connection: Sendable {
     public let expiresAt: Date
     public let backup: URL?
     public let revoked: String?
-    /// The replaced entry's grant, which couldn't be revoked, and why.
-    public let stillActive: (grantId: String, why: String)?
+    /// The replaced entry's grant, which couldn't be revoked: why, and the command that revokes it.
+    public let stillActive: (grantId: String, why: String, revoke: String)?
 }
 
 extension Connector {
@@ -327,13 +387,18 @@ extension Connector {
     /// `entry` makes the server entry for the grant.
     public func connect(_ client: Client, store: CaptureStore, grant: NewGrant, entry: (String) -> ServerEntry,
                         confirm: (ConnectPlan) throws -> Bool) throws -> Connection? {
+        // Before a grant is issued: one issued for nothing would only be withdrawn again.
+        try check(client)
         let grantId = try store.issueGrant(grant)
+        let new = entry(grantId)
         func withdraw(after reason: String) throws {
-            do { try store.revokeGrant(grantId) } catch { throw ConnectError.grantLeft(grantId: grantId, after: reason, why: "\(error)") }
+            do { try store.revokeGrant(grantId) } catch {
+                throw ConnectError.grantLeft(grantId: grantId, after: reason, why: "\(error)", revoke: Self.revokeCommand(new.args))
+            }
         }
         let made: (plan: ConnectPlan, backup: URL?)?
         do {
-            made = try confirmAndApply(client, entry: entry(grantId), confirm: confirm)
+            made = try confirmAndApply(client, entry: new, confirm: confirm)
         } catch {
             try withdraw(after: "\(error)")
             throw error
@@ -342,11 +407,24 @@ extension Connector {
             try withdraw(after: "Nothing was written")
             return nil
         }
-        // The config now names the new grant; the old one reads for nothing, so it goes.
+        // The config now names the new grant; the old one reads for nothing, so it goes. It's revoked
+        // in its own store: this one, unless the entry it was in named another.
         var revoked: String?
-        var stillActive: (grantId: String, why: String)?
+        var stillActive: (grantId: String, why: String, revoke: String)?
         if let old = made.plan.replacing, old != grantId {
-            do { if try store.revokeGrant(old) { revoked = old } } catch { stillActive = (old, "\(error)") }
+            let revoke = Self.revokeCommand(made.plan.replacedArgs)
+            let here = Self.option("--store", new.args).map(Self.standardized)
+            let there = Self.standardized(Self.option("--store", made.plan.replacedArgs) ?? CaptureStore.defaultHome + "/store.sqlite")
+            if here != there {
+                stillActive = (old, "it's in another store, \(there)", revoke)
+            } else {
+                do {
+                    if try store.revokeGrant(old) { revoked = old }
+                    else if try store.grants().first(where: { $0.grantId == old }) == nil { stillActive = (old, "it isn't in this store", revoke) }
+                } catch {
+                    stillActive = (old, "\(error)", revoke)
+                }
+            }
         }
         return Connection(grantId: grantId, expiresAt: grant.expiresAt, backup: made.backup, revoked: revoked, stillActive: stillActive)
     }
