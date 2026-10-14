@@ -181,7 +181,8 @@ export function createRecall({ store, grantId }) {
     /**
      * What the person is doing now: the latest session; the latest activity,
      * which says so if the person is idle or locked now; the session's latest
-     * screen text; and anything said in the five minutes before this call.
+     * screen text; and everything said in the five minutes before this call,
+     * newest first, so a grant's row cap drops the oldest.
      */
     now() {
       return consistent(() => {
@@ -194,10 +195,10 @@ export function createRecall({ store, grantId }) {
         `).get(session?.started_at ?? '9999-12-31T23:59:59.999Z', end);
         const said = memory.prepare(`
           SELECT capture_id FROM doc WHERE capture_type = 'audio_transcript' AND captured_at >= ?
-          ORDER BY captured_at DESC, sequence DESC LIMIT 1
-        `).get(new Date(Date.now() - 5 * 60_000).toISOString());
+          ORDER BY captured_at DESC, sequence DESC
+        `).all(new Date(Date.now() - 5 * 60_000).toISOString());
         // With no session yet (only idle or locked time so far), the latest activity still says so.
-        const wanted = [...new Set([session?.capture_ids.at(-1), latest?.capture_id, screen?.capture_id, said?.capture_id].filter(Boolean))];
+        const wanted = [...new Set([session?.capture_ids.at(-1), latest?.capture_id, screen?.capture_id, ...said.map((r) => r.capture_id)].filter(Boolean))];
         return { session, envelopes: serve('now', 'now', wanted) };
       });
     },
