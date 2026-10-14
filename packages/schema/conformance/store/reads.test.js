@@ -95,3 +95,15 @@ test('store ADR 0008: an output number is never given twice, even after the outp
     db.close();
   }
 }));
+
+test('store: a malformed number in a read is a bad request, never read as another number', () => withStore(async ({ call }) => {
+  await call('append', screenText('one'));
+  const { grant_id: grant } = await call('issue_grant', { client_id: 'agent', expires_at: FUTURE });
+  for (const limit of ['invalid', 1.5, -1, true]) {
+    await assert.rejects(call('read', { grant_id: grant, tool: 'recent', limit }), { code: 'bad_request' }, `read limit ${JSON.stringify(limit)}`);
+    await assert.rejects(call('read_outputs', { grant_id: grant, tool: 'index', limit }), { code: 'bad_request' }, `read_outputs limit ${JSON.stringify(limit)}`);
+  }
+  for (const after of ['invalid', 1.5, true]) {
+    await assert.rejects(call('read_outputs', { grant_id: grant, tool: 'index', after_output_sequence: after }), { code: 'bad_request' }, `cursor ${JSON.stringify(after)}`);
+  }
+}));

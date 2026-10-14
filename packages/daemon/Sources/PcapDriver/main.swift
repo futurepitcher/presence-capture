@@ -27,6 +27,18 @@ func required(_ args: [String: Any], _ key: String) throws -> String {
 
 func json(_ value: Any?) -> Any { value ?? NSNull() }
 
+/// An optional whole-number argument: omitted or null is nil. Anything else that isn't a whole
+/// number at least `atLeast` (text, a fraction, true or false) is a bad request, as in the reference,
+/// never quietly read as some other number.
+func wholeNumber(_ args: [String: Any], _ key: String, atLeast: Int? = nil) throws -> Int? {
+    guard let value = args[key], !(value is NSNull) else { return nil }
+    guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+          let whole = Int(exactly: number.doubleValue), whole >= (atLeast ?? Int.min) else {
+        throw DriverError(code: "bad_request", message: "\(key) must be a whole number\(atLeast.map { ", \($0) or more" } ?? "")")
+    }
+    return whole
+}
+
 /// An `append` request's arguments as the store takes them. With no `captured_at`, it's now, as
 /// in the reference.
 func capture(_ args: [String: Any]) throws -> NewCapture {
@@ -94,18 +106,16 @@ func handle(_ op: String, _ args: [String: Any]) throws -> [String: Any] {
     case "read":
         let request = ReadRequest(
             tool: try required(args, "tool"), query: string(args, "query") ?? "", contains: string(args, "contains"),
-            limit: (args["limit"] as? NSNumber)?.intValue, afterSequence: (args["after_sequence"] as? NSNumber)?.intValue)
+            limit: try wholeNumber(args, "limit", atLeast: 0), afterSequence: try wholeNumber(args, "after_sequence"))
         return ["envelopes": try need().read(grantId: try required(args, "grant_id"), request).map(\.foundation)]
     case "read_ids":
         guard let ids = args["capture_ids"] as? [String] else { throw DriverError(code: "bad_request", message: "capture_ids must be a list of capture ids") }
         return ["envelopes": try need().readCaptures(grantId: try required(args, "grant_id"), tool: try required(args, "tool"),
                                                       query: string(args, "query") ?? "", captureIds: ids).map(\.foundation)]
     case "read_outputs":
-        let after = args["after_output_sequence"].flatMap { $0 is NSNull ? nil : $0 }
-        guard after == nil || after is NSNumber else { throw DriverError(code: "bad_request", message: "after_output_sequence must be a whole number") }
         return ["envelopes": try need().readOutputs(grantId: try required(args, "grant_id"), tool: try required(args, "tool"), kind: string(args, "kind"),
-                                                      afterOutputSequence: (after as? NSNumber)?.intValue ?? 0,
-                                                      limit: (args["limit"] as? NSNumber)?.intValue).map(\.foundation)]
+                                                      afterOutputSequence: try wholeNumber(args, "after_output_sequence") ?? 0,
+                                                      limit: try wholeNumber(args, "limit", atLeast: 0)).map(\.foundation)]
     case "content":
         return ["text": json(try need().contentText(try required(args, "capture_id")))]
     case "payload":
