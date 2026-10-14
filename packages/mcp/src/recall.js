@@ -34,8 +34,19 @@ function limitArg(value, fallback) {
  * @param {{store: object, grantId: string}} options  an open store and the
  *   grant this reader recalls under
  */
-export function createRecall({ store, grantId }) {
+/**
+ * An SQLite database in memory and nowhere else: its temporary storage too
+ * (temp_store), so a large sort over unsealed content never spills to a file
+ * outside the store's directory, where no revocation reaches it.
+ */
+export function openMemory() {
   const memory = new DatabaseSync(':memory:');
+  memory.exec('PRAGMA temp_store = MEMORY');
+  return memory;
+}
+
+export function createRecall({ store, grantId }) {
+  const memory = openMemory();
   memory.exec(`
     CREATE TABLE doc (
       capture_id TEXT PRIMARY KEY, sequence INTEGER NOT NULL, captured_at TEXT NOT NULL,
@@ -77,8 +88,16 @@ export function createRecall({ store, grantId }) {
     }
   }
 
-  /** Served by id, through the grant, in the order ranked. */
+  /**
+   * Served by id, through the grant, in the order ranked. Every answer goes
+   * through here, an empty one too, so every answer is authorized and
+   * recorded.
+   */
   const serve = (tool, query, captureIds) => reader().readCaptures({ tool, query, captureIds });
+
+  /** Whether anything was revoked since memory was last brought up to date. */
+  const revokedSinceRefresh = () =>
+    store.db.prepare('SELECT 1 FROM revocation WHERE sequence > ? LIMIT 1').get(afterRevocation) !== undefined;
   const ids = (rows) => rows.map((r) => r.capture_id);
 
   function sessions() {
@@ -139,32 +158,60 @@ export function createRecall({ store, grantId }) {
     },
 
     /**
-     * What the person is doing now: the latest session, and from it the
-     * activity, the screen text and anything said in the last five minutes.
+     * What the person is doing now: the latest session; the latest activity,
+     * which says so if the person is idle or locked now; the session's latest
+     * screen text; and anything said in the five minutes before this call.
      */
     now() {
-      const session = sessions().at(-1) ?? null;
-      if (!session) return { session: null, envelopes: [] };
-      const lastActivity = session.capture_ids.at(-1);
-      const since = session.ended_at ?? new Date().toISOString();
-      const screen = memory.prepare("SELECT capture_id FROM doc WHERE capture_type = 'screen_text' AND captured_at >= ? ORDER BY sequence DESC LIMIT 1")
-        .get(session.started_at);
-      const said = memory.prepare("SELECT capture_id FROM doc WHERE capture_type = 'audio_transcript' AND captured_at >= ? ORDER BY sequence DESC LIMIT 1")
-        .get(new Date(Date.parse(since) - 5 * 60_000).toISOString());
-      const wanted = [lastActivity, screen?.capture_id, said?.capture_id].filter(Boolean);
-      return { session, envelopes: serve('now', 'now', wanted) };
+      return consistent(() => {
+        const session = sessions().at(-1) ?? null;
+        if (!session) return { session: null, envelopes: serve('now', 'now', []) };
+        const end = session.ended_at ?? '9999-12-31T23:59:59.999Z';
+        const latest = memory.prepare("SELECT capture_id FROM doc WHERE capture_type = 'activity' ORDER BY captured_at DESC, sequence DESC LIMIT 1").get();
+        const screen = memory.prepare(`
+          SELECT capture_id FROM doc WHERE capture_type = 'screen_text' AND captured_at >= ? AND captured_at < ?
+          ORDER BY captured_at DESC, sequence DESC LIMIT 1
+        `).get(session.started_at, end);
+        const said = memory.prepare(`
+          SELECT capture_id FROM doc WHERE capture_type = 'audio_transcript' AND captured_at >= ?
+          ORDER BY captured_at DESC, sequence DESC LIMIT 1
+        `).get(new Date(Date.now() - 5 * 60_000).toISOString());
+        const wanted = [...new Set([session.capture_ids.at(-1), latest?.capture_id, screen?.capture_id, said?.capture_id].filter(Boolean))];
+        return { session, envelopes: serve('now', 'now', wanted) };
+      });
     },
 
-    /** One session, by id, and everything captured during it, in order. */
+    /**
+     * One session, by id, and everything captured during it, in order: from
+     * its start up to, not including, the capture that ended it.
+     */
     session({ id, limit } = {}) {
       if (typeof id !== 'string') throw new RangeError('id must be a session id');
-      const session = sessions().find((s) => s.id === id) ?? null;
-      if (!session) return { session: null, envelopes: [] };
-      const rows = memory.prepare('SELECT capture_id FROM doc WHERE captured_at >= ? AND captured_at <= ? ORDER BY captured_at, sequence LIMIT ?')
-        .all(session.started_at, session.ended_at ?? new Date().toISOString(), limitArg(limit, 100));
-      return { session, envelopes: serve('session', id, ids(rows)) };
+      const max = limitArg(limit, 100);
+      return consistent(() => {
+        const session = sessions().find((s) => s.id === id) ?? null;
+        if (!session) return { session: null, envelopes: serve('session', id, []) };
+        const rows = memory.prepare('SELECT capture_id FROM doc WHERE captured_at >= ? AND captured_at < ? ORDER BY captured_at, sequence LIMIT ?')
+          .all(session.started_at, session.ended_at ?? '9999-12-31T23:59:59.999Z', max);
+        return { session, envelopes: serve('session', id, ids(rows)) };
+      });
     },
   };
+
+  /**
+   * A session answer computed from memory and served through the grant, with
+   * nothing revoked in between: a session is derived from several captures,
+   * and the store only re-checks the envelopes it serves. If anything was
+   * revoked meanwhile, memory is brought up to date and the answer computed
+   * again.
+   */
+  function consistent(answer) {
+    for (let attempt = 0; ; attempt++) {
+      const result = answer();
+      if (!revokedSinceRefresh() || attempt === 2) return result;
+      refresh();
+    }
+  }
 
   return {
     /** Runs a tool, after bringing memory up to date with the store. */

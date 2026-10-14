@@ -286,3 +286,58 @@ test('recall: now is the latest session, as cases/sessions.json computes it, wit
   assert.ok(ids(during).includes('func ship() {}'));
   assert.deepEqual(resultOf(await call(rpc, 'session', { id: 'ses_unknown' })), { session: null, envelopes: [] });
 }));
+
+test('recall: now and session are authorized and recorded even when they have nothing to say', () => withServer({
+  grantId: 'grn_nonexistent', seed: [],
+}, async ({ rpc }) => {
+  for (const [tool, args] of [['now', {}], ['session', { id: 'ses_none' }]]) {
+    const res = await call(rpc, tool, args);
+    assert.equal(res.result.isError, true, `${tool} answered a client with no grant`);
+  }
+}));
+
+test('recall: an empty answer is recorded, and a withdrawn grant refuses one', () => withServer({
+  seed: [activity(5, 'Notes', 'Plan')],
+}, async ({ rpc, admin, grantId }) => {
+  assert.deepEqual(resultOf(await call(rpc, 'session', { id: 'ses_none' })), { session: null, envelopes: [] });
+  const tools = admin.db.prepare("SELECT tool FROM egress_record WHERE tool <> 'index'").all().map((r) => r.tool);
+  assert.deepEqual(tools, ['session'], 'an empty answer went unrecorded');
+  admin.revokeGrant(grantId);
+  assert.equal((await call(rpc, 'session', { id: 'ses_none' })).result.isError, true, 'a withdrawn grant was answered');
+  assert.equal((await call(rpc, 'now')).result.isError, true);
+}));
+
+test('recall: a session runs up to, not including, the capture that ended it', () => withServer({
+  seed: [
+    activity(20, 'Notes', 'Plan'),
+    ['standard', 'notes on screen', { capturedAt: ago(15) }],
+    activity(10, 'Xcode', 'app'),
+  ],
+}, async ({ rpc }) => {
+  const { session: current } = resultOf(await call(rpc, 'now'));
+  const { session } = resultOf(await call(rpc, 'session', { id: current.id }));
+  assert.ok(session.ended_at === null);
+  const sessions = resultOf(await call(rpc, 'timeline', { from: ago(30) }));
+  assert.equal(sessions.length, 3);
+  const notesId = `ses_${sessions[0].presence_capture_untrusted.provenance.capture_id}`;
+  const { envelopes } = resultOf(await call(rpc, 'session', { id: notesId }));
+  const contents = ids(envelopes);
+  assert.ok(contents.includes('notes on screen'));
+  assert.ok(!contents.some((c) => c.includes('Xcode')), 'the session took in the capture that ended it');
+}));
+
+test('recall: now while idle says so, and speech is from the five minutes before the call', () => withServer({
+  seed: [
+    activity(30, 'Notes', 'Plan'),
+    ['standard', 'said a while ago', { captureType: 'audio_transcript', source: 'ambient_audio', sourceApp: 'input', extraction: 'asr', capturedAt: ago(25) }],
+    activity(20, 'Notes', 'Plan', 'idle'),
+    ['standard', 'said just now', { captureType: 'audio_transcript', source: 'ambient_audio', sourceApp: 'input', extraction: 'asr', capturedAt: ago(2) }],
+  ],
+}, async ({ rpc }) => {
+  const { session, envelopes } = resultOf(await call(rpc, 'now'));
+  assert.ok(session.ended_at, 'an idle person was shown as still in the session');
+  const contents = ids(envelopes);
+  assert.ok(contents.some((c) => c.includes('"idle"')), 'now did not say the person is idle');
+  assert.ok(contents.includes('said just now'));
+  assert.ok(!contents.includes('said a while ago'), 'speech from well before the call was given as the last five minutes');
+}));

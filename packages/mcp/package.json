@@ -9,7 +9,7 @@
   "files": ["src", "conformance"],
   "engines": { "node": ">=22.13.0" },
   "scripts": {
-    "test": "node --test conformance/*.test.js",
+    "test": "node --test conformance/*.test.js test/*.test.js",
     "conformance": "node --test conformance/*.test.js"
   },
   "dependencies": {},
