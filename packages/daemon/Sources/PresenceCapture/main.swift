@@ -518,16 +518,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// What was heard up to now is kept before the app goes.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Capture stops first, at once; then what was heard and noted is written, off the main
+        // thread (the store may be waiting on SQLite), and the app goes once it is.
         sensors?.stop()
-        activity?.flush()
-        guard let audio else { return .terminateNow }
         timers.forEach { $0.invalidate() }
         timers = []
-        Task { @MainActor in
-            await audio.finish()
-            NSApp.reply(toApplicationShouldTerminate: true)
-        }
+        holdCapture(going: true)
+        Self.finishWriting(activity: activity, audio: audio) { NSApp.reply(toApplicationShouldTerminate: true) }
         return .terminateLater
+    }
+
+    /// Writes what's queued and finishes listening, off the main thread; then `done`, on it.
+    static func finishWriting(activity: ActivityCapturer?, audio: Listener?, done: @escaping () -> Void) {
+        Task.detached {
+            activity?.flush()
+            await audio?.finish()
+            await MainActor.run { done() }
+        }
     }
 }
 

@@ -46,6 +46,30 @@ final class ActivityCapturerTests: XCTestCase {
         XCTAssertEqual(try store.rows("SELECT COUNT(*) FROM capture_event").first?.int(0), 1)
     }
 
+    /// Quitting with a write waiting on a busy store: the main thread isn't held; the app goes once
+    /// the write is done.
+    func testQuittingNeverWaitsOnTheMainThreadForABusyStore() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try CaptureStore(path: dir.appendingPathComponent("store.sqlite").path, masterKey: SymmetricKey(size: .bits256))
+        let capturer = ActivityCapturer(store: store, log: { _ in }) { .init(locked: false, idle: 0, app: ("Notes", "com.apple.Notes"), window: "Plans") }
+        let held = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            store.lock.withLock {
+                held.signal()
+                Thread.sleep(forTimeInterval: 1)
+            }
+        }
+        held.wait()
+        capturer.tick(fragments: [], seesScreen: true)
+        let gone = expectation(description: "the app goes")
+        let started = Date()
+        AppDelegate.finishWriting(activity: capturer, audio: nil) { gone.fulfill() }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.1, "quitting waited on the main thread")
+        wait(for: [gone], timeout: 5)
+        XCTAssertEqual(try store.rows("SELECT COUNT(*) FROM capture_event").first?.int(0), 1, "the app went before what was noted was written")
+    }
+
     /// The store held for seconds (another writer, or a revocation waiting on SQLite) never holds
     /// up the tick: it runs on the main thread, where locking, sleep and Pause are heard.
     func testATickNeverWaitsForABusyStore() throws {

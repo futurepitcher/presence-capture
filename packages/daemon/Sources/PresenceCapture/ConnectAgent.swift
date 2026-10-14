@@ -27,21 +27,27 @@ enum ConnectAgent {
         }
         let grant = NewGrant(clientId: client.rawValue, expiresAt: Date().addingTimeInterval(Double(days) * 86_400))
         let path = URL(fileURLWithPath: storePath).standardizedFileURL.path
+        // pcap by its full path, for any command shown: a DMG install doesn't put it on PATH.
+        let pcap = URL(fileURLWithPath: server).deletingLastPathComponent().appendingPathComponent("pcap").path
         connecting = true
         DispatchQueue.global(qos: .userInitiated).async {
             let result = Result {
-                try Connector().connect(client, store: store, grant: grant,
-                                        entry: { ServerEntry(pcapMCP: server, grantId: $0, store: path) },
-                                        confirm: { plan in DispatchQueue.main.sync { confirm(plan, grant: grant) } })
+                try Connector(pcap: pcap).connect(client, store: store, grant: grant,
+                                                  entry: { ServerEntry(pcapMCP: server, grantId: $0, store: path) },
+                                                  confirm: { plan in DispatchQueue.main.sync { confirm(plan, grant: grant) } })
             }
+            // Whether a grant left active is one Agents Read… can withdraw: one in this store.
+            let leftHere = (try? result.get()?.stillActive).flatMap { left in
+                left.flatMap { left in try? store.grants().contains { $0.grantId == left.grantId && $0.isActive() } }
+            } ?? false
             DispatchQueue.main.async {
                 connecting = false
-                show(result, client: client, log: log)
+                show(result, client: client, leftHere: leftHere, log: log)
             }
         }
     }
 
-    private static func show(_ result: Result<Connection?, Error>, client: Client, log: (String) -> Void) {
+    private static func show(_ result: Result<Connection?, Error>, client: Client, leftHere: Bool, log: (String) -> Void) {
         NSApp.activate(ignoringOtherApps: true)
         switch result {
         case .success(nil):
@@ -54,7 +60,8 @@ enum ConnectAgent {
             if connection.revoked != nil { said.append("The grant of the connection it replaced is withdrawn.") }
             if let left = connection.stillActive {
                 log("connect.replaced_grant_left client=\(client.rawValue)")
-                said.append("The grant of the connection it replaced couldn't be withdrawn (\(left.why)), and can still read. Withdraw it in Agents Read…, or with:\n\(left.revoke)")
+                said.append("The grant of the connection it replaced couldn't be withdrawn (\(left.why)), and can still read. "
+                    + (leftHere ? "Withdraw it in Agents Read…, or with:\n\(left.revoke)" : "It isn't in this store, so Agents Read… can't withdraw it. In Terminal:\n\(left.revoke)"))
             }
             tell("\(client.name) is connected", said.joined(separator: "\n\n"))
         case .failure(ConnectError.claudeNotFound):
