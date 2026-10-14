@@ -35,12 +35,37 @@ final class ActivityCapturerTests: XCTestCase {
         }
 
         capturer.tick(fragments: [], seesScreen: true)
+        capturer.flush()
         XCTAssertEqual(try store.rows("SELECT COUNT(*) FROM capture_event").first?.int(0), 0, "activity read during a Forget was kept")
         XCTAssertEqual(log.lines, ["append.refused_revoked kind=activity"])
 
         // The same activity, seen after the Forget, is kept: it was the moment that was refused, not the activity.
         forgetWhileReading = false
         capturer.tick(fragments: [], seesScreen: true)
+        capturer.flush()
         XCTAssertEqual(try store.rows("SELECT COUNT(*) FROM capture_event").first?.int(0), 1)
+    }
+
+    /// The store held for seconds (another writer, or a revocation waiting on SQLite) never holds
+    /// up the tick: it runs on the main thread, where locking, sleep and Pause are heard.
+    func testATickNeverWaitsForABusyStore() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try CaptureStore(path: dir.appendingPathComponent("store.sqlite").path, masterKey: SymmetricKey(size: .bits256))
+        let capturer = ActivityCapturer(store: store, log: { _ in }) { .init(locked: false, idle: 0, app: ("Notes", "com.apple.Notes"), window: "Plans") }
+        let held = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            store.lock.withLock {
+                held.signal()
+                Thread.sleep(forTimeInterval: 1.5)
+            }
+        }
+        held.wait()
+        let started = Date()
+        capturer.tick(fragments: [], seesScreen: true)
+        capturer.reset()
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.2, "the tick waited for the store")
+        capturer.flush()
+        XCTAssertEqual(try store.rows("SELECT COUNT(*) FROM capture_event").first?.int(0), 1, "the activity wasn't written once the store was free")
     }
 }

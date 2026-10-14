@@ -30,6 +30,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// main thread: a store waiting on SQLite's lock (up to five seconds) must not hold up the main
     /// thread, where locking, sleep and Pause are heard.
     private let admin = DispatchQueue(label: "presence.capture.admin")
+    /// A Keep Captures For change under way: until it's done, another isn't started, so a slow one
+    /// can't finish after a later choice and undo it.
+    private var retentionChanging = false
     private var audio: Listener?
     private var store: CaptureStore?
     private var capturer: ScreenCapturer?
@@ -447,6 +450,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// nothing yet.
     @objc private func setRetention(_ sender: NSMenuItem) {
         let days = sender.tag
+        guard !retentionChanging else {
+            let busy = NSAlert()
+            busy.messageText = "Keep Captures For is still being changed"
+            busy.informativeText = "Older captures are being erased for the last change. Choose again once it's done."
+            NSApp.activate(ignoringOtherApps: true)
+            busy.runModal()
+            return
+        }
         guard days != retentionDays else { return }
         guard days < retentionDays else {
             defaults.set(days, forKey: "retentionDays")
@@ -461,6 +472,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "Cancel")
         NSApp.activate(ignoringOtherApps: true)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
+        retentionChanging = true
         admin.async {
             let outcome = Result { try store.retain(days: Double(days)) }
             DispatchQueue.main.async { [weak self] in self?.retained(outcome, days: days) }
@@ -469,6 +481,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// The period is kept only once what's older is revoked.
     private func retained(_ outcome: Result<Revocation?, Error>, days: Int) {
+        retentionChanging = false
         let said = NSAlert()
         switch outcome {
         case .success(let result):
@@ -506,6 +519,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// What was heard up to now is kept before the app goes.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         sensors?.stop()
+        activity?.flush()
         guard let audio else { return .terminateNow }
         timers.forEach { $0.invalidate() }
         timers = []

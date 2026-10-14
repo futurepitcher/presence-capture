@@ -48,7 +48,9 @@ struct OnboardingView: View {
                  button: "Allow Screen Recording…", action: allowScreen)
             if canHear {
                 step(2, "Microphone", required: false, done: allowed.microphone && heard,
-                     "Hears the room, as words, on this Mac. No audio is kept. Off until you allow it here; turn it off any time with Hear the Microphone.",
+                     "Hears the room, as words, on this Mac. No audio is kept. Off until you allow it here; turn it off any time with Hear the Microphone. "
+                        + "It hears everyone near you, not only you: they haven't agreed to this by your installing it, and recording "
+                        + "others is governed by law where you are. Telling them, and having their consent, is yours to do.",
                      button: allowed.microphone ? "Hear the Microphone" : "Allow and Hear the Microphone…", action: allowMicrophone)
             } else {
                 step(2, "Microphone", required: false, done: false, "Hearing needs macOS 26.", button: nil, action: {})
