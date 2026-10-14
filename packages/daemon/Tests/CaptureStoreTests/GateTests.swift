@@ -35,6 +35,21 @@ final class GateTests: XCTestCase {
         }
     }
 
+    func testRefusesAnObservationStampedInTheFutureAndKeepsNamesShort() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try CaptureStore(path: dir.appendingPathComponent("store.sqlite").path, masterKey: Seal.newKey())
+        let gate = Gate(store: store, source: "sensor:clock")
+        try gate.ingest(["at": "2200-01-01T00:00:00Z", "kind": "screen", "app": "Notes", "window": "Plans", "text": "from the future"], fragments: [])
+        XCTAssertEqual(gate.stats.invalid, 1, "nothing could Forget a capture stamped in the future")
+        let soon = CaptureStore.iso(Date().addingTimeInterval(60))
+        try gate.ingest(["at": soon, "kind": "activity", "app": "No\ntes" + String(repeating: "x", count: 1000), "window": "Plans", "state": "active"], fragments: [])
+        XCTAssertEqual(gate.stats.appended, 1, "a clock a little fast is still kept")
+        let app = try XCTUnwrap(store.rows("SELECT source_app FROM capture_event").first?.optionalText(0))
+        XCTAssertEqual(app.unicodeScalars.count, Gate.nameLength)
+        XCTAssertTrue(app.hasPrefix("Notesxxx"), app)
+    }
+
     func testKeepsAMarkedObservationOnceEvenAfterItsRevoked() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: dir) }

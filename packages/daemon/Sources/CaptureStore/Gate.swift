@@ -91,13 +91,25 @@ public final class Gate: @unchecked Sendable {
         }
     }
 
+    /// How far ahead of now an observation may be stamped (clocks differ a little): further, and
+    /// it's refused, since nothing (Forget, retention) can reach what's stamped in the future.
+    public static let futureSkew: TimeInterval = 300
+    /// The longest an app, bundle or device name is kept, with no control characters: they're plain
+    /// metadata.
+    public static let nameLength = 256
+
     /// One observation, as parsed from JSON, against the user's exclusion list.
     public func ingest(_ value: Any?, fragments: [String]) throws {
-        guard Observations.error(value) == nil, let o = value as? [String: Any], let at = (o["at"] as? String).flatMap(CaptureStore.date) else {
+        guard Observations.error(value) == nil, let o = value as? [String: Any], let at = (o["at"] as? String).flatMap(CaptureStore.date),
+              at <= Date().addingTimeInterval(Self.futureSkew) else {
             lock.withLock { counts.invalid += 1 }
             return
         }
-        let text = { (key: String) in o[key] as? String }
+        let text = { (key: String) -> String? in
+            guard let value = o[key] as? String else { return nil }
+            guard ["app", "bundle", "device"].contains(key) else { return value }
+            return String(String.UnicodeScalarView(value.unicodeScalars.filter { $0.value >= 0x20 && $0.value != 0x7f }.prefix(Self.nameLength)))
+        }
         func clean(_ value: String) -> String {
             let out = Redact.redact(value)
             if out != value { lock.withLock { counts.redacted += 1 } }
