@@ -25,7 +25,8 @@ to do and when, and we will credit you unless you prefer otherwise.
 
 ## Known and documented limits
 
-These are design limits, already public, not vulnerabilities:
+These are design limits, already public, not vulnerabilities. The
+[threat model](docs/threat-model.md) sets them all out, adversary by adversary:
 
 - **Captured content is attacker-controlled.** Any page or document the user
   views can plant text. The untrusted envelope labels this; it cannot stop a
@@ -33,8 +34,8 @@ These are design limits, already public, not vulnerabilities:
   [ADR 0001](docs/adr/0001-serving-trust-boundary.md).
 - **No authentication boundary between local processes** owned by the same user.
   Local transport assumes the user's own account is trusted.
-- **Pre-alpha.** The threat model is incomplete by construction, which is why
-  there is no network transport.
+- **Pre-alpha.** The [threat model](docs/threat-model.md) is incomplete by
+  construction, which is why there is no network transport.
 
 If you think one of these is worse than we have described, that is in scope —
 report it.
