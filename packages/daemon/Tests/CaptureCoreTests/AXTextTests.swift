@@ -76,4 +76,31 @@ final class AXTextTests: XCTestCase {
         for _ in 0..<(AXText.maxDepth * 2) { deep = Node(role: "AXGroup", children: [deep]) }
         XCTAssertNil(AXText.visibleText(Node(role: "AXWindow", frame: window, children: [deep]), window: window), "read past the depth limit")
     }
+
+    func testAnElementWhoseRoleOrSubroleWasntReadIsUnknownNotOpen() {
+        let field = AXText.Answer.text("AXTextField")
+        XCTAssertEqual(AXText.identity(role: field, subrole: .absent)?.subrole, nil)
+        XCTAssertEqual(AXText.identity(role: field, subrole: .absent)?.role, "AXTextField")
+        XCTAssertEqual(AXText.identity(role: field, subrole: .text("AXSecureTextField"))?.subrole, "AXSecureTextField")
+        XCTAssertNil(AXText.identity(role: field, subrole: .failed), "a subrole that failed was taken as absent")
+        XCTAssertNil(AXText.identity(role: .failed, subrole: .absent))
+        XCTAssertNil(AXText.identity(role: .absent, subrole: .absent), "an element with no role")
+        XCTAssertNil(AXText.identity(role: .other, subrole: .absent))
+        // What's read in its place stands for nothing: no text of it, or under it.
+        let window = CGRect(x: 0, y: 0, width: 800, height: 600)
+        let tree = AXText.Node(role: "AXWindow", frame: window, children: [
+            AXText.Node(role: AXText.unreadable, frame: CGRect(x: 10, y: 10, width: 200, height: 20)),
+            AXText.Node(role: "AXStaticText", value: String(repeating: "visible words ", count: 5), frame: CGRect(x: 10, y: 40, width: 400, height: 20)),
+        ])
+        XCTAssertEqual(AXText.visibleText(tree, window: window), String(repeating: "visible words ", count: 5).trimmingCharacters(in: .whitespaces))
+    }
+
+    func testATextAreaWhoseVisibleRangeCantBeReadKeepsNothing() {
+        let text = "shown part, and much more scrolled out of sight"
+        XCTAssertEqual(AXText.visibleValue(text, role: "AXTextArea", visibleRange: CFRange(location: 0, length: 10)), "shown part")
+        XCTAssertNil(AXText.visibleValue(text, role: "AXTextArea", visibleRange: nil), "a text area's whole value was kept")
+        XCTAssertNil(AXText.visibleValue(text, role: "AXTextArea", visibleRange: CFRange(location: -1, length: 4)))
+        XCTAssertEqual(AXText.visibleValue("a label", role: "AXStaticText", visibleRange: nil), "a label")
+        XCTAssertEqual(AXText.visibleValue(text, role: "AXTextArea", visibleRange: CFRange(location: (text as NSString).length - 8, length: 100)), "of sight", "a range running past the end")
+    }
 }
