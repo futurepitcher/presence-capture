@@ -135,6 +135,8 @@ func handle(_ request: [String: Any]) -> [String: Any]? {
             return result(id, ["content": [["type": "text", "text": "authorization denied: \(why)"]], "isError": true])
         } catch ToolError.unknown(let name) {
             return failure(id, -32603, "unknown tool: \(name)")
+        } catch ToolError.changed(let why) {
+            return result(id, ["content": [["type": "text", "text": why]], "isError": true])
         } catch ToolError.invalid(let why) {
             // A malformed argument is the caller's error, and nothing is served.
             return failure(id, -32602, why)

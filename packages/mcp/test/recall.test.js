@@ -49,3 +49,34 @@ test('recall: a session answer reflects a revocation that lands between computin
   recall.close();
   store.close();
 });
+
+test('recall: when revocations keep landing as an answer is served, the caller is told to ask again, never given a stale one', async () => {
+  const { ChangedError } = await import('../src/recall.js');
+  const store = openStore();
+  const at = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const activity = (minutes, app) => store.appendCapture({
+    captureType: 'activity', source: 'activity', privacyLevel: 'standard', extraction: 'none',
+    contentText: JSON.stringify({ app, window: 'w', state: 'active' }), capturedAt: at(minutes),
+  });
+  const newestFirst = [activity(10, 'C'), activity(20, 'B'), activity(30, 'A')];
+  const grantId = store.issueGrant({ clientId: 'agent', expiresAt: FUTURE });
+
+  // Each time an answer is served, another writer forgets the newest activity left.
+  const remaining = [...newestFirst];
+  const racing = Object.create(store);
+  racing.createReader = (id) => {
+    const reader = store.createReader(id);
+    return {
+      ...reader,
+      readCaptures: (request) => {
+        const next = remaining.shift();
+        if (next) store.revoke({ scopeKind: 'capture', scopeValue: next });
+        return reader.readCaptures(request);
+      },
+    };
+  };
+  const recall = createRecall({ store: racing, grantId });
+  assert.throws(() => recall.call('now', {}), ChangedError);
+  recall.close();
+  store.close();
+});

@@ -40,7 +40,8 @@ public final class MemoryIndex {
             let position = Int32(index + 1)
             switch value {
             case nil: sqlite3_bind_null(statement, position)
-            case let text as String: sqlite3_bind_text(statement, position, text, -1, Self.transient)
+            // By its length in bytes, not to the first NUL: text can hold one.
+            case let text as String: _ = text.withCString { sqlite3_bind_text(statement, position, $0, Int32(text.utf8.count), Self.transient) }
             case let number as Int: sqlite3_bind_int64(statement, position, Int64(number))
             default: sqlite3_bind_text(statement, position, "\(value!)", -1, Self.transient)
             }
@@ -50,7 +51,9 @@ public final class MemoryIndex {
             out.append((0..<sqlite3_column_count(statement)).map { column in
                 switch sqlite3_column_type(statement, column) {
                 case SQLITE_INTEGER: return Int(sqlite3_column_int64(statement, column))
-                case SQLITE_TEXT: return String(cString: sqlite3_column_text(statement, column))
+                case SQLITE_TEXT:
+                    let text = sqlite3_column_text(statement, column)!
+                    return String(decoding: UnsafeBufferPointer(start: text, count: Int(sqlite3_column_bytes(statement, column))), as: UTF8.self)
                 default: return nil
                 }
             })

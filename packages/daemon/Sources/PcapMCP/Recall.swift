@@ -124,22 +124,24 @@ final class Recall {
     private static let never = "9999-12-31T23:59:59.999Z"
 
     /// What the person is doing now: the latest session; the latest activity, which says so if the
-    /// person is idle or locked now; the session's latest screen text; and anything said in the five
-    /// minutes before this call.
+    /// person is idle or locked now (or has been only that so far, with no session yet); the
+    /// session's latest screen text; and anything said in the five minutes before this call.
     private func now() throws -> CanonicalJSON {
         try consistent {
-            guard let session = sessions().last else { return Self.result(nil, try serve("now", "now", [])) }
+            let session = sessions().last
             let latest = memory.ids("SELECT capture_id FROM doc WHERE capture_type = 'activity' ORDER BY captured_at DESC, sequence DESC LIMIT 1")
-            let screen = memory.ids("""
-                SELECT capture_id FROM doc WHERE capture_type = 'screen_text' AND captured_at >= ? AND captured_at < ?
-                ORDER BY captured_at DESC, sequence DESC LIMIT 1
-                """, session.startedAt, session.endedAt ?? Self.never)
+            let screen = session.map { session in
+                memory.ids("""
+                    SELECT capture_id FROM doc WHERE capture_type = 'screen_text' AND captured_at >= ? AND captured_at < ?
+                    ORDER BY captured_at DESC, sequence DESC LIMIT 1
+                    """, session.startedAt, session.endedAt ?? Self.never)
+            } ?? []
             let said = memory.ids("""
                 SELECT capture_id FROM doc WHERE capture_type = 'audio_transcript' AND captured_at >= ?
                 ORDER BY captured_at DESC, sequence DESC LIMIT 1
                 """, CaptureStore.iso(Date().addingTimeInterval(-5 * 60)))
             var wanted: [String] = []
-            for id in [session.captureIds.last].compactMap({ $0 }) + latest + screen + said where !wanted.contains(id) { wanted.append(id) }
+            for id in [session?.captureIds.last].compactMap({ $0 }) + latest + screen + said where !wanted.contains(id) { wanted.append(id) }
             return Self.result(session, try serve("now", "now", wanted))
         }
     }
@@ -162,13 +164,13 @@ final class Recall {
     /// envelopes it serves. If anything was revoked meanwhile, memory is brought up to date and the
     /// answer computed again.
     private func consistent(_ answer: () throws -> CanonicalJSON) throws -> CanonicalJSON {
-        var attempt = 0
-        while true {
+        for _ in 0..<3 {
             let result = try answer()
-            if try store.revoked(after: afterRevocation).isEmpty || attempt == 2 { return result }
+            if try store.revoked(after: afterRevocation).isEmpty { return result }
             try refresh()
-            attempt += 1
         }
+        // Never an answer known to be stale: the caller can ask again.
+        throw ToolError.changed("captures were revoked while this was being answered, three times over: ask again")
     }
 
     private func sessions() -> [Sessions.Session] {
@@ -223,4 +225,6 @@ enum ToolError: Error {
     case unknown(String)
     /// A malformed argument: the caller's error, answered as invalid params, and nothing is served.
     case invalid(String)
+    /// What an answer was computed from kept changing while it was served: the caller can ask again.
+    case changed(String)
 }

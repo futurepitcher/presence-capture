@@ -341,3 +341,16 @@ test('recall: now while idle says so, and speech is from the five minutes before
   assert.ok(contents.includes('said just now'));
   assert.ok(!contents.includes('said a while ago'), 'speech from well before the call was given as the last five minutes');
 }));
+
+test('recall: now with only idle time so far says so, with no session', () => withServer({
+  seed: [
+    activity(10, 'Notes', 'Plan', 'idle'),
+    ['standard', 'said just now', { captureType: 'audio_transcript', source: 'ambient_audio', sourceApp: 'input', extraction: 'asr', capturedAt: ago(1) }],
+  ],
+}, async ({ rpc }) => {
+  const { session, envelopes } = resultOf(await call(rpc, 'now'));
+  assert.equal(session, null);
+  const contents = ids(envelopes);
+  assert.ok(contents.some((c) => c.includes('"idle"')), 'now said nothing of the idle state');
+  assert.ok(contents.includes('said just now'));
+}));

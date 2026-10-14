@@ -12,7 +12,7 @@
  */
 
 import { AuthorizationError } from '@presence-capture/schema';
-import { createRecall } from './recall.js';
+import { ChangedError, createRecall } from './recall.js';
 
 const PROTOCOL_VERSION = '2025-06-18';
 
@@ -114,6 +114,9 @@ export function createMcpServer({ store, grantId }) {
           isError: false,
         });
       } catch (err) {
+        if (err instanceof ChangedError) {
+          return jsonRpcResult(id, { content: [{ type: 'text', text: err.message }], isError: true });
+        }
         if (err instanceof AuthorizationError) {
           // Fail closed and say so, rather than returning an empty result that
           // a client would read as "nothing matched".

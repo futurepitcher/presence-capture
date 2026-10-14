@@ -16,6 +16,14 @@ import { sessionsOf } from '@presence-capture/schema';
 
 const HOUR = 3_600_000;
 
+/** Raised when what an answer was computed from kept changing while it was served: ask again. */
+export class ChangedError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'ChangedError';
+  }
+}
+
 /** A time argument, as the store writes times; RangeError for anything else. */
 function timeArg(value, name, fallback) {
   if (value == null) return fallback;
@@ -165,18 +173,18 @@ export function createRecall({ store, grantId }) {
     now() {
       return consistent(() => {
         const session = sessions().at(-1) ?? null;
-        if (!session) return { session: null, envelopes: serve('now', 'now', []) };
-        const end = session.ended_at ?? '9999-12-31T23:59:59.999Z';
+        const end = session?.ended_at ?? '9999-12-31T23:59:59.999Z';
         const latest = memory.prepare("SELECT capture_id FROM doc WHERE capture_type = 'activity' ORDER BY captured_at DESC, sequence DESC LIMIT 1").get();
         const screen = memory.prepare(`
           SELECT capture_id FROM doc WHERE capture_type = 'screen_text' AND captured_at >= ? AND captured_at < ?
           ORDER BY captured_at DESC, sequence DESC LIMIT 1
-        `).get(session.started_at, end);
+        `).get(session?.started_at ?? '9999-12-31T23:59:59.999Z', end);
         const said = memory.prepare(`
           SELECT capture_id FROM doc WHERE capture_type = 'audio_transcript' AND captured_at >= ?
           ORDER BY captured_at DESC, sequence DESC LIMIT 1
         `).get(new Date(Date.now() - 5 * 60_000).toISOString());
-        const wanted = [...new Set([session.capture_ids.at(-1), latest?.capture_id, screen?.capture_id, said?.capture_id].filter(Boolean))];
+        // With no session yet (only idle or locked time so far), the latest activity still says so.
+        const wanted = [...new Set([session?.capture_ids.at(-1), latest?.capture_id, screen?.capture_id, said?.capture_id].filter(Boolean))];
         return { session, envelopes: serve('now', 'now', wanted) };
       });
     },
@@ -206,11 +214,13 @@ export function createRecall({ store, grantId }) {
    * again.
    */
   function consistent(answer) {
-    for (let attempt = 0; ; attempt++) {
+    for (let attempt = 0; attempt < 3; attempt++) {
       const result = answer();
-      if (!revokedSinceRefresh() || attempt === 2) return result;
+      if (!revokedSinceRefresh()) return result;
       refresh();
     }
+    // Never an answer known to be stale: the caller can ask again.
+    throw new ChangedError('captures were revoked while this was being answered, three times over: ask again');
   }
 
   return {
