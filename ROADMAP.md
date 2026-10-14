@@ -131,6 +131,7 @@ surface sits behind the same grants, envelope and egress log as MCP.
   Cursor.
 - ✅ The menu's set-up window, Connect an Agent…, Agents Read…, Keep Captures
   For and Check for Updates.
+- ✅ Dictation: hold a key, speak, and it's typed, transcribed on this Mac.
 
 See [RELEASING.md](RELEASING.md).
 

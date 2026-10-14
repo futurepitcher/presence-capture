@@ -193,6 +193,39 @@ Microphone.
 Retention erases what's older than 14 days unless Keep Captures For says
 otherwise, hourly. The log, in `logs/`, holds counts only.
 
+## Dictation
+
+On macOS 26, hold a key and speak, in any app: what you say is typed where the
+cursor is, transcribed on this Mac by the same `Transcriber` ambient audio
+uses. It's off until you turn it on (Dictation in the menu, or the set-up
+window), which asks for its permissions then: the microphone, Input Monitoring
+for the key, and Accessibility to type.
+
+- **The key.** Fn (Globe) by default, or Right Option or Right Command. The
+  event tap is listen-only and asks for modifier changes (`flagsChanged`)
+  alone: it never sees a key typed. A press under a quarter second is an
+  ordinary press. If macOS does something of its own with the Globe key, the
+  set-up window says so and offers another key; it never changes the setting.
+- **It always ends.** Released, or cancelled: held past 120 s, the screen
+  locking, sleep, another user, Pause, turning it off, or a permission taken
+  away. A release macOS never delivers is caught by reading the key while it's
+  held. A cancelled dictation types and keeps nothing.
+- **What's typed.** "New line", "new paragraph", "period", "comma" and
+  "question mark" become what they name. With Tidy What I Say (and Apple
+  Intelligence), the on-device model may remove fillers and false starts and
+  fix punctuation, and its text is used only if that's all it changed; never in
+  a terminal or code editor. It goes in through Accessibility where the field
+  takes it, else by pasting, with your clipboard put back after 750 ms unless
+  something else copied meanwhile. If the window or field changed since you
+  pressed the key, nothing is typed: the panel keeps the words, with Copy. A
+  password field gets nothing.
+- **What's kept.** With Remember What I Dictate (on by default), what was
+  dictated is kept as an `audio_transcript` with source `dictation`, stamped at
+  key-down, redacted, and forgettable like any capture. Not from an excluded
+  app or window, a password field, a cancelled dictation, or while paused.
+  Ambient audio drops what the microphone heard while you dictated, so nothing
+  is kept twice.
+
 ## Layout
 
 | Target | What |

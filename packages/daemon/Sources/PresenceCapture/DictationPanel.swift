@@ -4,7 +4,7 @@ import SwiftUI
 
 /// The small panel at the bottom of the screen while dictating (R2b). It never takes focus, so
 /// typing goes where it was going.
-final class DictationPanel {
+final class DictationPanel: DictationShowing {
     final class Model: ObservableObject {
         enum State: Equatable {
             case listening(Float)

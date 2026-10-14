@@ -7,7 +7,7 @@ import CoreMedia
 /// use), so it's normally ready at key-down; audio heard before it is, is held and given first, so
 /// the opening word isn't lost.
 @available(macOS 26, *)
-final class DictationListener: @unchecked Sendable {
+final class DictationListener: DictationListening, @unchecked Sendable {
     /// A transcriber, made ahead, and what it hears.
     final class Ready: @unchecked Sendable {
         let transcriber: Transcriber
@@ -60,7 +60,7 @@ final class DictationListener: @unchecked Sendable {
 
     /// Key-down: the microphone on, its audio given to the waiting transcriber (held until it's
     /// ready). `level` hears how loud, 0–1, for the panel's meter.
-    func begin(level: @escaping @Sendable (Float) -> Void) throws -> DictationSession {
+    func begin(level: @escaping @Sendable (Float) -> Void) throws -> DictationHearing {
         prepare()
         let ready = lock.withLock { () -> Task<Ready?, Never> in
             defer { spare = nil }
@@ -122,7 +122,7 @@ final class DictationListener: @unchecked Sendable {
 
 /// One dictation's audio and words. Cancelled, it gives nothing, and its transcriber is let go.
 @available(macOS 26, *)
-final class DictationSession: @unchecked Sendable {
+final class DictationSession: DictationHearing, @unchecked Sendable {
     let feed = DictationFeed<AVAudioPCMBuffer>()
     private let ready: Task<DictationListener.Ready?, Never>
     private let started: Task<DictationListener.Ready?, Never>

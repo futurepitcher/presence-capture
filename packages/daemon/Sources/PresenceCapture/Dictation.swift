@@ -15,6 +15,41 @@ protocol Dictating: AnyObject {
     func stop()
 }
 
+/// The microphone and transcriber, as dictation uses them: DictationListener, or a fake in tests.
+protocol DictationListening: AnyObject {
+    func prepare(download: Bool)
+    func begin(level: @escaping @Sendable (Float) -> Void) throws -> DictationHearing
+    func stop()
+}
+
+/// One dictation's words: DictationSession, or a fake in tests.
+protocol DictationHearing: AnyObject {
+    func finish() async -> String?
+    func cancel()
+}
+
+/// The panel: DictationPanel, or a fake in tests.
+protocol DictationShowing: AnyObject {
+    func listening(_ level: Float)
+    func working()
+    func hold(_ text: String)
+    func say(_ message: String)
+    func hide()
+}
+
+/// What dictation works with, apart from the store: the real ones by default, fakes in tests.
+@available(macOS 26, *)
+struct DictationParts {
+    var listener: DictationListening
+    var panel: DictationShowing = DictationPanel()
+    var focus: () -> DictationFocus = Focus.now
+    var front: () -> ActivityCapturer.Sensed = ActivityCapturer.system
+    var tidy: (String) async -> String? = { await Tidier.propose($0) }
+    /// Typing in; says how, for the log.
+    var type: (String, DictationFocus) -> String
+    var canType: () -> Bool = AXIsProcessTrusted
+}
+
 /// Dictation's settings, in the app's defaults.
 enum DictationSettings {
     static func on(_ defaults: UserDefaults) -> Bool { defaults.bool(forKey: "dictation") }
@@ -59,11 +94,9 @@ final class Dictation: Dictating {
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
     private var poller: Timer?
-    private let listener: DictationListener
-    private let panel = DictationPanel()
-    private lazy var inserter = Inserter(paster: ClipboardPaster(
-        pasteboard: SystemClipboard(), paste: Inserter.postPaste,
-        schedule: { delay, work in DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work) }))
+    private let parts: DictationParts
+    private var listener: DictationListening { parts.listener }
+    private var panel: DictationShowing { parts.panel }
 
     /// Dictations under way, by token: listening, or being finished.
     private var live: [Int: Live] = [:]
@@ -73,14 +106,36 @@ final class Dictation: Dictating {
     private struct Live {
         let began: Date
         let focus: DictationFocus
-        let session: DictationSession
+        let session: DictationHearing
     }
 
     init(store: CaptureStore, spans: DictationSpans, defaults: UserDefaults = .standard, held: @escaping () -> Bool,
-         paused: @escaping () -> Bool, fragments: @escaping () -> [String]?, log: @escaping @Sendable (String) -> Void) {
+         paused: @escaping () -> Bool, fragments: @escaping () -> [String]?, log: @escaping @Sendable (String) -> Void,
+         parts: DictationParts? = nil) {
         (self.store, self.spans, self.defaults, self.held, self.paused, self.fragments, self.log) = (store, spans, defaults, held, paused, fragments, log)
         hold = DictationHold(key: DictationSettings.key(defaults))
-        listener = DictationListener(log: log)
+        self.parts = parts ?? Self.realParts(log: log)
+    }
+
+    /// The microphone, the panel, Accessibility and the clipboard, as the app uses them.
+    private static func realParts(log: @escaping @Sendable (String) -> Void) -> DictationParts {
+        let inserter = Inserter(paster: ClipboardPaster(
+            pasteboard: SystemClipboard(), paste: Inserter.postPaste,
+            schedule: { delay, work in DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work) }))
+        return DictationParts(listener: DictationListener(log: log),
+                              type: { text, focus in inserter.type(text, into: focus.element as? AXElement).rawValue })
+    }
+
+    // MARK: For tests
+
+    /// A `flagsChanged` event for the key, as the tap would give it.
+    func press(keyCode: Int64, flags: UInt64, at time: TimeInterval) {
+        act(hold.flagsChanged(keyCode: keyCode, flags: flags, at: time))
+    }
+
+    /// Returns once every dictation queued to be kept is written.
+    func flush() {
+        writer.sync {}
     }
 
     static var allowed: (microphone: Bool, inputMonitoring: Bool, accessibility: Bool) {
@@ -92,7 +147,7 @@ final class Dictation: Dictating {
         let allowed = Self.allowed
         if DictationSettings.on(defaults), allowed.microphone, allowed.inputMonitoring {
             startTap()
-            listener.prepare()
+            listener.prepare(download: true)
         } else {
             cancelAll(.turnedOff)
             stopTap()
@@ -180,7 +235,7 @@ final class Dictation: Dictating {
         do {
             let panel = self.panel
             let session = try listener.begin(level: { level in DispatchQueue.main.async { panel.listening(level) } })
-            live[token] = Live(began: began, focus: Focus.now(), session: session)
+            live[token] = Live(began: began, focus: parts.focus(), session: session)
             listening = token
             startPolling()
             // Shown once it's a dictation, not an ordinary press of the key.
@@ -218,7 +273,7 @@ final class Dictation: Dictating {
         dictation.session.cancel()
         panel.hide()
         if why != .tooShort { log("dictation.cancelled why=\(why.rawValue)") }
-        listener.prepare()
+        listener.prepare(download: false)
     }
 
     private func cancelAll(_ why: DictationCancel) {
@@ -245,26 +300,26 @@ final class Dictation: Dictating {
         let heard = await dictation.session.finish() ?? ""
         guard live[token] != nil else { return }
         var text = DictationText.spokenCommands(heard)
-        let front = ActivityCapturer.system()
+        let front = parts.front()
         let app = front.app?.bundle ?? dictation.focus.app
-        if DictationSettings.tidy(defaults), !text.isEmpty, !DictationText.neverTidied.contains(app), let proposal = await Tidier.propose(text) {
+        if DictationSettings.tidy(defaults), !text.isEmpty, !DictationText.neverTidied.contains(app), let proposal = await parts.tidy(text) {
             guard live[token] != nil else { return }
             if DictationText.tidyKeepsMeaning(proposal, of: text) { text = proposal } else { log("dictation.tidy_refused") }
         }
         guard live.removeValue(forKey: token) != nil else { return }
-        defer { listener.prepare() }
+        defer { listener.prepare(download: false) }
         guard !text.isEmpty else { return panel.hide() }
 
-        let now = Focus.now()
+        let now = parts.focus()
         let typing = DictationOutcome.typing(began: dictation.focus, now: now)
         switch typing {
-        case .type where !AXIsProcessTrusted():
+        case .type where !parts.canType():
             panel.hold(text)
             log("dictation.no_accessibility")
         case .type:
-            let way = inserter.type(text, into: now.element as? AXElement)
+            let way = parts.type(text, now)
             panel.hide()
-            log("dictation.typed way=\(way.rawValue)")
+            log("dictation.typed way=\(way)")
         case .focusMoved:
             panel.hold(text)
             log("dictation.focus_moved")
