@@ -659,7 +659,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         timers = []
         holdCapture(going: true)
         dictation?.stop()
-        Self.finishWriting(activity: activity, audio: audio, admin: admin, connecting: ConnectAgent.underWay) {
+        Self.finishWriting(activity: activity, audio: audio, dictation: dictation, admin: admin, connecting: ConnectAgent.underWay) {
             NSApp.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
@@ -667,14 +667,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Off the main thread, everything confirmed is finished before the app goes: a connection under
     /// way (made, or rolled back), the store work queued (a Forget, a retention change, a
-    /// withdrawal), what activity has queued, and listening. Then `done`, on the main thread, after
-    /// any result those posted there.
-    static func finishWriting(activity: ActivityCapturer?, audio: Listener?, admin: DispatchQueue, connecting: DispatchGroup,
-                              done: @escaping () -> Void) {
+    /// withdrawal), what activity and dictation have queued, and listening. Then `done`, on the main
+    /// thread, after any result those posted there.
+    static func finishWriting(activity: ActivityCapturer?, audio: Listener?, dictation: Dictating? = nil, admin: DispatchQueue,
+                              connecting: DispatchGroup, done: @escaping () -> Void) {
         Task.detached {
             await withCheckedContinuation { done in connecting.notify(queue: .global()) { done.resume() } }
             await withCheckedContinuation { done in admin.async { done.resume() } }
             activity?.flush()
+            await dictation?.drained()
             await audio?.finish()
             await MainActor.run { done() }
         }

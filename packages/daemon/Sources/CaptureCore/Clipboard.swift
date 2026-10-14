@@ -25,7 +25,9 @@ public final class ClipboardPaster {
     private let pasteboard: Clipboard
     private let paste: () -> Void
     private let schedule: (TimeInterval, @escaping () -> Void) -> Void
-    private var queue: [(text: String, done: (Bool) -> Void)] = []
+    private var queue: [(text: String, check: () -> Bool, done: (Bool?) -> Void)] = []
+    /// The restore waiting for its time, to run at once when asked (quitting).
+    private var restoreNow: (() -> Void)?
     private var busy = false
 
     /// `paste` posts ⌘V; `schedule` runs a closure after a delay.
@@ -36,27 +38,48 @@ public final class ClipboardPaster {
         self.schedule = schedule
     }
 
-    /// Pastes `text`; `done` hears whether the person's clipboard was put back (false when something
-    /// else copied meanwhile, and it was left as it is).
-    public func paste(_ text: String, done: @escaping (Bool) -> Void = { _ in }) {
-        queue.append((text, done))
+    /// Pastes `text` once its turn comes, if `check` still says yes then (the focus is where it was,
+    /// the dictation wasn't cancelled): a paste that waited behind another is checked when it's made,
+    /// not when it was asked for. `done` hears nil when it wasn't made, else whether the person's
+    /// clipboard was put back (false when something else copied meanwhile, and it was left as it is).
+    public func paste(_ text: String, check: @escaping () -> Bool = { true }, done: @escaping (Bool?) -> Void = { _ in }) {
+        queue.append((text, check, done))
         next()
     }
 
+    /// Puts back now a clipboard waiting for its time, and drops pastes not yet made (quitting).
+    public func finishNow() {
+        let waiting = queue
+        queue = []
+        for paste in waiting { paste.done(nil) }
+        restoreNow?()
+    }
+
     private func next() {
-        guard !busy, !queue.isEmpty else { return }
-        busy = true
-        let (text, done) = queue.removeFirst()
-        let saved = pasteboard.snapshot()
-        pasteboard.write(text)
-        let ours = pasteboard.changeCount
-        paste()
-        schedule(Self.restoreAfter) { [self] in
-            let restored = pasteboard.changeCount == ours
-            if restored { pasteboard.restore(saved) }
-            busy = false
-            done(restored)
-            next()
+        while !busy, !queue.isEmpty {
+            let (text, check, done) = queue.removeFirst()
+            guard check() else {
+                done(nil)
+                continue
+            }
+            busy = true
+            let saved = pasteboard.snapshot()
+            pasteboard.write(text)
+            let ours = pasteboard.changeCount
+            paste()
+            var finished = false
+            let restore = { [self] in
+                guard !finished else { return }
+                finished = true
+                restoreNow = nil
+                let restored = pasteboard.changeCount == ours
+                if restored { pasteboard.restore(saved) }
+                busy = false
+                done(restored)
+                next()
+            }
+            restoreNow = restore
+            schedule(Self.restoreAfter, restore)
         }
     }
 }
@@ -86,9 +109,13 @@ public enum DictationOutcome {
         case secure
     }
 
-    public static func typing(began: DictationFocus, now: DictationFocus) -> Typing {
-        if began.secure || now.secure { return .secure }
-        return began.app == now.app && began.element == now.element ? .type : .focusMoved
+    /// The focus at key-down, at release, and now (just before typing): typed only if all three are
+    /// the same known element, none of them secure. A field that couldn't be identified is taken as
+    /// moved, never as the same: nothing is pasted where it can't be checked.
+    public static func typing(began: DictationFocus, released: DictationFocus, now: DictationFocus) -> Typing {
+        if began.secure || released.secure || now.secure { return .secure }
+        guard began.element != nil, began == released, released == now else { return .focusMoved }
+        return .type
     }
 
     public enum Skip: String, Equatable {

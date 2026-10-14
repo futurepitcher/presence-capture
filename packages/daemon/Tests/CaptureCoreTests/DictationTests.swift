@@ -30,24 +30,24 @@ final class DictationTests: XCTestCase {
     func testAReleaseThatNeverArrivesIsCaughtByReadingTheKey() {
         var hold = DictationHold(key: .fn)
         _ = hold.flagsChanged(keyCode: 63, flags: fnDown, at: 0)
-        XCTAssertEqual(hold.poll(flags: fnDown, at: 1), .none)
-        XCTAssertEqual(hold.poll(flags: 0, at: 1.25), .end(1), "a key no longer down wasn't taken as released")
+        XCTAssertEqual(hold.poll(keyDown: true, at: 1), .none)
+        XCTAssertEqual(hold.poll(keyDown: false, at: 1.25), .end(1), "a key no longer down wasn't taken as released")
         XCTAssertNil(hold.token)
-        XCTAssertEqual(hold.poll(flags: 0, at: 1.5), .none)
+        XCTAssertEqual(hold.poll(keyDown: false, at: 1.5), .none)
     }
 
-    func testPollingTakesTheModifierWhenTheSystemsFlagsLackTheRightHandBit() {
-        var hold = DictationHold(key: .rightOption)
-        _ = hold.flagsChanged(keyCode: 61, flags: 0x40 | CGEventFlags.maskAlternate.rawValue, at: 0)
-        XCTAssertEqual(hold.poll(flags: CGEventFlags.maskAlternate.rawValue, at: 1), .none, "a held key read without its device bit ended the dictation")
-        XCTAssertEqual(hold.poll(flags: 0, at: 1.25), .end(1))
+    func testAReleaseThePollMissedPastTheCapIsStillCancelled() {
+        var hold = DictationHold(key: .fn)
+        _ = hold.flagsChanged(keyCode: 63, flags: fnDown, at: 0)
+        // No poll ran (menu tracking, say); the release arrives late.
+        XCTAssertEqual(hold.flagsChanged(keyCode: 63, flags: 0, at: 130), .cancel(1, .tooLong), "a hold over the cap was typed")
     }
 
     func testAHoldPastTheLimitIsCancelled() {
         var hold = DictationHold(key: .rightOption)
         _ = hold.flagsChanged(keyCode: 61, flags: 0x40, at: 0)
-        XCTAssertEqual(hold.poll(flags: 0x40, at: 119.9), .none)
-        XCTAssertEqual(hold.poll(flags: 0x40, at: 120), .cancel(1, .tooLong))
+        XCTAssertEqual(hold.poll(keyDown: true, at: 119.9), .none)
+        XCTAssertEqual(hold.poll(keyDown: true, at: 120), .cancel(1, .tooLong))
     }
 
     func testChangingTheKeyMidHoldCancelsAndTheLeftHandKeyNeverStarts() {
@@ -94,6 +94,10 @@ final class DictationTests: XCTestCase {
         XCTAssertFalse(DictationText.tidyKeepsMeaning("Remind me.", of: "remind me at noon"), "a dropped argument was taken")
         XCTAssertFalse(DictationText.tidyKeepsMeaning("Please buy milk.", of: "buy milk"), "an added word was taken")
         XCTAssertFalse(DictationText.tidyKeepsMeaning("Buy oat milk.", of: "buy milk"), "a replaced word was taken")
+        XCTAssertFalse(DictationText.tidyKeepsMeaning("Pay $100.", of: "pay €100"), "a currency changed")
+        XCTAssertFalse(DictationText.tidyKeepsMeaning("3 + 4", of: "3 - 4 um"), "a sign changed")
+        XCTAssertFalse(DictationText.tidyKeepsMeaning("Great 👎", of: "great 👍"), "an emoji changed")
+        XCTAssertTrue(DictationText.tidyKeepsMeaning("Pay €100, please.", of: "um pay €100 please"))
     }
 
     func testTerminalsAndEditorsAreNeverTidied() {
@@ -185,6 +189,27 @@ final class DictationTests: XCTestCase {
         XCTAssertEqual(board.text, "copied meanwhile")
     }
 
+    func testAPasteWaitingItsTurnIsCheckedWhenItsMadeAndQuitPutsTheClipboardBack() {
+        let board = FakePasteboard(), later = Later()
+        var pasted: [String?] = []
+        let paster = ClipboardPaster(pasteboard: board, paste: { pasted.append(board.text) }, schedule: later.schedule)
+        var allowed = true
+        var second: Bool?? = .none
+        paster.paste("first")
+        paster.paste("second", check: { allowed }, done: { second = .some($0) })
+        // While the first holds the clipboard, the focus moves (or Pause): the second isn't made.
+        allowed = false
+        later.advance(to: 1)
+        XCTAssertEqual(pasted, ["first"], "a paste was made after its check said no")
+        XCTAssertEqual(second, .some(nil))
+        XCTAssertEqual(board.text, "the person's")
+
+        // Quitting with a paste holding the clipboard: put back at once.
+        paster.paste("third")
+        paster.finishNow()
+        XCTAssertEqual(board.text, "the person's", "the clipboard was left holding a dictation")
+    }
+
     func testTwoOverlappingPastesLeaveThePersonsClipboardNotADictation() {
         let board = FakePasteboard(), later = Later()
         var pasted: [String?] = []
@@ -202,10 +227,16 @@ final class DictationTests: XCTestCase {
 
     func testFocusThatMovedOrASecureFieldTypesNothing() {
         let field = DictationFocus(app: "com.apple.TextEdit", element: 1, secure: false)
-        XCTAssertEqual(DictationOutcome.typing(began: field, now: field), .type)
-        XCTAssertEqual(DictationOutcome.typing(began: field, now: DictationFocus(app: "com.apple.TextEdit", element: 2, secure: false)), .focusMoved)
-        XCTAssertEqual(DictationOutcome.typing(began: field, now: DictationFocus(app: "com.apple.Safari", element: 1, secure: false)), .focusMoved)
-        XCTAssertEqual(DictationOutcome.typing(began: field, now: DictationFocus(app: "com.apple.TextEdit", element: 1, secure: true)), .secure)
+        let other = DictationFocus(app: "com.apple.TextEdit", element: 2, secure: false)
+        let password = DictationFocus(app: "com.apple.TextEdit", element: 3, secure: true)
+        let unknown = DictationFocus(app: "com.apple.TextEdit", element: nil, secure: false)
+        XCTAssertEqual(DictationOutcome.typing(began: field, released: field, now: field), .type)
+        XCTAssertEqual(DictationOutcome.typing(began: field, released: other, now: other), .focusMoved)
+        XCTAssertEqual(DictationOutcome.typing(began: field, released: field, now: DictationFocus(app: "com.apple.Safari", element: 1, secure: false)), .focusMoved)
+        // Released in a password field, then back: still refused.
+        XCTAssertEqual(DictationOutcome.typing(began: field, released: password, now: field), .secure)
+        // A field that can't be identified is never taken for the same one.
+        XCTAssertEqual(DictationOutcome.typing(began: unknown, released: unknown, now: unknown), .focusMoved)
     }
 
     func testWhatsKeptAndWhatIsnt() {

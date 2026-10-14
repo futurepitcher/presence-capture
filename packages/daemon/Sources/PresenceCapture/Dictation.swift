@@ -11,8 +11,11 @@ protocol Dictating: AnyObject {
     func cancel(_ why: DictationCancel)
     /// Each tick: a permission taken away stops it.
     func check()
-    /// Quitting.
+    /// Quitting: every dictation stops, nothing more is typed, and a clipboard a paste is holding is
+    /// put back now.
     func stop()
+    /// Returns once what dictation had accepted to keep is written (quitting).
+    func drained() async
 }
 
 /// The microphone and transcriber, as dictation uses them: DictationListener, or a fake in tests.
@@ -42,12 +45,20 @@ protocol DictationShowing: AnyObject {
 struct DictationParts {
     var listener: DictationListening
     var panel: DictationShowing = DictationPanel()
-    var focus: () -> DictationFocus = Focus.now
-    var front: () -> ActivityCapturer.Sensed = ActivityCapturer.system
+    /// The app in front, on the main thread.
+    var front: () -> FrontApp? = FrontApp.now
+    /// Where typing would go, asked off the main thread (Accessibility can wait on an app).
+    var sample: @Sendable (FrontApp?) -> DictationSample = Focus.sample
     var tidy: (String) async -> String? = { await Tidier.propose($0) }
-    /// Typing in; says how, for the log.
-    var type: (String, DictationFocus) -> String
+    /// Typing in: `check` is asked when a paste's turn comes; `done` hears how it went in, or nil
+    /// when it wasn't.
+    var type: (String, DictationFocus, @escaping () -> Bool, @escaping (String?) -> Void) -> Void
     var canType: () -> Bool = AXIsProcessTrusted
+    /// Puts back a clipboard a paste is holding, and drops pastes not yet made (quitting).
+    var finishTyping: () -> Void = {}
+    /// Whether the selected key is down now, by its physical key: never a modifier the other hand
+    /// may also be holding.
+    var keyDown: (DictationKey) -> Bool = { CGEventSource.keyState(.combinedSessionState, key: CGKeyCode($0.keyCode)) }
 }
 
 /// Dictation's settings, in the app's defaults.
@@ -98,15 +109,23 @@ final class Dictation: Dictating {
     private var listener: DictationListening { parts.listener }
     private var panel: DictationShowing { parts.panel }
 
-    /// Dictations under way, by token: listening, or being finished.
+    /// Dictations under way, by token: listening, being finished, or being typed in. One that's gone
+    /// was cancelled or is done, and every later step asks.
     private var live: [Int: Live] = [:]
-    /// The one the microphone is on for.
+    /// The one the microphone is on for, and the one the panel is showing.
     private var listening: Int?
+    private var shown: Int?
 
-    private struct Live {
+    private final class Live {
         let began: Date
-        let focus: DictationFocus
+        /// Where typing would go at key-down, and at release: asked off the main thread.
+        let origin: Task<DictationSample, Never>
+        var released: Task<DictationSample, Never>?
         let session: DictationHearing
+
+        init(began: Date, origin: Task<DictationSample, Never>, session: DictationHearing) {
+            (self.began, self.origin, self.session) = (began, origin, session)
+        }
     }
 
     init(store: CaptureStore, spans: DictationSpans, defaults: UserDefaults = .standard, held: @escaping () -> Bool,
@@ -123,7 +142,8 @@ final class Dictation: Dictating {
             pasteboard: SystemClipboard(), paste: Inserter.postPaste,
             schedule: { delay, work in DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work) }))
         return DictationParts(listener: DictationListener(log: log),
-                              type: { text, focus in inserter.type(text, into: focus.element as? AXElement).rawValue })
+                              type: { text, focus, check, done in inserter.type(text, into: focus.element as? AXElement, check: check) { done($0?.rawValue) } },
+                              finishTyping: { inserter.paster.finishNow() })
     }
 
     // MARK: For tests
@@ -173,6 +193,12 @@ final class Dictation: Dictating {
     func stop() {
         cancelAll(.turnedOff)
         stopTap()
+        parts.finishTyping()
+    }
+
+    func drained() async {
+        let writer = self.writer
+        await withCheckedContinuation { done in writer.async { done.resume() } }
     }
 
     // MARK: The key
@@ -233,14 +259,19 @@ final class Dictation: Dictating {
         let began = Date()
         spans.began(at: began)
         do {
-            let panel = self.panel
-            let session = try listener.begin(level: { level in DispatchQueue.main.async { panel.listening(level) } })
-            live[token] = Live(began: began, focus: parts.focus(), session: session)
+            // The microphone first: nothing below can hold it up.
+            let session = try listener.begin(level: { [weak self] level in
+                DispatchQueue.main.async { if self?.shown == token { self?.panel.listening(level) } }
+            })
+            let (front, sample) = (parts.front(), parts.sample)
+            live[token] = Live(began: began, origin: Task.detached { sample(front) }, session: session)
             listening = token
             startPolling()
             // Shown once it's a dictation, not an ordinary press of the key.
             DispatchQueue.main.asyncAfter(deadline: .now() + DictationHold.shortest) { [weak self] in
-                if self?.listening == token { self?.panel.listening(0) }
+                guard let self, self.listening == token else { return }
+                self.shown = token
+                self.panel.listening(0)
             }
         } catch {
             log("dictation.mic_failed")
@@ -257,6 +288,9 @@ final class Dictation: Dictating {
             listening = nil
         }
         guard let dictation = live[token] else { return }
+        // Where typing would go as the key comes up, before anything is waited for.
+        let (front, sample) = (parts.front(), parts.sample)
+        dictation.released = Task.detached { sample(front) }
         panel.working()
         Task { @MainActor [weak self] in await self?.finish(token, dictation) }
     }
@@ -271,6 +305,7 @@ final class Dictation: Dictating {
         }
         guard let dictation = live.removeValue(forKey: token) else { return }
         dictation.session.cancel()
+        if shown == token { shown = nil }
         panel.hide()
         if why != .tooShort { log("dictation.cancelled why=\(why.rawValue)") }
         listener.prepare(download: false)
@@ -283,10 +318,13 @@ final class Dictation: Dictating {
 
     private func startPolling() {
         poller?.invalidate()
-        poller = Timer.scheduledTimer(withTimeInterval: DictationHold.pollEvery, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: DictationHold.pollEvery, repeats: true) { [weak self] _ in
             guard let self else { return }
-            self.act(self.hold.poll(flags: CGEventSource.flagsState(.combinedSessionState).rawValue, at: ProcessInfo.processInfo.systemUptime))
+            self.act(self.hold.poll(keyDown: self.parts.keyDown(self.hold.key), at: ProcessInfo.processInfo.systemUptime))
         }
+        // In every mode, so menu tracking never stops it.
+        RunLoop.main.add(timer, forMode: .common)
+        poller = timer
     }
 
     private func stopPolling() {
@@ -294,50 +332,97 @@ final class Dictation: Dictating {
         poller = nil
     }
 
-    /// Released: the words, tidied if they may be, typed in if the focus is where it was, and kept
-    /// if they may be. Each step checks the dictation is still live.
+    /// Whether a sample's front window is excluded, or might be: an exclusion list that can't be
+    /// read, or a window title that can't be (when there's a list to match it against), keeps nothing.
+    private func excluded(_ sample: DictationSample) -> Bool {
+        guard let fragments = fragments() else { return true }
+        guard !fragments.isEmpty else { return false }
+        guard let app = sample.app, let window = sample.window else { return true }
+        return Exclusion.isExcluded(app: app.name, window: window, fragments: fragments)
+    }
+
+    /// Released: the words, tidied if they may be, typed in if the focus is the same known field at
+    /// key-down, at release and just before typing, and kept if they may be. Each step checks the
+    /// dictation is still live; it stays live until it's typed in, so a paste waiting its turn is
+    /// cancelled with it.
     @MainActor private func finish(_ token: Int, _ dictation: Live) async {
         let heard = await dictation.session.finish() ?? ""
+        let origin = await dictation.origin.value
+        let released = await (dictation.released?.value ?? origin)
         guard live[token] != nil else { return }
         var text = DictationText.spokenCommands(heard)
-        let front = parts.front()
-        let app = front.app?.bundle ?? dictation.focus.app
+        let app = origin.app?.bundle ?? origin.focus.app
         if DictationSettings.tidy(defaults), !text.isEmpty, !DictationText.neverTidied.contains(app), let proposal = await parts.tidy(text) {
             guard live[token] != nil else { return }
             if DictationText.tidyKeepsMeaning(proposal, of: text) { text = proposal } else { log("dictation.tidy_refused") }
         }
-        guard live.removeValue(forKey: token) != nil else { return }
-        defer { listener.prepare(download: false) }
-        guard !text.isEmpty else { return panel.hide() }
+        guard live[token] != nil else { return }
+        guard !text.isEmpty else { return done(token) }
 
-        let now = parts.focus()
-        let typing = DictationOutcome.typing(began: dictation.focus, now: now)
-        switch typing {
+        let (front, sample) = (parts.front(), parts.sample)
+        let now = await Task.detached { sample(front) }.value
+        guard live[token] != nil else { return }
+        // Kept by where it was said: excluded there, or where it was released, it's not kept.
+        let excluded = self.excluded(origin) || self.excluded(released)
+        let secure = origin.focus.secure || released.focus.secure
+        let keep = { [weak self] in self?.remember(text, began: dictation.began, origin: origin, excluded: excluded, secure: secure) }
+        switch DictationOutcome.typing(began: origin.focus, released: released.focus, now: now.focus) {
         case .type where !parts.canType():
             panel.hold(text)
             log("dictation.no_accessibility")
+            done(token, hidePanel: false)
+            keep()
         case .type:
-            let way = parts.type(text, now)
-            panel.hide()
-            log("dictation.typed way=\(way)")
+            let expected = now.focus
+            parts.type(text, expected, { [weak self] in
+                // When a paste's turn comes: still this dictation, still this field, still allowed.
+                guard let self, self.live[token] != nil, !self.held(), self.parts.canType() else { return false }
+                return self.parts.sample(self.parts.front()).focus == expected
+            }, { [weak self] way in
+                guard let self, self.live[token] != nil else { return }
+                if let way {
+                    self.done(token)
+                    self.log("dictation.typed way=\(way)")
+                    keep()
+                } else if self.held() {
+                    // Paused or locked while it waited: like a cancel, nothing is typed or kept.
+                    self.done(token)
+                    self.log("dictation.cancelled why=paused")
+                } else {
+                    self.panel.hold(text)
+                    self.done(token, hidePanel: false)
+                    self.log("dictation.focus_moved")
+                    keep()
+                }
+            })
         case .focusMoved:
             panel.hold(text)
             log("dictation.focus_moved")
+            done(token, hidePanel: false)
+            keep()
         case .secure:
             panel.say("Nothing is typed into a password field.")
             log("dictation.secure_field")
+            done(token, hidePanel: false)
         }
+    }
 
-        let excluded = fragments().map { fragments in
-            front.app.map { Exclusion.isExcluded(app: $0.name, window: front.window, fragments: fragments) } ?? false
-        } ?? true
+    /// The dictation is over: nothing after this can cancel it.
+    private func done(_ token: Int, hidePanel: Bool = true) {
+        live.removeValue(forKey: token)
+        if shown == token { shown = nil }
+        if hidePanel { panel.hide() }
+        listener.prepare(download: false)
+    }
+
+    private func remember(_ text: String, began: Date, origin: DictationSample, excluded: Bool, secure: Bool) {
         if let skip = DictationOutcome.skip(remember: DictationSettings.remember(defaults), excluded: excluded,
-                                            secure: typing == .secure, cancelled: false, paused: paused()) {
+                                            secure: secure, cancelled: false, paused: paused()) {
             log("dictation.not_kept why=\(skip.rawValue)")
             return
         }
-        let (store, log, began, sourceApp) = (self.store, self.log, dictation.began, excluded ? nil : app)
-        writer.async { Self.keep(text, began: began, app: sourceApp, store: store, log: log) }
+        let (store, log, app) = (self.store, self.log, excluded ? nil : origin.app?.bundle)
+        writer.async { Self.keep(text, began: began, app: app, store: store, log: log) }
     }
 
     /// A dictation kept as said (R2b): an `audio_transcript` with source `dictation`, stamped at

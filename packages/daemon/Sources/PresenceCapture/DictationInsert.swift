@@ -12,20 +12,55 @@ struct AXElement: Hashable {
     func hash(into hasher: inout Hasher) { hasher.combine(CFHash(element)) }
 }
 
-/// Where typing would go now (R2b).
+/// The app in front, read on the main thread (it's cheap and doesn't wait on the app).
+struct FrontApp: Equatable, Sendable {
+    let name: String
+    let bundle: String
+    let pid: pid_t
+
+    static func now() -> FrontApp? {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
+        return FrontApp(name: app.localizedName ?? "", bundle: app.bundleIdentifier ?? "", pid: app.processIdentifier)
+    }
+}
+
+/// What dictation sees of where typing goes, at one moment (key-down, release, or just before
+/// typing): the focused element, whether it's secure, and the front window's title for the
+/// exclusion list (nil when it can't be read).
+struct DictationSample: Equatable, @unchecked Sendable {
+    var focus: DictationFocus
+    var app: FrontApp?
+    var window: String?
+}
+
+/// Where typing would go (R2b), through Accessibility. Each question to an app waits at most
+/// `timeout`, and it's asked off the main thread: an app that doesn't answer never holds up the key,
+/// a lock or Pause.
 enum Focus {
-    static func now() -> DictationFocus {
-        let app = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
-        let element = focused()
+    static let timeout: Float = 0.25
+
+    static func sample(_ app: FrontApp?) -> DictationSample {
+        let system = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(system, timeout)
+        let element = element(system, kAXFocusedUIElementAttribute)
         let secure = IsSecureEventInputEnabled() || element.map(isSecure) ?? false
-        return DictationFocus(app: app, element: element.map(AXElement.init), secure: secure)
+        var window: String?
+        if let app {
+            let owner = AXUIElementCreateApplication(app.pid)
+            AXUIElementSetMessagingTimeout(owner, timeout)
+            window = self.element(owner, kAXFocusedWindowAttribute).flatMap { string($0, kAXTitleAttribute) }
+        }
+        return DictationSample(focus: DictationFocus(app: app?.bundle ?? "", element: element.map(AXElement.init), secure: secure),
+                               app: app, window: window)
     }
 
-    static func focused() -> AXUIElement? {
+    static func element(_ parent: AXUIElement, _ attribute: String) -> AXUIElement? {
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as CFString, &value) == .success,
+        guard AXUIElementCopyAttributeValue(parent, attribute as CFString, &value) == .success,
               let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
-        return (value as! AXUIElement)
+        let element = value as! AXUIElement
+        AXUIElementSetMessagingTimeout(element, timeout)
+        return element
     }
 
     static func isSecure(_ element: AXUIElement) -> Bool {
@@ -39,11 +74,38 @@ enum Focus {
     }
 }
 
+/// A text field as insertion needs it: the real one through Accessibility, a fake in tests.
+protocol TextTarget {
+    var value: String? { get }
+    /// The selection, in UTF-16 units, as Accessibility gives ranges.
+    var selection: CFRange? { get }
+    /// Replaces the selection; false when the field refuses (nothing changed).
+    func setSelectedText(_ text: String) -> Bool
+}
+
+struct AXTextTarget: TextTarget {
+    let element: AXUIElement
+
+    var value: String? { Focus.string(element, kAXValueAttribute) }
+
+    var selection: CFRange? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &value) == .success,
+              let value, CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+        var range = CFRange()
+        return AXValueGetValue(value as! AXValue, .cfRange, &range) ? range : nil
+    }
+
+    func setSelectedText(_ text: String) -> Bool {
+        AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFTypeRef) == .success
+    }
+}
+
 /// Typing a dictation in: through Accessibility where the focused element takes it, bound to that
-/// element with no clipboard involved, and checked by reading its value back; otherwise by pasting,
-/// through the one clipboard owner (ClipboardPaster).
+/// element with no clipboard involved; otherwise by pasting, through the one clipboard owner
+/// (ClipboardPaster), checked again when the paste's turn comes.
 final class Inserter {
-    private let paster: ClipboardPaster
+    let paster: ClipboardPaster
 
     init(paster: ClipboardPaster) {
         self.paster = paster
@@ -52,32 +114,41 @@ final class Inserter {
     /// How it went in.
     enum Way: String {
         case accessibility
+        /// Accessibility took the text but read back other than expected (a field that reformats
+        /// it): it went in, and isn't pasted again.
+        case accessibilityUnchecked = "accessibility_unchecked"
         case paste
     }
 
-    func type(_ text: String, into element: AXElement?) -> Way {
-        if let element, Self.insertByAccessibility(text, into: element.element) { return .accessibility }
-        paster.paste(text)
-        return .paste
+    /// `done` hears how, or nil when the paste wasn't made (`check` said no when its turn came).
+    func type(_ text: String, into element: AXElement?, check: @escaping () -> Bool, done: @escaping (Way?) -> Void) {
+        if let element {
+            switch Self.insert(text, into: AXTextTarget(element: element.element)) {
+            case .inserted: return done(.accessibility)
+            case .unchecked: return done(.accessibilityUnchecked)
+            case .refused: break
+            }
+        }
+        paster.paste(text, check: check) { restored in done(restored == nil ? nil : .paste) }
     }
 
-    /// The selection replaced by `text`, if the element says it took: its value, read back, is the
-    /// old value with the selection replaced (by length, in UTF-16, as ranges are), and holds the text.
-    /// An element whose value or selection can't be read isn't tried: it's pasted into instead.
-    static func insertByAccessibility(_ text: String, into element: AXUIElement) -> Bool {
-        guard let before = Focus.string(element, kAXValueAttribute), let selected = selectedLength(element) else { return false }
-        guard AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFTypeRef) == .success,
-              let after = Focus.string(element, kAXValueAttribute) else { return false }
-        return after.utf16.count == before.utf16.count - selected + text.utf16.count && after.contains(text)
+    enum AXInsert: Equatable {
+        case inserted
+        /// Taken, but the field read back other than expected.
+        case unchecked
+        /// Not taken (or the field can't be checked, so it isn't tried): paste instead.
+        case refused
     }
 
-    private static func selectedLength(_ element: AXUIElement) -> Int? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &value) == .success,
-              let value, CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
-        var range = CFRange()
-        guard AXValueGetValue(value as! AXValue, .cfRange, &range) else { return nil }
-        return range.length
+    /// The selection replaced by `text`, checked by reading the value back: it must be exactly the old
+    /// value with the selection replaced. A field whose value or selection can't be read isn't tried.
+    /// Once the field has taken the text, it's never pasted again, whatever it reads back.
+    static func insert(_ text: String, into target: TextTarget) -> AXInsert {
+        guard let before = target.value, let range = target.selection, range.location >= 0, range.length >= 0,
+              range.location + range.length <= before.utf16.count else { return .refused }
+        guard target.setSelectedText(text) else { return .refused }
+        let expected = (before as NSString).replacingCharacters(in: NSRange(location: range.location, length: range.length), with: text)
+        return target.value == expected ? .inserted : .unchecked
     }
 
     /// ⌘V, posted as the keyboard would (needs Accessibility).

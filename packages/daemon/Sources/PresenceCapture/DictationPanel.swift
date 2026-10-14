@@ -49,6 +49,8 @@ final class DictationPanel: DictationShowing {
     func hide() {
         hideLater?.cancel()
         panel.orderOut(nil)
+        // Nothing said is kept on the panel once it's gone.
+        model.state = .working
     }
 
     private func show(_ state: Model.State) {

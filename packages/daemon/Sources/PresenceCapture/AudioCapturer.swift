@@ -116,6 +116,18 @@ final class AudioCapturer: NSObject, Listener, SCStreamOutput, SCStreamDelegate,
         return kept
     }
 
+    /// An utterance's wall-clock times, or nil when it ended more than `DictationSpans.cutoff` ago on
+    /// its stream's clock, or its time can't be told: dropped then, never taken for just said (which
+    /// would slip it past the dictations kept, and past a Forget of when it was really said).
+    static func times(_ range: CMTimeRange, clockNow: CMTime, now: Date) -> (start: Date, end: Date)? {
+        guard let age = Utterance.age(range, clockNow: clockNow), age <= DictationSpans.cutoff else { return nil }
+        return Utterance.wallTimes(range, clockNow: clockNow, now: now)
+    }
+
+    fileprivate func tooLate() {
+        lock.withLock { dropped.tooLate += 1 }
+    }
+
     /// Whether an utterance is kept: not if it was said while dictating (from the microphone: the
     /// dictation has it), and not if it arrives more than `DictationSpans.cutoff` after it ended
     /// (from either device), which is too late to be checked against the dictations kept.
@@ -398,7 +410,7 @@ private final class Channel: @unchecked Sendable {
             locale: locale,
             heard: { [weak owner] text, range, confidence in
                 guard let owner else { return }
-                let (start, end) = Utterance.wallTimes(range, clockNow: owner.streamNow(), now: Date())
+                guard let (start, end) = AudioCapturer.times(range, clockNow: owner.streamNow(), now: Date()) else { return owner.tooLate() }
                 if let spoken = Utterance.row(text, start: start, end: end, device: device, deviceType: deviceType, conf: confidence) {
                     owner.keep(spoken, from: deviceType == "input" ? .microphone : .audio)
                 }

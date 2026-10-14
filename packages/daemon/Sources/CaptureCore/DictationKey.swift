@@ -34,17 +34,6 @@ public enum DictationKey: String, CaseIterable, Sendable {
         }
     }
 
-    /// Whether the key is still held, by the system's flags while polling: its device bit when the
-    /// flags carry one, else the modifier itself. That can't tell left from right, but the hold
-    /// already began on the right one.
-    public func isHeld(_ flags: UInt64) -> Bool {
-        switch self {
-        case .fn: return isDown(flags)
-        case .rightOption: return isDown(flags) || flags & CGEventFlags.maskAlternate.rawValue != 0
-        case .rightCommand: return isDown(flags) || flags & CGEventFlags.maskCommand.rawValue != 0
-        }
-    }
-
     /// What the event tap asks for: `flagsChanged`, and nothing else. It never sees a key typed.
     public static let eventMask: CGEventMask = 1 << CGEventType.flagsChanged.rawValue
 }
@@ -111,12 +100,13 @@ public struct DictationHold: Sendable {
         return release(at: now)
     }
 
-    /// The key as the system has it now, read while it's held: a release that never came as an event
-    /// is a release all the same. And a hold past `longest` is cancelled.
-    public mutating func poll(flags: UInt64, at now: TimeInterval) -> HoldAction {
+    /// The key as the system has it now, read while it's held (the physical key, by its code: never a
+    /// modifier the other hand may also be holding): a release that never came as an event is a
+    /// release all the same. And a hold past `longest` is cancelled.
+    public mutating func poll(keyDown: Bool, at now: TimeInterval) -> HoldAction {
         guard let held else { return .none }
         if now - held.since >= Self.longest { return cancel(.tooLong) }
-        return key.isHeld(flags) ? .none : release(at: now)
+        return keyDown ? .none : release(at: now)
     }
 
     /// Stops the dictation under way, for `why`.
@@ -134,9 +124,12 @@ public struct DictationHold: Sendable {
         return action
     }
 
+    /// Released: too soon is a press, too late (the poll missed it) is over the cap, else a dictation.
     private mutating func release(at now: TimeInterval) -> HoldAction {
         guard let held else { return .none }
         self.held = nil
-        return now - held.since < Self.shortest ? .cancel(held.token, .tooShort) : .end(held.token)
+        let length = now - held.since
+        if length < Self.shortest { return .cancel(held.token, .tooShort) }
+        return length >= Self.longest ? .cancel(held.token, .tooLong) : .end(held.token)
     }
 }

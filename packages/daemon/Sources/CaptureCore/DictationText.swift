@@ -70,12 +70,28 @@ public enum DictationText {
         return aligns(0, 0)
     }
 
-    /// Words, lower-cased, without punctuation; an apostrophe inside a word is part of it.
+    /// Words, lower-cased, without punctuation; an apostrophe inside a word is part of it. A symbol
+    /// (a currency, a mathematical sign, an emoji) is a word of its own, which must match: "€100"
+    /// tidied to "$100" changes what was said.
     static func tokens(_ text: String) -> [String] {
-        text.lowercased().replacingOccurrences(of: "’", with: "'")
-            .split { !($0.isLetter || $0.isNumber || $0 == "'") }
-            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "'")) }
-            .filter { !$0.isEmpty }
+        var out: [String] = [], word = ""
+        func end() {
+            let trimmed = word.trimmingCharacters(in: CharacterSet(charactersIn: "'"))
+            if !trimmed.isEmpty { out.append(trimmed) }
+            word = ""
+        }
+        for character in text.lowercased().replacingOccurrences(of: "’", with: "'") {
+            if character.isLetter || character.isNumber || character == "'" {
+                word.append(character)
+            } else if character.isWhitespace || character.isPunctuation {
+                end()
+            } else {
+                end()
+                out.append(String(character))
+            }
+        }
+        end()
+        return out
     }
 
     /// Where what's typed is exactly what was said (after the spoken commands): terminals and code
