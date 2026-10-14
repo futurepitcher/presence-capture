@@ -40,8 +40,11 @@ enum ConnectAgent {
             let result = Result {
                 try Connector(pcap: pcap).connect(client, store: store, grant: grant,
                                                   entry: { ServerEntry(pcapMCP: server, grantId: $0, store: path) },
-                                                  confirm: { plan in DispatchQueue.main.sync { confirm(plan, grant: grant) } })
+                                                  confirm: { plan in DispatchQueue.main.sync { ask { confirm(plan, grant: grant) } } })
             }
+            // Kept before anything is shown: a grant left able to read is never lost to a Quit.
+            let warning = warning(result, client: client)
+            if let warning { Unseen.keep(warning) }
             // Whether a grant left active is one Agents Read… can withdraw: one in this store.
             let leftHere = (try? result.get()?.stillActive).flatMap { left in
                 left.flatMap { left in try? store.grants().contains { $0.grantId == left.grantId && $0.isActive() } }
@@ -49,12 +52,21 @@ enum ConnectAgent {
             DispatchQueue.main.async {
                 connecting = false
                 show(result, client: client, leftHere: leftHere, log: log)
+                if let warning, !quitting { Unseen.seen(warning) }
             }
         }
     }
 
-    /// Where a warning that couldn't be shown (the app was quitting) waits for the next launch.
-    static let pendingWarningKey = "unshownConnectWarning"
+    /// Whether a confirmation is on screen now: Quit ends it.
+    static var confirming = false
+
+    /// Asks with `show`, unless the app is quitting: then the answer is no, and nothing is shown.
+    static func ask(_ show: () -> Bool) -> Bool {
+        guard !quitting else { return false }
+        confirming = true
+        defer { confirming = false }
+        return show()
+    }
 
     /// A grant left able to read, said in words with the command that revokes it: never only logged.
     static func warning(_ result: Result<Connection?, Error>, client: Client) -> String? {
@@ -74,11 +86,8 @@ enum ConnectAgent {
         if quitting {
             log((try? result.get()).map { $0 == nil ? "connect.declined client=\(client.rawValue)" : "connect.done client=\(client.rawValue)" }
                 ?? "connect.failed client=\(client.rawValue)")
-            // Not shown now, as the app is going; kept to be shown at the next launch.
-            if let warning = warning(result, client: client) {
-                log("connect.warning_kept client=\(client.rawValue)")
-                UserDefaults.standard.set(warning, forKey: pendingWarningKey)
-            }
+            // Not shown now, as the app is going: a warning was kept, to be shown at the next launch.
+            if warning(result, client: client) != nil { log("connect.warning_kept client=\(client.rawValue)") }
             return
         }
         NSApp.activate(ignoringOtherApps: true)

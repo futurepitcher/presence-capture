@@ -121,6 +121,8 @@ struct AgentsReadView: View {
                 loaded = true
                 problem = nil
             } catch {
+                // What was read before isn't said as now.
+                loaded = false
                 problem = "The store couldn't be read."
             }
         }
