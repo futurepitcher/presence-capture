@@ -23,7 +23,7 @@ enum Keychain {
 
     /// The programs in the bundle the current version trusts, beside the app. Adding one is a new
     /// `MasterKeyItem.version`.
-    private static let readers = ["pcap-mcp"]
+    private static let readers = ["pcap-mcp", "pcap"]
 
     /// Run from an app bundle. A development build run from the command line isn't, and has no
     /// readers to share the key with.

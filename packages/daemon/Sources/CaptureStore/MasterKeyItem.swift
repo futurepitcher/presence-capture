@@ -10,8 +10,8 @@ import Security
 /// change to who's trusted (a new reader in the bundle) is a new version of the item, made by the
 /// app from the newest older one, with the same key. Readers ask for the current version only.
 public enum MasterKeyItem {
-    /// Bumped whenever the set of trusted programs changes. v1: the app and `pcap-mcp`.
-    public static let version = 1
+    /// Bumped whenever the set of trusted programs changes. v1: the app and `pcap-mcp`. v2: and `pcap`.
+    public static let version = 2
 
     /// The item every reader asks for.
     public static var current: String { account(version) }
@@ -40,6 +40,35 @@ public enum MasterKeyItem {
         return [keychain]
     }
 
+    /// The key a program in the app's bundle opens the store with: from `keyFile` when one is given
+    /// (tests, other stores), as 32 raw bytes or 64 hex characters; otherwise the current shared
+    /// item, which the app makes trusting the programs in its bundle.
+    public static func load(keyFile: String?, bundleIdentifier: String?) throws -> Data {
+        if let keyFile {
+            guard let data = FileManager.default.contents(atPath: keyFile) else { throw MasterKeyError.file("can't be read") }
+            let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            // Exactly 64 ASCII hex digits: Character.isHexDigit also takes fullwidth forms, which no
+            // integer parse reads.
+            let digits = Array(text.utf8)
+            func value(_ c: UInt8) -> UInt8? {
+                switch c {
+                case 48...57: return c - 48
+                case 97...102: return c - 87
+                case 65...70: return c - 55
+                default: return nil
+                }
+            }
+            if digits.count == 64, case let values = digits.compactMap(value), values.count == 64 {
+                return Data(stride(from: 0, to: 64, by: 2).map { values[$0] << 4 | values[$0 + 1] })
+            }
+            guard data.count == 32 else { throw MasterKeyError.file("must be 32 bytes, raw or as 64 hex characters") }
+            return data
+        }
+        let service = service(bundleIdentifier: bundleIdentifier)
+        guard let key = try read(service: service, account: current) else { throw MasterKeyError.notMade(service: service, account: current) }
+        return key
+    }
+
     /// One item's key; nil when there's no such item. Anything else, an item that isn't 32 bytes
     /// included, is an error rather than a key.
     public static func read(service: String, account: String) throws -> Data? {
@@ -62,11 +91,18 @@ public enum MasterKeyError: Error, CustomStringConvertible {
     case status(OSStatus)
     /// A reader the key is to be shared with isn't in the app's bundle: a broken build.
     case missingReader(String)
+    /// A key file that can't be used.
+    case file(String)
+    /// The app hasn't made the current item yet: it does at its next launch.
+    case notMade(service: String, account: String)
 
     public var description: String {
         switch self {
         case .status(let status): return "Keychain status \(status)"
         case .missingReader(let name): return "\(name) isn't in the app's bundle"
+        case .file(let why): return "the master key file \(why)"
+        case .notMade(let service, let account):
+            return "the store's key isn't in the Keychain yet (\(service) \(account)): open Presence Capture once, or pass --master-key-file"
         }
     }
 }

@@ -98,7 +98,7 @@ memory, and everything at rest is sealed.
 - ✅ `pcap-mcp`: the native MCP server, which SQLite restricts to reads and
   egress records. It passes the same MCP conformance as the reference, now
   run against any server over stdio.
-- ☐ Keychain trust for `pcap-mcp`, in-memory search, and `timeline`, `now`,
+- ✅ Keychain trust for `pcap-mcp`, in-memory search, and `timeline`, `now`,
   `session` and `transcript`.
 - ☐ Embeddings in the daemon, the macOS projector host, `pcap eval` and
   `pcap bench`.
@@ -125,6 +125,10 @@ surface sits behind the same grants, envelope and egress log as MCP.
 - A signed, notarised, reproducible build with published hashes and an SBOM.
 - An external privacy and security review.
 - A docs site.
+
+- ✅ `pcap`, the command line: grants, what agents were given (`pcap egress`),
+  forget, `pcap check`, and `pcap connect` for Claude Code, Claude Desktop and
+  Cursor.
 
 See [RELEASING.md](RELEASING.md).
 

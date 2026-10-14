@@ -11,6 +11,7 @@ let package = Package(
         .executable(name: "PresenceCapture", targets: ["PresenceCapture"]),
         .executable(name: "pcap-driver", targets: ["PcapDriver"]),
         .executable(name: "pcap-mcp", targets: ["PcapMCP"]),
+        .executable(name: "pcap", targets: ["PcapCLI"]),
         .library(name: "CaptureStore", targets: ["CaptureStore"]),
     ],
     targets: [
@@ -20,15 +21,21 @@ let package = Package(
         .target(name: "CaptureCore"),
         // Recall (ADR 0008): the reader's in-memory index and its tools.
         .target(name: "CaptureRecall", dependencies: ["CaptureStore"]),
-        .executableTarget(name: "PresenceCapture", dependencies: ["CaptureStore", "CaptureCore"]),
+        // Connecting an agent: its grant, and pcap-mcp in its MCP config. Shared by `pcap connect`
+        // and the menu's Connect an Agent….
+        .target(name: "CaptureConnect", dependencies: ["CaptureStore"]),
+        .executableTarget(name: "PresenceCapture", dependencies: ["CaptureStore", "CaptureCore", "CaptureConnect"]),
         // The conformance driver (docs/spec/DRIVER.md) over CaptureStore.
         .executableTarget(name: "PcapDriver", dependencies: ["CaptureStore"]),
         // The native MCP server (ADR 0008): reads through grants; writes only egress records.
         .executableTarget(name: "PcapMCP", dependencies: ["CaptureStore", "CaptureRecall"]),
+        // pcap, the command line: grants, egress, forget, check, connect. A writer, in the app's bundle.
+        .executableTarget(name: "PcapCLI", dependencies: ["CaptureStore", "CaptureConnect"]),
         .testTarget(name: "CaptureStoreTests", dependencies: ["CaptureStore"]),
         .testTarget(name: "CaptureCoreTests", dependencies: ["CaptureCore"]),
         .testTarget(name: "PresenceCaptureTests", dependencies: ["PresenceCapture", "CaptureStore"]),
         .testTarget(name: "CaptureRecallTests", dependencies: ["CaptureRecall", "CaptureStore"]),
+        .testTarget(name: "CaptureConnectTests", dependencies: ["CaptureConnect", "CaptureStore"]),
     ],
     swiftLanguageModes: [.v5]
 )
