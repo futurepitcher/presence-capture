@@ -50,6 +50,25 @@ jobs:
                      | sed -E 's#^https://github\.com/futurepitcher/presence-capture/(blob|tree)/main/##' | sort -u)
           exit "${missing}"
 
+  site:
+    name: Docs site builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The build GitHub Pages runs for docs/, here only to check it: nothing is published.
+      - uses: actions/jekyll-build-pages@44a6e6beabd48582f863aeeb6cb2151cc1716697 # v1.0.13
+        with:
+          source: docs
+          destination: _site
+      - name: Every page was built
+        run: |
+          set -euo pipefail
+          for page in index quickstart connect tools revocation threat-model known-limits plugins faq benchmarks verify building; do
+            test -s "_site/${page}.html" || { echo "not built: docs/${page}.md"; exit 1; }
+          done
+
   conformance:
     name: Conformance suites (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
