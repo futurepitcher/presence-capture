@@ -19,6 +19,9 @@ final class LineBufferTests: XCTestCase {
             fed += chunk.count
         }
         XCTAssertLessThanOrEqual(fed, LineBuffer.maxLine, "a line past the limit was still held")
+        // Past the limit and ended in the same chunk: still refused.
+        var ended = LineBuffer()
+        XCTAssertNil(ended.add(Data(repeating: UInt8(ascii: "a"), count: LineBuffer.maxLine + 10) + Data("\n".utf8)))
         // A long line that does end, under the limit, is still read.
         var other = LineBuffer()
         XCTAssertEqual(try XCTUnwrap(other.add(Data(repeating: UInt8(ascii: "b"), count: 1000) + Data("\n".utf8))).count, 1)

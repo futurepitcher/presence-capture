@@ -105,10 +105,11 @@ public final class Gate: @unchecked Sendable {
             lock.withLock { counts.invalid += 1 }
             return
         }
-        let text = { (key: String) -> String? in
-            guard let value = o[key] as? String else { return nil }
-            guard ["app", "bundle", "device"].contains(key) else { return value }
-            return String(String.UnicodeScalarView(value.unicodeScalars.filter { $0.value >= 0x20 && $0.value != 0x7f }.prefix(Self.nameLength)))
+        let text = { (key: String) in o[key] as? String }
+        // A name as it's kept in plain metadata: short, and with no control characters. Exclusion
+        // matches the name as the sensor gave it, before this.
+        let name = { (key: String) -> String? in
+            text(key).map { String(String.UnicodeScalarView($0.unicodeScalars.filter { $0.value >= 0x20 && $0.value != 0x7f }.prefix(Self.nameLength))) }
         }
         func clean(_ value: String) -> String {
             let out = Redact.redact(value)
@@ -138,7 +139,7 @@ public final class Gate: @unchecked Sendable {
 
         let kind = text("kind")!
         if kind == "audio" {
-            let device = text("device")!
+            let device = name("device")!
             let segment = CaptureStore.newCaptureId()
             try append([
                 NewCapture(captureId: segment, capturedAt: at, captureType: "audio_segment", source: source ?? "ambient_audio", sourceApp: device),
@@ -160,10 +161,10 @@ public final class Gate: @unchecked Sendable {
             return
         }
         if kind == "screen" {
-            try append([NewCapture(capturedAt: at, captureType: "screen_text", source: source ?? "screen", sourceApp: text("bundle") ?? app,
+            try append([NewCapture(capturedAt: at, captureType: "screen_text", source: source ?? "screen", sourceApp: name("bundle") ?? name("app"),
                                    sourceUrl: text("url"), contentText: clean(text("text")!), extraction: text("extraction") ?? "ocr")])
         } else {
-            try append([NewCapture(capturedAt: at, captureType: "activity", source: source ?? "activity", sourceApp: text("bundle") ?? app,
+            try append([NewCapture(capturedAt: at, captureType: "activity", source: source ?? "activity", sourceApp: name("bundle") ?? name("app"),
                                    contentText: json(["app": app, "window": clean(window), "state": text("state")!]), extraction: "none")])
         }
     }

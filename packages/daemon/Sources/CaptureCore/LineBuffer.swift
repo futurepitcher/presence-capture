@@ -15,6 +15,11 @@ public struct LineBuffer {
         pending.append(chunk)
         var lines: [Data] = []
         while let end = pending.firstIndex(of: UInt8(ascii: "\n")) {
+            // A line past the limit is refused even when its end came in the same chunk.
+            guard pending.distance(from: pending.startIndex, to: end) <= Self.maxLine else {
+                pending = Data()
+                return nil
+            }
             lines.append(Data(pending[pending.startIndex..<end]))
             pending.removeSubrange(pending.startIndex...end)
         }

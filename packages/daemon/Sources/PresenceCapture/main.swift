@@ -108,8 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             activity?.reset()
             dictation?.cancel(paused ? .paused : .locked)
         }
-        guard let capturer else { return }
-        Task { await capturer.hold(held) }
+        // Screen capture reads screenHold, set above, directly: nothing queued can set it back.
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -182,10 +181,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             // A permission taken away stops dictation.
             self.dictation?.check()
-            Task {
-                await capturer.hold(held)
-                if !held { await capturer.tick(fragments: fragments) }
-            }
+            // A tick that runs late, after a Pause, finds it held (screenHold, set at once) and does nothing.
+            if !held { Task { await capturer.tick(fragments: fragments) } }
             self.refresh()
         })
         timers.append(Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
@@ -691,12 +688,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ConnectAgent.quitting = true
         // A confirmation on screen is answered no.
         if ConnectAgent.confirming { NSApp.abortModal() }
-        sensors?.stop()
+        // Sensors are told to stop at once; quitting waits until they, and all they started, have.
+        let sensorsGone = DispatchGroup()
+        if let sensors {
+            sensorsGone.enter()
+            sensors.stop { sensorsGone.leave() }
+        }
         timers.forEach { $0.invalidate() }
         timers = []
         holdCapture(going: true)
         dictation?.stop()
-        Self.finishWriting(activity: activity, audio: audio, dictation: dictation, admin: admin, connecting: ConnectAgent.underWay) {
+        Self.finishWriting(activity: activity, audio: audio, dictation: dictation, admin: admin, connecting: ConnectAgent.underWay,
+                           sensors: sensorsGone) {
             NSApp.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
@@ -707,9 +710,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// withdrawal), what activity and dictation have queued, and listening. Then `done`, on the main
     /// thread, after any result those posted there.
     static func finishWriting(activity: ActivityCapturer?, audio: Listener?, dictation: Dictating? = nil, admin: DispatchQueue,
-                              connecting: DispatchGroup, done: @escaping () -> Void) {
+                              connecting: DispatchGroup, sensors: DispatchGroup = DispatchGroup(), done: @escaping () -> Void) {
         Task.detached {
             await withCheckedContinuation { done in connecting.notify(queue: .global()) { done.resume() } }
+            await withCheckedContinuation { done in sensors.notify(queue: .global()) { done.resume() } }
             await withCheckedContinuation { done in admin.async { done.resume() } }
             activity?.flush()
             await dictation?.drained()

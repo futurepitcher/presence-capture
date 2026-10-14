@@ -37,10 +37,6 @@ actor ScreenCapturer {
         return (frames, reads, readMs, axReads)
     }
 
-    func hold(_ held: Bool) {
-        holding.set(held)
-    }
-
     /// Whether a window may be captured now: not held, and not locked (the windows behind the lock
     /// screen are still on screen to ScreenCaptureKit).
     private var mayCapture: Bool { !holding.now.held && !screenLocked() }

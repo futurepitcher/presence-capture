@@ -50,6 +50,17 @@ final class GateTests: XCTestCase {
         XCTAssertTrue(app.hasPrefix("Notesxxx"), app)
     }
 
+    func testExclusionMatchesTheWholeNameBeforeItsCutShort() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try CaptureStore(path: dir.appendingPathComponent("store.sqlite").path, masterKey: Seal.newKey())
+        let gate = Gate(store: store, source: "sensor:names")
+        try gate.ingest(["at": "2026-10-06T09:00:00Z", "kind": "screen", "app": String(repeating: "a", count: 300) + "Bank", "window": "Plans",
+                         "text": "the balance"], fragments: ["bank"])
+        XCTAssertEqual(gate.stats.excluded, 1, "a name past the cut escaped its exclusion")
+        XCTAssertEqual(try store.rows("SELECT COUNT(*) FROM capture_event").first?.int(0), 0)
+    }
+
     func testKeepsAMarkedObservationOnceEvenAfterItsRevoked() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: dir) }

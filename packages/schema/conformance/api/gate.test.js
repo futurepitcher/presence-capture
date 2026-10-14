@@ -49,6 +49,15 @@ test('gate: app, bundle and device names are kept short, with no control charact
   store.close();
 });
 
+test('gate: exclusion matches the whole name, before it is cut short for keeping', () => {
+  const store = openStore();
+  const gate = createGate(store, { source: 'sensor:names', fragments: ['bank'] });
+  gate.ingest({ kind: 'screen', at: '2026-10-06T09:00:00.000Z', app: `${'a'.repeat(300)}Bank`, window: 'Plans', text: 'the balance' });
+  assert.equal(gate.stats.excluded, 1, 'a name past the cut escaped its exclusion');
+  assert.equal(count(store), 0);
+  store.close();
+});
+
 test('gate: an observation stamped inside a forgotten range is refused and counted, not taken for a duplicate', () => {
   const store = openStore();
   const gate = createGate(store);

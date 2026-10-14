@@ -84,19 +84,19 @@ final class SensorPlugins: @unchecked Sendable {
         launch(approved)
     }
 
-    func stop() {
-        let processes = lock.withLock { () -> [Process] in
+    /// Stops every sensor with all it started: each process group told to stop at once, and two
+    /// seconds on, killed, group and all, so nothing a sensor ran outlives the app. `done` hears once
+    /// that's happened (at once, when none was running): quitting waits for it.
+    func stop(done: @escaping @Sendable () -> Void = {}) {
+        let groups = lock.withLock { () -> [pid_t] in
             stopping = true
-            return Array(running.values)
+            return running.values.map(\.processIdentifier)
         }
-        // Each sensor is told to stop with what it started (its process group), so nothing it ran
-        // outlives the app; one that ignores being told is killed, group and all.
-        for process in processes {
-            kill(-process.processIdentifier, SIGTERM)
-            process.terminate()
-        }
+        guard !groups.isEmpty else { return done() }
+        for group in groups { kill(-group, SIGTERM) }
         DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
-            for process in processes { kill(-process.processIdentifier, SIGKILL) }
+            for group in groups { kill(-group, SIGKILL) }
+            done()
         }
     }
 
@@ -165,7 +165,9 @@ final class SensorPlugins: @unchecked Sendable {
                 }
             }
         }
-        process.terminationHandler = { [weak self] _ in
+        process.terminationHandler = { [weak self] process in
+            // What it started and left running goes with it: nothing is left without its sensor.
+            kill(-process.processIdentifier, SIGKILL)
             guard let self else { return }
             let again = self.lock.withLock { () -> Bool in
                 self.running[config.name] = nil

@@ -47,15 +47,17 @@ const URL_MAX = 2048;
 /**
  * A page's address as it's kept (in plain metadata, which Forget leaves): its scheme, host and
  * path only. Userinfo, query and fragment go, as do control characters; what's left is redacted
- * like text and cut to URL_MAX characters. `cases/source-url.json` holds every implementation to
- * the same answers. Null for nothing left.
+ * like text and cut to URL_MAX characters. An address with no scheme://host form (data:,
+ * javascript:, blob:, about:, or anything malformed) can carry the page itself, so none of it is
+ * kept. `cases/source-url.json` holds every implementation to the same answers. Null for nothing.
  */
 export function cleanSourceUrl(url) {
   if (url == null) return null;
   let out = String(url).replace(/[\u0000-\u001f\u007f]/g, '');
   out = out.split('#')[0].split('?')[0];
   const parts = out.match(/^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^/]*)([\s\S]*)$/);
-  if (parts) out = parts[1] + parts[2].slice(parts[2].lastIndexOf('@') + 1) + parts[3];
+  if (!parts) return null;
+  out = parts[1] + parts[2].slice(parts[2].lastIndexOf('@') + 1) + parts[3];
   out = [...redact(out)].slice(0, URL_MAX).join('');
   return out === '' ? null : out;
 }

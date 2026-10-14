@@ -62,14 +62,17 @@ export function createGate(store, { fragments = [], platform = 'macos', source }
       stats.invalid += 1;
       return;
     }
-    const o = { ...observation, app: name(observation.app), bundle: name(observation.bundle), device: name(observation.device) };
+    const o = observation;
+    // Names as kept in plain metadata: short, with no control characters. Exclusion matches the
+    // names as the sensor gave them, before this.
+    const kept = { app: name(o.app), bundle: name(o.bundle), device: name(o.device) };
 
     if (o.kind === 'audio') {
       const audioId = `cap_${randomUUID()}`;
       append([{
-        captureId: audioId, captureType: 'audio_segment', source: source ?? 'ambient_audio', sourceApp: o.device, capturedAt: o.at,
+        captureId: audioId, captureType: 'audio_segment', source: source ?? 'ambient_audio', sourceApp: kept.device, capturedAt: o.at,
       }, {
-        captureType: 'audio_transcript', source: source ?? 'ambient_audio', sourceApp: o.device, capturedAt: o.at,
+        captureType: 'audio_transcript', source: source ?? 'ambient_audio', sourceApp: kept.device, capturedAt: o.at,
         contentText: clean(o.transcript), extraction: 'asr', derivedFrom: audioId,
       }], o);
       return;
@@ -92,12 +95,12 @@ export function createGate(store, { fragments = [], platform = 'macos', source }
 
     if (o.kind === 'screen') {
       append([{
-        captureType: 'screen_text', source: source ?? 'screen', sourceApp: o.bundle ?? o.app,
+        captureType: 'screen_text', source: source ?? 'screen', sourceApp: kept.bundle ?? kept.app,
         sourceUrl: o.url ?? null, capturedAt: o.at, contentText: clean(o.text), extraction: o.extraction ?? 'ocr',
       }], o);
     } else {
       append([{
-        captureType: 'activity', source: source ?? 'activity', sourceApp: o.bundle ?? o.app, capturedAt: o.at,
+        captureType: 'activity', source: source ?? 'activity', sourceApp: kept.bundle ?? kept.app, capturedAt: o.at,
         contentText: JSON.stringify({ app: o.app, window: clean(o.window ?? ''), state: o.state }), extraction: 'none',
       }], o);
     }

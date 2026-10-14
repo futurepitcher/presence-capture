@@ -1,5 +1,5 @@
 {
-  "_": "What's kept of a page's address (CONTRACT step 3, for metadata): scheme, host and path only; userinfo, query, fragment and control characters dropped; the rest redacted as text and cut to 2048 characters. Null when nothing is left. Every implementation gives these answers.",
+  "_": "What's kept of a page's address (CONTRACT step 3, for metadata): scheme, host and path only; userinfo, query, fragment and control characters dropped; the rest redacted as text and cut to 2048 characters. An address with no scheme://host form (data:, javascript:, blob:, about:, malformed) is null: it can carry the page itself. Null when nothing is left. Every implementation gives these answers.",
   "max_length": 2048,
   "cases": [
     {
@@ -33,9 +33,24 @@
       "output": "https://example.com/abc"
     },
     {
-      "name": "no scheme: still cut at ? and #",
+      "name": "a data: address carries the page: none of it kept",
+      "input": "data:text/plain,Confidential%20meeting%20notes",
+      "output": null
+    },
+    {
+      "name": "a javascript: address: none of it kept",
+      "input": "javascript:alert(document.cookie)",
+      "output": null
+    },
+    {
+      "name": "a blob: address: none of it kept",
+      "input": "blob:https://example.com/0b1c-22",
+      "output": null
+    },
+    {
+      "name": "about:blank, and anything with no host: none of it kept",
       "input": "about:blank?x=1",
-      "output": "about:blank"
+      "output": null
     },
     {
       "name": "nothing left is null",
