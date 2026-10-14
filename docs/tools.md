@@ -216,13 +216,17 @@ captures only. Hearing needs macOS 26, so on an older Mac the answer is `[]`.
 
 - `from` (time, default an hour before `to`).
 - `to` (time, default now).
-- `device` (string, optional): `input` is the microphone, `output` is what this
-  Mac plays. Leave it out for both. Any other value is refused.
+- `device` (string, optional): `input` is the microphone, dictation included;
+  `output` is what this Mac plays. Leave it out for both. Any other value is
+  refused.
 - `limit` (integer, default 100).
 
-Each envelope's `source_app` says which side it came from. As with `timeline`, a
-span with too many captures returns the earliest. The `input` side stays empty
-until the person allows the microphone and turns on Hear the Microphone.
+Each envelope's `source_app` says which side it came from: `input` or `output`
+for what was heard, or, for something dictated, the app it was typed into (its
+bundle ID, such as `com.apple.Notes`). As with `timeline`, a span with too many
+captures returns the earliest. The `input` side holds speech only once the
+person allows the microphone and turns on Hear the Microphone, or dictates with
+Remember What I Dictate on.
 
 ```json
 { "name": "transcript", "arguments": { "from": "2026-10-14T15:00:00Z", "device": "input" } }

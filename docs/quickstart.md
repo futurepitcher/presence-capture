@@ -63,9 +63,27 @@ Press **Allow Accessibility…**. The app then reads the address of the page in
 front, and the text of the window in front, more exactly than it can from pixels.
 A password field is never read.
 
-<!-- dictation: step 4, added with #23; Connect becomes step 5 -->
+### 4. Dictation (optional, experimental)
 
-### 4. Connect an agent
+On macOS 26, press **Turn On Dictation…**. Then hold a key and speak, in any
+app: what you say is typed where the cursor is, transcribed on this Mac. It asks
+for the microphone, Input Monitoring (for the key alone: no other key is ever
+seen) and Accessibility (to type).
+
+- **The key:** Fn (Globe) by default, or Right Option or Right Command. If macOS
+  does something of its own with the Globe key, the step says so and offers the
+  others.
+- **Remember what I dictate** is on by default: what you say is kept like any
+  other capture, and forgotten the same way. Never from excluded apps or
+  password fields.
+- Nothing is typed into a password field. If you move to another field before
+  it's typed, the words are held in a small panel for you to copy.
+
+It's experimental in 0.1: see its [known limits](known-limits.md#dictation).
+**Dictation (Experimental)** in the menu turns it off, changes the key, and
+turns remembering and Tidy What I Say on or off.
+
+### 5. Connect an agent
 
 Press the button for your agent: **Claude Code**, **Claude Desktop** or
 **Cursor**. The app shows the change it will make to the agent's settings, and

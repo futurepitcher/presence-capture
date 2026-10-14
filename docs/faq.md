@@ -105,6 +105,19 @@ problem, not a feature being held back ([ADR 0001](adr/0001-serving-trust-bounda
 §6.2). The server itself is read-only and local-only, which limits what it can be
 made to do. Detail: [threat-model.md](threat-model.md), [tools.md](tools.md).
 
+### What does dictation do, and what does it keep?
+
+On macOS 26, if you turn it on, holding a key and speaking types the words where
+the cursor is, transcribed on this Mac. It's experimental in 0.1 and off until
+you choose it. It needs the microphone, Input Monitoring for the key (the app
+watches that one key, never what you type) and Accessibility to type. It never
+types into a password field. With **Remember What I Dictate** (on by default),
+what you said is kept as a transcript, sealed and forgotten like any other
+capture, but never from an excluded app or window or a password field. When a
+field won't take text directly, the words are pasted: your clipboard holds them
+for up to 750 ms, then gets back what it held. See
+[known-limits.md](known-limits.md#dictation).
+
 ## Your data
 
 ### What happens when I Forget?
