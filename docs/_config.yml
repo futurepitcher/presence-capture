@@ -1,0 +1,4 @@
+# GitHub Pages, from this folder, with a theme Pages builds in: no build dependencies (R5).
+title: Presence Capture
+description: Remembers what you see, hear and do on your Mac, for the agents you choose. Local, sealed, and forgettable.
+theme: jekyll-theme-primer

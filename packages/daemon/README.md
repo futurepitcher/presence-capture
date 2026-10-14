@@ -85,8 +85,10 @@ can be revoked together. Check one with the
 [sensor kit](../schema/conformance/plugins/sensor-kit.js):
 
 ```sh
-node ../schema/bin/sensor-kit.js -- node ../plugins/git-activity/sensor.mjs --once ~/code/repo
+node ../schema/bin/sensor-kit.js -- node "$PWD/../plugins/git-activity/sensor.mjs" --once ~/code/repo
 ```
+
+The sensor's path must be absolute: the host starts every sensor in `/`.
 
 ## `pcap-mcp`, the native MCP server
 

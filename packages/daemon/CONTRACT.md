@@ -62,7 +62,8 @@ Per captured artifact, in this order:
 - Runs on-device. Nothing leaves the machine.
 - Default ASR MUST be redistributable without a gate or revenue limit. On
   macOS that is the OS's own: **SpeechAnalyzer** on macOS 26, on-device
-  `SFSpeechRecognizer` before it. Recognition never falls back to a network
+  `SFSpeechRecognizer` before it (not in 0.1, which hears on macOS 26 only).
+  Recognition never falls back to a network
   service ([ADR 0004](../../docs/adr/0004-apple-on-device-models.md)).
 - Diarization is opt-in and never a default dependency.
 - The transcript inherits the audio's `privacy_level`. It MUST NOT be assigned a
