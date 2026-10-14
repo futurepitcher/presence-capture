@@ -66,6 +66,13 @@ struct DictationParts {
     var stillFocused: @Sendable (DictationFocus, FrontApp?) -> Bool = { focus, app in
         (focus.element as? AXElement).map { Focus.stillFocused($0.element, in: app) } ?? false
     }
+    /// Whether the field is known not to be a password field now, and Secure Event Input is off:
+    /// asked off the main thread with stillFocused, just before Accessibility changes the field
+    /// (an app can make the same field secure while dictation waits).
+    var stillOpen: @Sendable (DictationFocus) -> Bool = { focus in
+        guard let element = focus.element as? AXElement, !IsSecureEventInputEnabled() else { return false }
+        return Focus.security(of: element.element) == .open
+    }
     /// Puts back a clipboard a paste is holding, and drops pastes not yet made (quitting).
     var finishTyping: () -> Void = {}
     /// Given what says a dictation is being heard: pastes wait while it does.
@@ -444,7 +451,7 @@ final class Dictation: Dictating, @unchecked Sendable {
             keep()
         case .type:
             let expected = now.focus
-            let (stillLive, refusedSecure, stillFocused, app) = (self.stillLive, self.refusedSecure, parts.stillFocused, now.app)
+            let (stillLive, refusedSecure, stillFocused, stillOpen, app) = (self.stillLive, self.refusedSecure, parts.stillFocused, parts.stillOpen, now.app)
             let (allowed, canType) = (parts.allowed, parts.canType)
             parts.type(text, expected, { [weak self] answer in
                 // Before anything is typed or pasted: still this dictation, still allowed, still the app
@@ -475,14 +482,16 @@ final class Dictation: Dictating, @unchecked Sendable {
                     }
                 }
             }, {
-                // Off the main thread, just before Accessibility changes the field. The focus is read
-                // first (it can wait on an app); then whether it's still this dictation and still
-                // allowed, so a cancel that came while the read waited is seen.
+                // Off the main thread, just before Accessibility changes the field. The focus and the
+                // field's security are read first (they can wait on an app); then whether it's still
+                // this dictation and still allowed, so a cancel that came while they waited is seen.
                 let focused = stillFocused(expected, app)
+                let open = focused && stillOpen(expected)
                 guard stillLive.contains(token), allowed(), canType() else { return false }
-                // Not the field now, and where the focus went isn't known: as if a password field.
-                if !focused { refusedSecure.insert(token) }
-                return focused
+                // Not the field now (where the focus went isn't known), or the field is, or might now
+                // be, a password field: nothing typed, shown or kept.
+                if !open { refusedSecure.insert(token) }
+                return open
             }, { [weak self] way in
                 guard let self, self.going(token) else { return }
                 if let way {
