@@ -255,14 +255,18 @@ test('recall: recent is newest first; timeline is a span in order; transcript is
     ['standard', 'half an hour ago', { capturedAt: ago(30) }],
     ['standard', 'just now', { capturedAt: ago(1) }],
     ['standard', 'I said this', { captureType: 'audio_transcript', source: 'ambient_audio', sourceApp: 'input', extraction: 'asr', capturedAt: ago(20) }],
+    // Dictated: from the microphone, though its source_app is the app it was typed into.
+    ['standard', 'I dictated this', { captureType: 'audio_transcript', source: 'dictation', sourceApp: 'com.apple.Notes', extraction: 'asr', capturedAt: ago(15) }],
     ['standard', 'the call said that', { captureType: 'audio_transcript', source: 'ambient_audio', sourceApp: 'output', extraction: 'asr', capturedAt: ago(10) }],
   ],
 }, async ({ rpc }) => {
   assert.equal(ids(envelopesFrom(await call(rpc, 'recent', { limit: 1 })))[0], 'the call said that', 'recent was not newest first');
   assert.deepEqual(ids(envelopesFrom(await call(rpc, 'timeline', { from: ago(40), to: ago(0) }))),
-    ['half an hour ago', 'I said this', 'the call said that', 'just now']);
-  assert.deepEqual(ids(envelopesFrom(await call(rpc, 'transcript', { from: ago(60) }))), ['I said this', 'the call said that']);
-  assert.deepEqual(ids(envelopesFrom(await call(rpc, 'transcript', { from: ago(60), device: 'input' }))), ['I said this']);
+    ['half an hour ago', 'I said this', 'I dictated this', 'the call said that', 'just now']);
+  assert.deepEqual(ids(envelopesFrom(await call(rpc, 'transcript', { from: ago(60) }))), ['I said this', 'I dictated this', 'the call said that']);
+  assert.deepEqual(ids(envelopesFrom(await call(rpc, 'transcript', { from: ago(60), device: 'input' }))), ['I said this', 'I dictated this'],
+    'dictation is from the microphone');
+  assert.deepEqual(ids(envelopesFrom(await call(rpc, 'transcript', { from: ago(60), device: 'output' }))), ['the call said that']);
 }));
 
 test('recall: now is the latest session, as cases/sessions.json computes it, with what is on screen', () => withServer({

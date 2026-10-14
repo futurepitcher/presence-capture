@@ -126,6 +126,18 @@ extension CaptureStore {
         try lock.withLock { try rows("SELECT COALESCE(MAX(sequence), 0) FROM capture_event").first?.int(0) ?? 0 }
     }
 
+    /// Where each of these captures came from (its `source`): metadata, never content, for a reader
+    /// indexing captures its grant has already let it read.
+    public func sources(of captureIds: [String]) throws -> [String: String] {
+        try lock.withLock {
+            var out: [String: String] = [:]
+            for id in captureIds {
+                if let row = try rows("SELECT source FROM capture_event WHERE capture_id = ?", id).first { out[id] = row.text(0) }
+            }
+            return out
+        }
+    }
+
     /// How far revocation has got (its highest sequence), and the captures revoked by revocations after
     /// `sequence` up to there, read together: ids and numbers only, so a reader can evict them and move
     /// its cursor past every revocation, one that revoked nothing new included.

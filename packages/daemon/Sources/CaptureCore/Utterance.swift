@@ -56,13 +56,21 @@ public enum Utterance {
         return count > 1
     }
 
+    /// How long ago, in seconds, an utterance ended, on its stream's clock; nil when that can't be told
+    /// (a time that isn't one, or in the future). Asked before its times are made wall-clock times,
+    /// which take an unknowable one for just now.
+    public static func age(_ range: CMTimeRange, clockNow: CMTime) -> Double? {
+        let ago = CMTimeGetSeconds(CMTimeSubtract(clockNow, range.end))
+        return ago.isFinite && ago >= -1 ? max(0, ago) : nil
+    }
+
     /// An utterance's span on the clock its stream's buffers are timed by, as wall-clock times, by
     /// how long before `clockNow` (that clock's reading at `now`) it ended. One that can't be (in the
     /// future, or more than ten minutes back) is taken as just ended.
     public static func wallTimes(_ range: CMTimeRange, clockNow: CMTime, now: Date) -> (start: Date, end: Date) {
         let ago = CMTimeGetSeconds(CMTimeSubtract(clockNow, range.end))
         let length = CMTimeGetSeconds(range.duration)
-        let end = ago.isFinite && ago >= 0 && ago < 600 ? now.addingTimeInterval(-ago) : now
+        let end = ago.isFinite && ago >= 0 && ago < DictationSpans.cutoff ? now.addingTimeInterval(-ago) : now
         return (end.addingTimeInterval(-(length.isFinite ? max(0, length) : 0)), end)
     }
 }
