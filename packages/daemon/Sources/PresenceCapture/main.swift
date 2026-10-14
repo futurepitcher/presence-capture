@@ -52,6 +52,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var sensors: SensorPlugins?
     /// Whether capture is held, for sensor plugins, whose output arrives off the main thread.
     private let heldNow = Flag()
+    /// Whether the exclusion list could be read at the last tick: what's heard is kept only then (R8).
+    private let exclusionsRead = Flag()
     private var timers: [Timer] = []
     private var problem: String?
 
@@ -114,9 +116,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             activity = ActivityCapturer(store: store, log: log.write)
             if #available(macOS 26, *) {
                 let defaults = self.defaults
+                let exclusionsRead = self.exclusionsRead
                 audio = AudioCapturer(store: store, devices: {
                     (defaults.object(forKey: "hearMicrophone") as? Bool ?? false, defaults.object(forKey: "hearSystemAudio") as? Bool ?? true)
-                }, spans: dictationSpans, log: log.write)
+                }, spans: dictationSpans, mayKeep: { exclusionsRead.value }, log: log.write)
                 let exclusions = self.exclusionPath
                 dictation = Dictation(store: store, spans: dictationSpans, defaults: defaults,
                                       held: { [weak self] in self?.heldFor != nil }, paused: { [weak self] in self?.paused ?? true },
@@ -151,11 +154,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let held = self.heldFor != nil
             self.heldNow.value = held
             let seesScreen = CGPreflightScreenCaptureAccess()
-            self.audio?.tick(listening: !held && seesScreen)
+            // A list that exists but can't be read: nothing is captured until it can be (R8), what's
+            // heard included. Hearing stops, and what it was still transcribing isn't kept.
+            let fragments = Exclusion.load(self.exclusionPath)
+            self.exclusionsRead.value = fragments != nil
+            self.audio?.tick(listening: !held && seesScreen && fragments != nil)
             // An erasure a reader held up is finished as soon as the reader lets go (ADR 0002).
             self.admin.async { if store.isErasurePending { _ = try? store.finishErasure() } }
-            // A list that exists but can't be read: nothing is captured until it can be (R8).
-            let fragments = Exclusion.load(self.exclusionPath)
             // Activity is noted while capturing, and the lock itself is noted while locked (it
             // carries no app or window). Paused, asleep or another user's: nothing at all.
             if let fragments, !held || (screenLocked() && !self.paused) {

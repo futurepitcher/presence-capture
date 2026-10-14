@@ -54,8 +54,11 @@ never captured content).
 - **Not kept at all:** pixels and audio ([ADR 0005](adr/0005-text-first-capture.md)).
 - **Before sealing,** the app skips excluded windows, then redacts. Redaction is pattern
   matching: private keys, tokens, `password=` pairs, emails, SSNs, card numbers, IPs, phone
-  numbers, UUIDs and home-folder paths. It misses what the patterns don't describe. If your
-  exclusion list can't be read, nothing is captured.
+  numbers, UUIDs and home-folder paths. It misses what the patterns don't describe.
+  Exclusions match app names and window titles, so they govern what's read from the screen,
+  activity and dictation. Ambient audio isn't tied to a window: what an excluded app plays, or
+  what's said near you while it's in front, is still heard. Pause, or turn hearing off, to keep a
+  call out. If your exclusion list can't be read, nothing is captured, what's heard included.
 
 ### The master key
 
@@ -89,7 +92,9 @@ first, then Vision OCR), the active app and window, and on-device transcripts of
 a network service ([ADR 0004](adr/0004-apple-on-device-models.md)).
 
 Before disk, in order: exclusion, redaction, sealing. An excluded window isn't read, and
-activity then records the state alone, not which app. Secure text fields are skipped. The app
+activity then records the state alone, not which app. Accessibility skips secure text fields.
+Where a window's text is read by OCR instead, what's drawn is read: a password field normally
+shows dots, but a password shown in clear can be captured. The app
 is signed with the hardened runtime and has one entitlement, audio input
 ([`PresenceCapture.entitlements`](../packages/daemon/PresenceCapture.entitlements)). It isn't
 App Sandboxed. macOS asks you for Screen Recording, Accessibility and the microphone. The app's
@@ -135,7 +140,8 @@ change a capture, a key or a grant (ADR 0008 §4).
 | Life | Expiry is required (30 days by default). Revoking takes effect on the next call |
 
 - A call with no grant, or an expired or revoked one, gets an explicit denial, not an empty
-  result.
+  result. In 0.1 the denial isn't written to the egress log, though ADR 0001 says it should be
+  ([known limits](known-limits.md#agents-and-the-log)).
 - **Connect an Agent…** and `pcap connect` give each agent its own grant: `standard`, every
   type, 30 days. They show the change to the agent's config file, ask first, and copy the file
   aside. Granting `sensitive` or `excluded` takes `--levels` on `pcap grant add` or
@@ -179,8 +185,8 @@ The rule: guarantees hold by construction, not because a plugin promises.
 | | Sensors | Projectors | Exporters |
 |---|---------|------------|-----------|
 | What | An executable that prints observations as JSON lines | A WebAssembly module that computes a derived view from one capture | Anything that sends content out |
-| What holds | Never touches the store or key. Same gate as built-in sensors. Captures are tagged `sensor:<name>`, so one sensor can be revoked at once. Dropped, not queued, while capture is held. Runs only if its files match the SHA-256 pins you approved | No imports, so no network, files, clock or randomness. 16 MiB memory cap, a time limit, a fresh instance per capture, output validated, module pinned by hash. Reads through a grant made from its manifest, enveloped and logged. Outputs are sealed under the source capture's key, so Forget erases them | Design only. One that persists is a projector. One that sends gets a single `send` import bound to one destination you approve |
-| What doesn't | Runs as you, unsandboxed. It can plant text in your record. Pins catch a swapped file, but they live in `sensors.json` and don't authenticate it | It reads every capture its manifest names | Depends on ADR 0006, which isn't in the repository yet |
+| What holds | Given no store or key: it prints observations, and they pass the same gate as built-in sensors. Captures are tagged `sensor:<name>`, so one sensor can be revoked at once. Dropped, not queued, while capture is held. Runs only if its files match the SHA-256 pins you approved | No imports, so no network, files, clock or randomness. 16 MiB memory cap, a time limit, a fresh instance per capture, output validated, module pinned by hash. Reads through a grant made from its manifest, enveloped and logged. Outputs are sealed under the source capture's key, so Forget erases them | Design only. One that persists is a projector. One that sends gets a single `send` import bound to one destination you approve |
+| What doesn't | Runs as you, unsandboxed, so it can do anything you can: read the store's file, run `pcap` to issue itself a grant, use the network. It can plant text in your record. Pins catch a swapped file, but they live in `sensors.json` and don't authenticate it | It reads every capture its manifest names | Depends on ADR 0006, which isn't in the repository yet |
 | Status | In the reference and the macOS app | Reference host only. The macOS app hosts none | None |
 
 ## Forget, revocation and retention
@@ -228,11 +234,11 @@ How it's tested:
 | Adversary | What holds | What doesn't |
 |-----------|------------|--------------|
 | **Someone whose text you view, plus an agent with a grant** (ADR 0001 A1, A2, C1). Spoken words count too: they're transcribed | Content always arrives in the envelope, with provenance the text can't forge. The server has no write, send or run tool, so planted text can't act through it. The agent sees only what its grant admits, up to the row cap, and every read is logged | The envelope labels. It doesn't stop a credulous agent from following planted text with its other tools: writing a file, sending a message, passing on what it read. A server-side fix is "an open research problem" (ADR 0001 §6.2) |
-| **A malicious or compromised MCP client** (A3), such as a rogue extension | It's confined to its grant. No grant, or an expired or revoked one, is denied on the next call and logged. It can't write, issue grants, read the egress log or reach `sacred_mode` (ADR 0001 §7, T1 to T12) | It reads everything its grant admits. Many small queries can rebuild far more than intended: the log shows it, nothing prevents it (C2). The grant ID is a name, not a secret. It sits in the agent's config and command line, and whatever starts `pcap-mcp` with it reads under that grant |
+| **A malicious or compromised MCP client** (A3), such as a rogue extension | It's confined to its grant. No grant, or an expired or revoked one, is denied on the next call (the denial isn't logged in 0.1). It can't write, issue grants, read the egress log or reach `sacred_mode` (ADR 0001 §7, T1 to T12) | It reads everything its grant admits. Many small queries can rebuild far more than intended: the log shows it, nothing prevents it (C2). The grant ID is a name, not a secret. It sits in the agent's config and command line, and whatever starts `pcap-mcp` with it reads under that grant |
 | **Another process running as you** (A4) | Little. Its reads through `pcap-mcp` appear in the egress log and in **Agents Read…**. Sealed content needs the master key, and macOS prompts for programs not on the Keychain item's list | No authentication boundary between local processes owned by the same user (ADR 0001 §6.1, [SECURITY.md](../SECURITY.md)). The Keychain trusts `pcap`, so a process that runs it can issue itself a grant, or Forget. It can read plain metadata and the egress log from the file. With write access to the file it can drop the log's triggers and recompute its chain, which is unkeyed (ADR 0001 names a local root user here). It can add a sensor to `sensors.json`. While a dictation is pasted, its words sit on the clipboard for up to 750 ms, where any app can read them. Clipboard managers that honor the transient mark don't keep them |
 | **Another macOS user** | The store is in your home folder, and macOS makes `~/Library` private to you by default. The project sets no file permissions of its own. Content is sealed, and the key is in your login Keychain. Capture pauses while another user has the Mac | Admin accounts and root can read the files, metadata included. Whoever has your login password can unlock your Keychain |
 | **Someone with a copy of the disk or a backup** (stolen Mac, Time Machine) | Content is ciphertext without the master key. After a Forget the key is gone from the live store, so a surviving copy of the ciphertext (snapshot, SSD remnant, later backup) is noise | Metadata is plain: times, apps, URLs, grants, the egress log. A backup made before a Forget holds the sealed content and its wrapped key, readable with the master key (ADR 0002 §4). The master key is in the login Keychain, which a backup of your home folder normally includes. Your login password and the backup's encryption protect it, not this project. The app doesn't require or check FileVault |
-| **A malicious plugin** (ADR 0007) | A sensor can't touch the store or key. Its output passes the gate, is tagged and can be revoked, and it runs only if its files match what you approved. A projector has no network, files, clock or randomness, runs under size and time limits, and its output is validated and sealed under the capture's key | A sensor runs as you, unsandboxed: it can read your files and use the network. Approve only commands you've read. A projector reads whatever its manifest names. The macOS app hosts none, so the Mac app has no projector surface today |
+| **A malicious plugin** (ADR 0007) | A sensor is given no store or key. What it submits passes the gate, is tagged and can be revoked, and it runs only if its files match what you approved. A projector has no network, files, clock or randomness, runs under size and time limits, and its output is validated and sealed under the capture's key | A sensor runs as you, unsandboxed: it can read your files, the store's included, run `pcap`, and use the network. Pins approve a program's bytes, not what it may do. Approve only commands you've read. A projector reads whatever its manifest names. The macOS app hosts none, so the Mac app has no projector surface today |
 | **A compromised release pipeline** | Releases come only from [`release.yml`](../.github/workflows/release.yml), on a GitHub-hosted runner, from a `v*` tag, in a protected `release` environment that holds the Apple credentials and asks the maintainer to approve each run. They're signed (Developer ID, hardened runtime), notarized and attested. You can verify the attestation (workflow, tag, commit, runner), the checksums and Apple's checks, and run the checks that must fail ([verify.md](verify.md)). The SBOM lists the three programs, and there are no third-party runtime dependencies. Updates are manual | An attestation says where a DMG was built, not that its source is benign. Signing and notarization name the publisher and catch tampering. They aren't a code review. Compromise of the maintainer's GitHub account, the environment approval or the Apple credentials could yield a validly signed bad build. Builds aren't bit-for-bit reproducible in 0.1 ([building.md](building.md)). The commit you verify against comes from the release notes, so check it against the tag in the repository |
 | **A network attacker** (A5) | There is no listener. `pcap-mcp` speaks stdio. The app's one request is the update check you choose, over HTTPS, and macOS fetches the speech model through its own service | Out of scope in v1, by construction. An agent's own network access isn't ours to limit |
 

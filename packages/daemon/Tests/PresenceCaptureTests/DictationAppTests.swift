@@ -3,6 +3,7 @@
 import CoreMedia
 import CryptoKit
 import Foundation
+import ScreenCaptureKit
 @testable import PresenceCapture
 import XCTest
 
@@ -94,6 +95,22 @@ final class DictationAppTests: XCTestCase {
         XCTAssertEqual(Inserter.insert(" world", into: moved, proceed: { false }), .stopped)
         XCTAssertEqual(moved.changed, 0, "the field was changed after it was told not to")
         XCTAssertEqual(moved.text, "Hello")
+    }
+
+    func testNothingHeardIsKeptWhileTheExclusionListCantBeRead() throws {
+        guard #available(macOS 26, *) else { throw XCTSkip("needs macOS 26") }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try CaptureStore(path: dir.appendingPathComponent("store.sqlite").path, masterKey: SymmetricKey(size: .bits256))
+        let readable = Flag()
+        let audio = AudioCapturer(store: store, devices: { (true, true) }, mayKeep: { readable.value }, log: { _ in })
+        let said = Spoken(at: Date(), seconds: 2, device: "Mic (input)", deviceType: "input", text: "the plan for friday")
+        // Transcribed while the list can't be read, however it was started: not kept.
+        audio.keep(said, from: .microphone)
+        XCTAssertEqual(try store.rows("SELECT COUNT(*) FROM capture_event").first?.int(0), 0, "heard and kept while the exclusion list couldn't be read")
+        readable.value = true
+        audio.keep(said, from: .microphone)
+        XCTAssertEqual(try store.rows("SELECT COUNT(*) FROM capture_event").first?.int(0), 2, "the segment and its transcript")
     }
 
     func testAmbientAudioDropsWhatWasDictatedFromTheMicrophoneOnly() throws {
