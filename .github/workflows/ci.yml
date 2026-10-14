@@ -104,6 +104,13 @@ jobs:
           swift build --package-path ../daemon --product pcap-mcp
           PRESENCE_CAPTURE_MCP="$(swift build --package-path ../daemon --show-bin-path)/pcap-mcp" npm test
 
+      # The recall eval (ADR 0008): pcap-mcp, built as it ships, over 30 days of
+      # synthetic captures. Fails below recall@5 of 0.80 or a search p95 of 300 ms.
+      - name: Recall eval against pcap-mcp
+        run: |
+          swift build -c release --package-path packages/daemon --product pcap-mcp
+          node packages/schema/bin/eval.js --days 30 --server "$(swift build -c release --package-path packages/daemon --show-bin-path)/pcap-mcp"
+
   # Developer Certificate of Origin (GOVERNANCE.md): every commit in a pull
   # request carries a Signed-off-by trailer naming its author. Sign off with
   # `git commit -s`. Dependabot's updates are exempt: they're automation the

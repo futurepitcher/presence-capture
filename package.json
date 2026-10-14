@@ -9,6 +9,7 @@
   "engines": { "node": ">=22.13.0" },
   "scripts": {
     "test": "npm run test --workspaces --if-present",
-    "conformance": "npm run conformance --workspaces --if-present"
+    "conformance": "npm run conformance --workspaces --if-present",
+    "eval": "node packages/schema/bin/eval.js"
   }
 }
