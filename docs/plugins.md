@@ -107,9 +107,10 @@ takes in a sensor's captures like any others.
 ### What a sensor can't promise
 
 A sensor needs real access to the system: git, the music player, a calendar. So it
-can't be sandboxed the way a projector is. **It runs with your permissions.** The
-gate guarantees what it *stores*. Nothing can guarantee what a native program does
-on its own.
+can't be sandboxed the way a projector is. **It runs with your permissions**, so
+it can do what you can: read the store's file, run `pcap`, use the network. The
+host gives it no store or key, and the gate guarantees what it *stores* through
+the host. Nothing can guarantee what a native program does on its own.
 
 So a sensor runs only as approved:
 - Its **pins** are the SHA-256 of its executable and of every regular file its
