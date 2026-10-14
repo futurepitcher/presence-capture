@@ -55,7 +55,7 @@ keeps the record, so you can still say "an agent read a capture from Notes at
   with another key, even when every capture in it has been revoked
   (`key_check`, migration 009).
 - **No plaintext on disk.** Exclusion comes first, then redaction, then
-  sealing, then the write ([CONTRACT.md](../packages/daemon/CONTRACT.md)). The
+  sealing, then the write ([CONTRACT.md](https://github.com/futurepitcher/presence-capture/blob/main/packages/daemon/CONTRACT.md)). The
   forensic check below looks for plaintext as well as for revoked bytes.
 - **Identical content is stored twice.** Two captures with the same bytes are
   sealed under two keys, so either can be erased alone.
@@ -102,8 +102,8 @@ A scope names captures like this:
 ![The order of a Forget: three steps in one transaction under the write lock, the commit, then truncating the write-ahead log.](images/revocation-timeline.svg)
 
 The code is `revoke()` in
-[`store.js`](../packages/schema/src/store.js), and `revoke` in the Swift
-[`Store.swift`](../packages/daemon/Sources/CaptureStore/Store.swift). The Swift
+[`store.js`](https://github.com/futurepitcher/presence-capture/blob/main/packages/schema/src/store.js), and `revoke` in the Swift
+[`Store.swift`](https://github.com/futurepitcher/presence-capture/blob/main/packages/daemon/Sources/CaptureStore/Store.swift). The Swift
 store takes the same steps in the same order.
 
 1. **Lock, then work out the set.** The store takes the write lock
@@ -363,7 +363,7 @@ PRESENCE_CAPTURE_DRIVER="$(swift build --package-path ../daemon --show-bin-path)
 
 **On a real Mac.** These tests make stores in a temporary directory, with
 synthetic captures. The live forget check,
-[`scripts/live-forget-check.mjs`](../scripts/live-forget-check.mjs), does the same
+[`scripts/live-forget-check.mjs`](https://github.com/futurepitcher/presence-capture/blob/main/scripts/live-forget-check.mjs), does the same
 to the app's own store while it captures. It pins the log with a read
 transaction of its own while you Forget, checks the erasure is pending, then lets
 go and checks that none of the forgotten sealed bytes is left in any file under
@@ -411,17 +411,17 @@ These are limits, not bugs. ADR 0002 §4 states most of them.
   and Claude have reviewed them. No outside firm has audited them.
 
 If you find revoked content you can recover from the files, that's the most
-valuable bug you can report. Do it privately: [SECURITY.md](../SECURITY.md).
+valuable bug you can report. Do it privately: [SECURITY.md](https://github.com/futurepitcher/presence-capture/blob/main/SECURITY.md).
 
 ## Where to look in the code
 
 | What | Where |
 |------|-------|
-| Sealing | [`seal.js`](../packages/schema/src/seal.js), [`Seal.swift`](../packages/daemon/Sources/CaptureStore/Seal.swift) |
-| Append, late-write refusal, `revoke`, `truncateLog`, `retain` | [`store.js`](../packages/schema/src/store.js), [`Store.swift`](../packages/daemon/Sources/CaptureStore/Store.swift) |
-| The read path | `twoPhase` in `store.js`, [`ReadPath.swift`](../packages/daemon/Sources/CaptureStore/ReadPath.swift) |
-| The tables and triggers | [`005_erasable_content.sql`](../packages/schema/migrations/005_erasable_content.sql), [`008_durable_erasure.sql`](../packages/schema/migrations/008_durable_erasure.sql), [`009_key_check.sql`](../packages/schema/migrations/009_key_check.sql) |
-| The checks | [`conformance/store/`](../packages/schema/conformance/store) |
+| Sealing | [`seal.js`](https://github.com/futurepitcher/presence-capture/blob/main/packages/schema/src/seal.js), [`Seal.swift`](https://github.com/futurepitcher/presence-capture/blob/main/packages/daemon/Sources/CaptureStore/Seal.swift) |
+| Append, late-write refusal, `revoke`, `truncateLog`, `retain` | [`store.js`](https://github.com/futurepitcher/presence-capture/blob/main/packages/schema/src/store.js), [`Store.swift`](https://github.com/futurepitcher/presence-capture/blob/main/packages/daemon/Sources/CaptureStore/Store.swift) |
+| The read path | `twoPhase` in `store.js`, [`ReadPath.swift`](https://github.com/futurepitcher/presence-capture/blob/main/packages/daemon/Sources/CaptureStore/ReadPath.swift) |
+| The tables and triggers | [`005_erasable_content.sql`](https://github.com/futurepitcher/presence-capture/blob/main/packages/schema/migrations/005_erasable_content.sql), [`008_durable_erasure.sql`](https://github.com/futurepitcher/presence-capture/blob/main/packages/schema/migrations/008_durable_erasure.sql), [`009_key_check.sql`](https://github.com/futurepitcher/presence-capture/blob/main/packages/schema/migrations/009_key_check.sql) |
+| The checks | [`conformance/store/`](https://github.com/futurepitcher/presence-capture/tree/main/packages/schema/conformance/store) |
 | The requirements | R2, R3, R10 to R13 in [SCHEMA.md](spec/SCHEMA.md) |
 | The decisions | [ADR 0001](adr/0001-serving-trust-boundary.md), [ADR 0002](adr/0002-erasable-revocation.md), [ADR 0003](adr/0003-retention-is-revocation.md) |
 | What an attacker can and can't do | [threat-model.md](threat-model.md) |

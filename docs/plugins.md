@@ -66,13 +66,13 @@ capture types. A new kind of capture needs an RFC, not a plugin.
 - Standard error is ignored.
 
 The shared rules are data, in
-[`cases/observations.json`](../packages/schema/cases/observations.json), so every
+[`cases/observations.json`](https://github.com/futurepitcher/presence-capture/blob/main/packages/schema/cases/observations.json), so every
 host answers the same way.
 
 ### What the host does with each observation
 
 The same gate that the built-in sensors use
-([`gate.js`](../packages/schema/src/gate.js)). In this order:
+([`gate.js`](https://github.com/futurepitcher/presence-capture/blob/main/packages/schema/src/gate.js)). In this order:
 
 1. **Validate.** An observation that breaks the rules is counted as `invalid` and
    dropped.
@@ -86,7 +86,7 @@ The same gate that the built-in sensors use
 3. **Redact.** Secrets first (private keys, tokens, API keys, `password=…`),
    then personal identifiers (emails, home folder names, card and phone numbers,
    IP addresses). Each becomes a label, such as `[API_KEY]`. The rules are in
-   [`cases/redaction.json`](../packages/schema/cases/redaction.json).
+   [`cases/redaction.json`](https://github.com/futurepitcher/presence-capture/blob/main/packages/schema/cases/redaction.json).
 4. **Deduplicate.** With `dedupe`, the observation lands once per source. The
    store keeps an HMAC of the value, under a key derived from the master key. A
    restarted sensor adds nothing it already sent, and a revoked observation
@@ -169,7 +169,7 @@ The kit fails a sensor when:
 - it emits nothing;
 - its captures don't land as `sensor:<name>`.
 
-The real example is [`git-activity`](../packages/plugins/git-activity/README.md),
+The real example is [`git-activity`](https://github.com/futurepitcher/presence-capture/blob/main/packages/plugins/git-activity/README.md),
 which notes each commit as activity. It sends the commit hash as `dedupe`.
 
 To see the gate work, run a sensor through the host yourself. Save this as
@@ -287,7 +287,7 @@ projection, what it reads, and what kinds it writes.
 
 ### How the host runs one
 
-[`projector-host.js`](../packages/schema/src/projector-host.js) does this:
+[`projector-host.js`](https://github.com/futurepitcher/presence-capture/blob/main/packages/schema/src/projector-host.js) does this:
 
 1. **Loads what was approved.** The module's SHA-256 must be the one approved with
    its manifest. The host refuses a module that imports anything, has unbounded
@@ -466,10 +466,10 @@ calls `runProjector`.
 | What | Where |
 |------|-------|
 | The decision | [ADR 0007](adr/0007-plugins.md) |
-| Sensor host, gate, pins | [`sensor-host.js`](../packages/schema/src/sensor-host.js), [`gate.js`](../packages/schema/src/gate.js), [`pins.js`](../packages/schema/src/pins.js) |
-| Projector host | [`projector-host.js`](../packages/schema/src/projector-host.js), [`projector-worker.js`](../packages/schema/src/projector-worker.js) |
-| The macOS sensor host | [`SensorPlugins.swift`](../packages/daemon/Sources/PresenceCapture/SensorPlugins.swift), [`Gate.swift`](../packages/daemon/Sources/CaptureStore/Gate.swift), [`Pins.swift`](../packages/daemon/Sources/CaptureStore/Pins.swift) |
-| The kits and what they check | [`conformance/plugins/`](../packages/schema/conformance/plugins) |
-| A sensor example | [`packages/plugins/git-activity`](../packages/plugins/git-activity/README.md) |
+| Sensor host, gate, pins | [`sensor-host.js`](https://github.com/futurepitcher/presence-capture/blob/main/packages/schema/src/sensor-host.js), [`gate.js`](https://github.com/futurepitcher/presence-capture/blob/main/packages/schema/src/gate.js), [`pins.js`](https://github.com/futurepitcher/presence-capture/blob/main/packages/schema/src/pins.js) |
+| Projector host | [`projector-host.js`](https://github.com/futurepitcher/presence-capture/blob/main/packages/schema/src/projector-host.js), [`projector-worker.js`](https://github.com/futurepitcher/presence-capture/blob/main/packages/schema/src/projector-worker.js) |
+| The macOS sensor host | [`SensorPlugins.swift`](https://github.com/futurepitcher/presence-capture/blob/main/packages/daemon/Sources/PresenceCapture/SensorPlugins.swift), [`Gate.swift`](https://github.com/futurepitcher/presence-capture/blob/main/packages/daemon/Sources/CaptureStore/Gate.swift), [`Pins.swift`](https://github.com/futurepitcher/presence-capture/blob/main/packages/daemon/Sources/CaptureStore/Pins.swift) |
+| The kits and what they check | [`conformance/plugins/`](https://github.com/futurepitcher/presence-capture/tree/main/packages/schema/conformance/plugins) |
+| A sensor example | [`packages/plugins/git-activity`](https://github.com/futurepitcher/presence-capture/blob/main/packages/plugins/git-activity/README.md) |
 | What revocation does to a plugin's output | [revocation.md](revocation.md) |
-| Sensors in the daemon | [daemon README](../packages/daemon/README.md#sensor-plugins) |
+| Sensors in the daemon | [daemon README](https://github.com/futurepitcher/presence-capture/blob/main/packages/daemon/README.md#sensor-plugins) |

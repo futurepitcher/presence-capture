@@ -30,7 +30,7 @@ both are small:
   It happens only when you choose it. The request carries no captures. GitHub sees
   your IP address and the usual request headers. If a newer release exists, the
   app offers to open its page in your browser
-  ([`Updates.swift`](../packages/daemon/Sources/PresenceCapture/Updates.swift)).
+  ([`Updates.swift`](https://github.com/futurepitcher/presence-capture/blob/main/packages/daemon/Sources/PresenceCapture/Updates.swift)).
 - **A speech model, once, on macOS 26.** When hearing first starts, and the speech
   model for your language isn't on the Mac, the app asks macOS to install it, and
   macOS downloads it from Apple. The app names only the language. Recognition runs
@@ -75,7 +75,7 @@ Before anything is written, secrets (private keys, tokens, API keys,
 `password=…`) and personal identifiers (emails, card and phone numbers, IP
 addresses) are replaced with labels such as `[API_KEY]`. Redaction matches known
 patterns, so a secret in a shape it doesn't know isn't caught. The order of
-steps is in [CONTRACT.md](../packages/daemon/CONTRACT.md#write-path).
+steps is in [CONTRACT.md](https://github.com/futurepitcher/presence-capture/blob/main/packages/daemon/CONTRACT.md#write-path).
 
 ### What about other people on a call or in the room?
 
@@ -223,10 +223,10 @@ source. That needs Xcode 26 or later ([building.md](building.md)).
 ### What about Windows or Linux?
 
 The Mac version ships first, and Windows follows once it has
-([ROADMAP.md](../ROADMAP.md)). The schema, the conformance suite and the reference
+([ROADMAP.md](https://github.com/futurepitcher/presence-capture/blob/main/ROADMAP.md)). The schema, the conformance suite and the reference
 MCP server run on any OS with Node 22.13 or later and no other dependency.
 `packages/schema/bin/replay-fixture.js` fills a store with a synthetic day, so you
-can try them without a Mac ([CONTRIBUTING.md](../CONTRIBUTING.md)).
+can try them without a Mac ([CONTRIBUTING.md](https://github.com/futurepitcher/presence-capture/blob/main/CONTRIBUTING.md)).
 
 ## The project
 
@@ -236,7 +236,7 @@ Privately, through a GitHub security advisory: the **Report a vulnerability**
 button under the Security tab of the repository. Don't open a public issue for
 anything that could expose captured data. Expect an acknowledgement within 5
 working days. Revoked content you can recover from the store's files is the most
-valuable bug you can report. [SECURITY.md](../SECURITY.md) lists what's in scope
+valuable bug you can report. [SECURITY.md](https://github.com/futurepitcher/presence-capture/blob/main/SECURITY.md) lists what's in scope
 and the limits already documented.
 
 ### What's the license?
@@ -244,4 +244,4 @@ and the limits already documented.
 Apache-2.0, chosen over MIT for its explicit patent grant. The pledge: the core
 stays Apache-2.0, with no relicensing and no contributor license agreement, and
 nothing paid ever gates capture, memory or erasure
-([LICENSE](../LICENSE), [GOVERNANCE.md](../GOVERNANCE.md)).
+([LICENSE](https://github.com/futurepitcher/presence-capture/blob/main/LICENSE), [GOVERNANCE.md](https://github.com/futurepitcher/presence-capture/blob/main/GOVERNANCE.md)).

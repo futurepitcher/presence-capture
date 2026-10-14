@@ -7,9 +7,9 @@ output, opens no network socket, and has six tools. Every read is made under a
 the [egress log](#grants-and-the-egress-log).
 
 This page is the reference. To connect an agent, see [connect.md](connect.md).
-The reference server in [`packages/mcp`](../packages/mcp/README.md) has the same
+The reference server in [`packages/mcp`](https://github.com/futurepitcher/presence-capture/blob/main/packages/mcp/README.md) has the same
 tools and answers. Both pass one conformance suite,
-[`mcp.test.js`](../packages/mcp/conformance/mcp.test.js), which decides what the
+[`mcp.test.js`](https://github.com/futurepitcher/presence-capture/blob/main/packages/mcp/conformance/mcp.test.js), which decides what the
 behavior is.
 
 | Tool | Answers |
@@ -387,4 +387,4 @@ opens.
 - [ADR 0001](adr/0001-serving-trust-boundary.md): why serving capture is a trust
   boundary, and what the envelope, grants and egress log are for.
 - [ADR 0008](adr/0008-recall-indexes-in-memory.md): why the index is in memory.
-- [`packages/mcp`](../packages/mcp/README.md): the reference server.
+- [`packages/mcp`](https://github.com/futurepitcher/presence-capture/blob/main/packages/mcp/README.md): the reference server.

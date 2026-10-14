@@ -4,7 +4,7 @@ Numbers anyone can reproduce, with the commands that produce them.
 
 ## Recall (the eval)
 
-[`eval/`](../eval/README.md), run on 2026-10-14 against `pcap-mcp` built in
+[`eval/`](https://github.com/futurepitcher/presence-capture/blob/main/eval/README.md), run on 2026-10-14 against `pcap-mcp` built in
 release, on an Apple Silicon Mac:
 
 ```sh
@@ -19,7 +19,7 @@ npm run eval -- --days 30 --server "$(swift build -c release --package-path pack
 | 25 paraphrased questions | 40% | 60% | 0.49 |
 
 Each tool is timed twice: on a quiet store, and again while
-[`eval/writer.js`](../eval/writer.js) appends twelve captures a second beside
+[`eval/writer.js`](https://github.com/futurepitcher/presence-capture/blob/main/eval/writer.js) appends twelve captures a second beside
 the server, with every call a quarter second after the last, so each one has
 a new batch to index and can meet a write. (The daemon samples every five
 seconds.) The gate is on the second.

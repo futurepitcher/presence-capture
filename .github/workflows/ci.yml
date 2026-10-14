@@ -38,6 +38,18 @@ jobs:
           args: --no-progress --offline --include-fragments .
           fail: true
 
+      # The docs site serves docs/ only, so its links to the rest of the repository are absolute.
+      # Offline, lychee skips them: each must still name a file or folder that exists.
+      - name: Links into the repository resolve
+        run: |
+          set -euo pipefail
+          missing=0
+          while IFS= read -r path; do
+            [[ -e "${path}" ]] || { echo "missing: ${path}"; missing=1; }
+          done < <(grep -rhoE 'https://github\.com/futurepitcher/presence-capture/(blob|tree)/main/[^)#[:space:]]+' --include='*.md' . \
+                     | sed -E 's#^https://github\.com/futurepitcher/presence-capture/(blob|tree)/main/##' | sort -u)
+          exit "${missing}"
+
   conformance:
     name: Conformance suites (Node ${{ matrix.node }})
     runs-on: ubuntu-latest

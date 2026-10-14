@@ -21,7 +21,7 @@ an agent a question.
 open it, and drag Presence Capture to Applications.
 
 **With Homebrew.** The cask is in the `futurepitcher/homebrew-tap` tap. Its
-source is [`presence-capture.rb`](../packaging/homebrew/Casks/presence-capture.rb).
+source is [`presence-capture.rb`](https://github.com/futurepitcher/presence-capture/blob/main/packaging/homebrew/Casks/presence-capture.rb).
 
 ```sh
 brew install --cask futurepitcher/tap/presence-capture

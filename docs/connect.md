@@ -135,7 +135,7 @@ and arguments from the "Its server" line into the client's entry:
 }
 ```
 
-That's the shape in the [daemon README](../packages/daemon/README.md). Claude
+That's the shape in the [daemon README](https://github.com/futurepitcher/presence-capture/blob/main/packages/daemon/README.md). Claude
 Desktop's entry leaves out `type`.
 
 Connect always writes `--store` as a full path, so the entry doesn't depend on
