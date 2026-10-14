@@ -83,7 +83,7 @@ final class MenuTests: XCTestCase {
             ("agents-read", AnyView(AgentsReadView(load: { snapshot }, revoke: { _ in }).frame(width: 600, height: 460))),
             // Drawn on its own: an offscreen drawing leaves a ScrollView's content out.
             ("agents-read-list", AnyView(AgentsReadView.ReadsList(egress: snapshot.egress).padding(20).frame(width: 600))),
-            ("onboarding", AnyView(OnboardingView(permissions: { Permissions(screen: true, microphone: false, accessibility: false) }, canHear: true,
+            ("onboarding", AnyView(OnboardingView(permissions: { Permissions(screen: true, microphone: false, accessibility: false) }, canHear: true, hearing: { false },
                                                   allowScreen: {}, allowMicrophone: {}, allowAccessibility: {}, connect: { _ in }, done: {}))),
         ]
         let keep = ProcessInfo.processInfo.environment["PRESENCE_CAPTURE_RENDER_DIR"]

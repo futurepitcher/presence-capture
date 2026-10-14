@@ -383,7 +383,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// first launch, and from the menu. Closing it, by Done or otherwise, means it isn't shown again.
     @objc private func showOnboarding() {
         windows.show("onboarding", title: "Welcome to Presence Capture", closed: { [weak self] in self?.defaults.set(true, forKey: "onboarded") }) {
-            OnboardingView(permissions: { Permissions.now }, canHear: audio != nil,
+            OnboardingView(permissions: { Permissions.now }, canHear: audio != nil, hearing: { [weak self] in self?.hearMicrophone ?? false },
                            allowScreen: { [weak self] in self?.allowScreen() },
                            allowMicrophone: { [weak self] in self?.askForMicrophone(thenHear: true) },
                            allowAccessibility: { [weak self] in self?.allowAccessibility() },
@@ -412,22 +412,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// A shorter period erases what's older now, so it's asked first; a longer one erases nothing yet.
+    /// A shorter period erases what's older now, so it's asked first, and it's kept only once what's
+    /// older is revoked: if that fails, the period stays as it was, to try again. A longer one erases
+    /// nothing yet.
     @objc private func setRetention(_ sender: NSMenuItem) {
         let days = sender.tag
         guard days != retentionDays else { return }
-        if days < retentionDays {
-            let alert = NSAlert()
-            alert.messageText = "Keep captures for \(Self.span(days))?"
-            alert.informativeText = "Everything captured more than \(Self.span(days)) ago is erased from this Mac now, and from then on as it ages. This can't be undone."
-            alert.addButton(withTitle: "Erase Older Captures")
-            alert.addButton(withTitle: "Cancel")
-            NSApp.activate(ignoringOtherApps: true)
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard days < retentionDays else {
+            defaults.set(days, forKey: "retentionDays")
+            log.write("retention.set days=\(days)")
+            return refresh()
         }
-        defaults.set(days, forKey: "retentionDays")
-        log.write("retention.set days=\(days)")
-        if let store { retain(store) }
+        guard let store else { return storeIsClosed() }
+        let alert = NSAlert()
+        alert.messageText = "Keep captures for \(Self.span(days))?"
+        alert.informativeText = "Everything captured more than \(Self.span(days)) ago is erased from this Mac now, and from then on as it ages. This can't be undone."
+        alert.addButton(withTitle: "Erase Older Captures")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let said = NSAlert()
+        do {
+            let result = try store.retain(days: Double(days))
+            defaults.set(days, forKey: "retentionDays")
+            log.write("retention.set days=\(days) revoked=\(result?.revokedCaptureIds.count ?? 0) on_disk=\(result?.erasedOnDisk ?? true)")
+            guard let result, !result.erasedOnDisk else { return refresh() }
+            said.messageText = "Older captures are revoked"
+            said.informativeText = result.erasureError.map { "No one can read them. Erasing them from disk failed (\($0)); it's tried again on its own." }
+                ?? "No one can read them. Their last traces are erased from disk as soon as the store can finish: an agent may be reading it."
+        } catch {
+            log.write("retention.set_failed days=\(days)")
+            said.messageText = "Nothing was erased"
+            said.informativeText = "The store couldn't revoke what's older than \(Self.span(days)), so captures are still kept for \(Self.span(retentionDays)). Try again in a moment."
+        }
+        said.runModal()
         refresh()
     }
 
