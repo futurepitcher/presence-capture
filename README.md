@@ -40,7 +40,8 @@ Cursor in one step ([connecting an agent](docs/connect.md)).
   written ([known limits](docs/known-limits.md#capture)).
 - **Seals what it captured.** Each capture's content under its own key; the
   master key in your Keychain. The record that a capture happened (its time,
-  app, and the page's full URL) stays in plain text, and stays after Forget.
+  app, and the page's address without its query or fragment) stays in plain
+  text, and stays after Forget.
 - **Serves agents through grants.** `pcap-mcp` has six read-only tools:
   `search`, `recent`, `timeline`, `transcript`, `now` and `session`
   ([reference](docs/tools.md)). A grant limits what an agent may read and for

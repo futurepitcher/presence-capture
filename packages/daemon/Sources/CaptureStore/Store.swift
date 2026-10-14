@@ -249,7 +249,8 @@ public final class CaptureStore: @unchecked Sendable {
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             captureId, try nextSequence(), capturedAt, capture.captureType, capture.source,
-            capture.sourceApp, capture.sourceUrl, capture.privacyLevel, capture.classification, payloadHash,
+            // Kept in plain metadata, which Forget leaves: scheme, host and path only, redacted.
+            capture.sourceApp, SourceURL.clean(capture.sourceUrl), capture.privacyLevel, capture.classification, payloadHash,
             capture.extraction, capture.derivedFrom, capture.dedupeKey)
         try run("INSERT INTO capture_key (capture_id, wrapped_key, created_at) VALUES (?, ?, ?)",
                 captureId, try Seal.seal(Seal.bytes(dataKey), key: masterKey, aad: "key:\(captureId)"), createdAt)

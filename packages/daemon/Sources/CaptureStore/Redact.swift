@@ -6,15 +6,19 @@ import Foundation
 public enum Redact {
     private static let rules: [(NSRegularExpression, String)] = {
         let secret: [(String, NSRegularExpression.Options, String)] = [
-            (#"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"#, [], "[PRIVATE_KEY]"),
-            // A key whose end isn't there (cut off where reading stopped): all of it from its start.
-            (#"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*$"#, [], "[PRIVATE_KEY]"),
+            // To its end, or, where its end isn't there (cut off where reading stopped), to the end of
+            // the text: one pass, so many starts with no end take time growing with the text, not
+            // its square.
+            (#"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|(?![\s\S]))"#, [], "[PRIVATE_KEY]"),
             (#"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"#, [], "[JWT]"),
             (#"\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{16,}"#, [], "[API_KEY]"),
+            (#"\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}"#, [], "[API_KEY]"),
             (#"\bgh[pousr]_[A-Za-z0-9]{20,}\b"#, [], "[GITHUB_TOKEN]"),
+            (#"\bgithub_pat_[A-Za-z0-9_]{20,}"#, [], "[GITHUB_TOKEN]"),
+            (#"\bBearer\s+[A-Za-z0-9._~+/-]{16,}=*"#, [.caseInsensitive], "[CREDENTIAL]"),
             (#"\bAKIA[0-9A-Z]{16}\b"#, [], "[AWS_KEY]"),
             (#"\bxox[abprs]-[A-Za-z0-9-]{10,}"#, [], "[SLACK_TOKEN]"),
-            (#"\b(?:api[_-]?key|secret|token|password|passwd)\s*[:=]\s*\S{6,}"#, [.caseInsensitive], "[CREDENTIAL]"),
+            (#"\b(?:api[_-]?key|secret|token|password|passwd)["']?\s*[:=]\s*\S{6,}"#, [.caseInsensitive], "[CREDENTIAL]"),
         ]
         let personal: [(String, NSRegularExpression.Options, String)] = [
             // Starts only where a run of its characters starts, so a long run is linear, not square.
@@ -23,6 +27,7 @@ public enum Redact {
             (#"C:\\Users\\[^\\]+"#, [.caseInsensitive], #"C:\Users\[USER]"#),
             (#"\b\d{3}-\d{2}-\d{4}\b"#, [], "[SSN]"),
             (#"\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b"#, [], "[CREDIT_CARD]"),
+            (#"\b3[47]\d{2}[- ]?\d{6}[- ]?\d{5}\b"#, [], "[CREDIT_CARD]"),
             (#"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b"#, [], "[IP]"),
             (#"(?:\+?1[-.\s]?)?\(?\b\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b"#, [], "[PHONE]"),
             (#"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b"#, [.caseInsensitive], "[UUID]"),

@@ -9,7 +9,12 @@
     {
       "name": "API keys and tokens",
       "input": "ANTHROPIC_API_KEY=sk-ant-api03-abcdefghijklmnopqrstuvwx\ntoken ghp_abcdefghijklmnopqrstuvwxyz0123456789\naws AKIAABCDEFGHIJKLMNOP\nslack xoxb-1234567890-abcdefghij",
-      "must_not_contain": ["sk-ant-api03", "ghp_abcdef", "AKIAABCDEF", "xoxb-12345"]
+      "must_not_contain": [
+        "sk-ant-api03",
+        "ghp_abcdef",
+        "AKIAABCDEF",
+        "xoxb-12345"
+      ]
     },
     {
       "name": "a JWT and a private key block",
@@ -40,6 +45,38 @@
       "name": "ordinary text is left alone",
       "input": "Send Zac the revised deck by Friday at 3pm.",
       "output": "Send Zac the revised deck by Friday at 3pm."
+    },
+    {
+      "name": "private keys: a cut-off one, and many starts with no end, are one key from the first start",
+      "input": "before -----BEGIN PRIVATE KEY-----\nMIIabc\n-----BEGIN RSA PRIVATE KEY-----\nMIIdef",
+      "output": "before [PRIVATE_KEY]"
+    },
+    {
+      "name": "private keys: each whole key, and text after it kept",
+      "input": "a -----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY----- b -----BEGIN EC PRIVATE KEY-----\ny\n-----END EC PRIVATE KEY----- c",
+      "output": "a [PRIVATE_KEY] b [PRIVATE_KEY] c"
+    },
+    {
+      "name": "Stripe, fine-grained GitHub and bearer tokens",
+      "input": "stripe sk_live_abcdefghijklmnop1234 restricted rk_test_ABCDEFGHIJKLMNOP5678\ngithub_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz\nAuthorization: Bearer abc.DEF-ghi_jkl~mno+pqr/stu=",
+      "must_not_contain": [
+        "sk_live_abcdef",
+        "rk_test_ABCDEF",
+        "github_pat_11",
+        "abc.DEF-ghi"
+      ]
+    },
+    {
+      "name": "a password in quoted JSON",
+      "input": "{\"password\": \"hunter2hunter2\", \"user\": \"zac\"}",
+      "must_not_contain": [
+        "hunter2hunter2"
+      ]
+    },
+    {
+      "name": "a 15-digit American Express number",
+      "input": "amex 3782 822463 10005 and 371449635398431",
+      "output": "amex [CREDIT_CARD] and [CREDIT_CARD]"
     }
   ]
 }

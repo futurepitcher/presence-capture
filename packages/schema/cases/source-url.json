@@ -1,0 +1,51 @@
+{
+  "_": "What's kept of a page's address (CONTRACT step 3, for metadata): scheme, host and path only; userinfo, query, fragment and control characters dropped; the rest redacted as text and cut to 2048 characters. Null when nothing is left. Every implementation gives these answers.",
+  "max_length": 2048,
+  "cases": [
+    {
+      "name": "query and fragment dropped",
+      "input": "https://app.example.com/reset?token=SECRETTOKEN123456#step2",
+      "output": "https://app.example.com/reset"
+    },
+    {
+      "name": "userinfo dropped",
+      "input": "https://zac:hunter2@example.com/inbox",
+      "output": "https://example.com/inbox"
+    },
+    {
+      "name": "a host with a port kept",
+      "input": "http://localhost:8080/admin?x=1",
+      "output": "http://localhost:8080/admin"
+    },
+    {
+      "name": "an email in the path redacted",
+      "input": "https://mail.example.com/u/zac@example.com/inbox",
+      "output": "https://mail.example.com/u/[EMAIL]/inbox"
+    },
+    {
+      "name": "a home folder in a file URL redacted",
+      "input": "file:///Users/zac/Documents/plan.txt",
+      "output": "file:///Users/[USER]/Documents/plan.txt"
+    },
+    {
+      "name": "control characters dropped",
+      "input": "https://example.com/a\nb\tc\u0007",
+      "output": "https://example.com/abc"
+    },
+    {
+      "name": "no scheme: still cut at ? and #",
+      "input": "about:blank?x=1",
+      "output": "about:blank"
+    },
+    {
+      "name": "nothing left is null",
+      "input": "?only=query",
+      "output": null
+    },
+    {
+      "name": "null stays null",
+      "input": null,
+      "output": null
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 import { createHash, createHmac, hkdfSync, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { migrate } from './migrate.js';
+import { cleanSourceUrl } from './redact.js';
 import { newKey, seal, unseal } from './seal.js';
 
 const ENVELOPE_VERSION = '1';
@@ -232,7 +233,8 @@ export function openStore(path = ':memory:', { masterKey, onTruncated } = {}) {
       event.captureType,
       event.source,
       event.sourceApp ?? null,
-      event.sourceUrl ?? null,
+      // Kept in plain metadata, which Forget leaves: scheme, host and path only, redacted.
+      cleanSourceUrl(event.sourceUrl),
       event.privacyLevel,
       event.classification ?? null,
       payloadHash,

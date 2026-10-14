@@ -47,7 +47,8 @@ never captured content).
   a sealed value can't be moved to another capture. The master key wraps each data key, and
   the wrapped key sits in the store (ADR 0002 §2).
 - **Plain metadata:** capture ID and sequence, time, type, source, source app (bundle ID),
-  source URL where the browser reports one, privacy level, extraction method, which capture
+  source URL where the browser reports one (its scheme, host and path only, redacted like text:
+  never its query, fragment or userinfo), privacy level, extraction method, which capture
   it derives from, and payload size. Also grants, the egress log, revocations and erasure
   receipts. The metadata is the audit trail. Sealing it would make revocation unprovable, not
   more private (ADR 0002 §2).
