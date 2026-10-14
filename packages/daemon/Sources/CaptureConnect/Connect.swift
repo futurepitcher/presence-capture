@@ -334,21 +334,27 @@ public struct Connector: Sendable {
         let deadline = DispatchTime.now() + claudeWait
         guard ended.wait(timeout: deadline) == .success else {
             kill(-group, SIGTERM)
-            if ended.wait(timeout: .now() + 2) != .success {
-                kill(-group, SIGKILL)
-                _ = ended.wait(timeout: .now() + 2)
-            }
+            _ = ended.wait(timeout: .now() + 2)
+            Self.endGroup(group)
             output.fileHandleForReading.readabilityHandler = nil
             throw ConnectError.claudeFailed(command: command, output: "it didn't finish within \(Int(claudeWait)) seconds, and was stopped")
         }
-        // Done; anything it left holding its output is stopped, rather than waited for.
+        // Done. Whatever it left running goes too, whether or not it ignores being asked, before
+        // anything else touches the config; and its output isn't waited for past that.
+        Self.endGroup(group)
         if drained.wait(timeout: min(deadline, .now() + 5)) != .success {
-            kill(-group, SIGKILL)
             output.fileHandleForReading.readabilityHandler = nil
         }
         guard process.terminationStatus == 0 else {
             throw ConnectError.claudeFailed(command: command, output: String(decoding: said.data, as: UTF8.self))
         }
+    }
+
+    /// Every process left in `group` is killed, and gone (or two seconds have passed) when this returns.
+    private static func endGroup(_ group: pid_t) {
+        kill(-group, SIGKILL)
+        let until = Date().addingTimeInterval(2)
+        while kill(-group, 0) == 0, Date() < until { Thread.sleep(forTimeInterval: 0.02) }
     }
 
     /// The home folder the clients find their configs in: $HOME, as they read it.

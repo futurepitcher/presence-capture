@@ -47,8 +47,19 @@ public enum MasterKeyItem {
         if let keyFile {
             guard let data = FileManager.default.contents(atPath: keyFile) else { throw MasterKeyError.file("can't be read") }
             let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-            if text.count == 64, text.allSatisfy(\.isHexDigit) {
-                return Data(stride(from: 0, to: 64, by: 2).map { UInt8(text.dropFirst($0).prefix(2), radix: 16)! })
+            // Exactly 64 ASCII hex digits: Character.isHexDigit also takes fullwidth forms, which no
+            // integer parse reads.
+            let digits = Array(text.utf8)
+            func value(_ c: UInt8) -> UInt8? {
+                switch c {
+                case 48...57: return c - 48
+                case 97...102: return c - 87
+                case 65...70: return c - 55
+                default: return nil
+                }
+            }
+            if digits.count == 64, case let values = digits.compactMap(value), values.count == 64 {
+                return Data(stride(from: 0, to: 64, by: 2).map { values[$0] << 4 | values[$0 + 1] })
             }
             guard data.count == 32 else { throw MasterKeyError.file("must be 32 bytes, raw or as 64 hex characters") }
             return data
