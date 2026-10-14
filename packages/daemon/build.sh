@@ -15,6 +15,8 @@ BUNDLE_ID="${PRESENCE_CAPTURE_BUNDLE_ID:-ai.presenceos.capture}"
 IDENTITY="${PRESENCE_CAPTURE_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | sed -nE 's/^ *[0-9]+\) ([0-9A-F]{40}) "Apple Development: .*/\1/p' | head -n 1)}"
 IDENTITY="${IDENTITY:--}"
 BUILD_NUMBER="$(git -C "${SCRIPT_DIR}" rev-list --count HEAD 2>/dev/null || echo 1)"
+# release.sh sets it from the tag; a build from source says 0.1.0.
+VERSION="${PRESENCE_CAPTURE_VERSION:-0.1.0}"
 
 swift build -c release --package-path "${SCRIPT_DIR}" --product PresenceCapture
 swift build -c release --package-path "${SCRIPT_DIR}" --product pcap-mcp
@@ -38,7 +40,7 @@ cat > "${APP}/Contents/Info.plist" <<PLIST
   <key>CFBundleDisplayName</key><string>Presence Capture</string>
   <key>CFBundleExecutable</key><string>PresenceCapture</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+  <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>

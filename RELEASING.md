@@ -12,16 +12,32 @@ The daemon ships as a notarised binary because a capture daemon that requires a
 build toolchain gets effectively no adopters. Both paths ship: the binary for
 users, the source build for anyone who wants to verify it.
 
-## Daemon release requirements
+## Daemon release
 
-Not yet automated — the pipeline needs a Mac and credentials this repository
-does not hold.
+Automated: [`release.yml`](.github/workflows/release.yml) and
+[`packages/daemon/release.sh`](packages/daemon/release.sh). How it works is
+in [docs/building.md](docs/building.md), and how anyone checks the result is
+in [docs/verify.md](docs/verify.md).
 
-1. Apple Developer ID Application certificate in the signing keychain.
-2. `codesign` with hardened runtime and the capture entitlements.
-3. `xcrun notarytool submit --wait`, then `xcrun stapler staple`.
-4. Publish the `.dmg` with its SHA-256 in the release notes, so a cautious
-   adopter can build from source and compare.
+1. On `main`, at the release candidate, check that CI is green, and that the
+   checklist below is done.
+2. Tag it: `git tag -a v0.1.0 -m v0.1.0 && git push origin v0.1.0`.
+3. Approve the run in the `release` environment. It builds, signs, notarizes,
+   staples and attests, then makes a **draft** release with the DMG,
+   `SHA256SUMS`, the SBOM, `build-info.json` and the provenance bundle.
+4. Check the draft as a user would ([docs/verify.md](docs/verify.md)),
+   including the checks that must fail. Then publish it.
+5. Update the cask in `futurepitcher/homebrew-tap` (its source is in
+   `packaging/homebrew/`) with the version and the DMG's SHA-256.
+
+A **dry run** is `release.yml` dispatched on a `v*` tag other than the
+release's (for example `v0.0.0`). It builds, signs, notarizes and attests, and publishes nothing:
+its files are a workflow artifact for seven days. Its attestation is the one
+the must-fail check in docs/verify.md uses.
+
+The `release` environment holds `APPLE_CERTIFICATE` (a base64 `.p12`),
+`APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`,
+`APPLE_PASSWORD` (app-specific) and `APPLE_TEAM_ID`.
 
 Accepted obligations that come with shipping a signed binary:
 
