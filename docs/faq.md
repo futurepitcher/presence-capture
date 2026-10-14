@@ -70,7 +70,7 @@ allow it. What the Mac plays is on by default, on macOS 26. Detail:
 - **Password fields, through Accessibility.** A secure text field's value is
   never fetched. But when a window has to be read by OCR, what's drawn is read:
   a password field shows dots, but one shown in clear can be captured.
-- **Not ambient audio's exception.** Exclusions match apps and windows, so they
+- **But exclusions don't reach ambient audio.** They match apps and windows, so they
   don't reach what the Mac plays or the microphone hears. Pause, or turn hearing
   off, to keep a call out.
 - **Anything while it's paused,** or while the list can't be read.
