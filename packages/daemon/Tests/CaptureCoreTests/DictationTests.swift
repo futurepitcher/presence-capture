@@ -152,10 +152,15 @@ final class DictationTests: XCTestCase {
         var text: String? { items.first?["public.utf8-plain-text"].map { String(decoding: $0, as: UTF8.self) } }
         /// Runs as the clipboard is read (an app slow to give what it copied).
         var reading: () -> Void = {}
+        /// A type it offers can't be read.
+        var unreadable = false
         private(set) var writes = 0
-        func snapshot() -> [[String: Data]] {
+        private(set) var snapshots = 0
+        func snapshot() -> [[String: Data]]? {
+            snapshots += 1
+            let before = items
             reading()
-            return items
+            return unreadable ? nil : before
         }
         func restore(_ items: [[String: Data]]) { self.items = items; changeCount += 1 }
         func write(_ text: String) { items = [["public.utf8-plain-text": Data(text.utf8)]]; changeCount += 1; writes += 1 }
@@ -239,6 +244,50 @@ final class DictationTests: XCTestCase {
         XCTAssertEqual(made, .some(nil))
         XCTAssertEqual(pasted, 0)
         XCTAssertEqual(board.text, "copied meanwhile")
+    }
+
+    func testSomethingCopiedWhileTheClipboardIsReadIsLeftAsItIs() {
+        let board = FakePasteboard(), later = Later()
+        var pasted = 0
+        let paster = ClipboardPaster(pasteboard: board, paste: { pasted += 1 }, schedule: later.schedule)
+        // The read returns what was there before; something copies during it.
+        board.reading = { board.write("copied meanwhile") }
+        var made: Bool?? = .none
+        paster.paste("dictated", done: { made = .some($0) })
+        XCTAssertEqual(made, .some(nil))
+        XCTAssertEqual(pasted, 0)
+        XCTAssertEqual(board.text, "copied meanwhile", "the copy was overwritten")
+        later.advance(to: 2)
+        XCTAssertEqual(board.text, "copied meanwhile", "an older clipboard was put back over the copy")
+    }
+
+    func testAClipboardThatCantBeSavedWholeIsNotTouched() {
+        let board = FakePasteboard(), later = Later()
+        var pasted = 0
+        let paster = ClipboardPaster(pasteboard: board, paste: { pasted += 1 }, schedule: later.schedule)
+        board.unreadable = true
+        var made: Bool?? = .none
+        paster.paste("dictated", done: { made = .some($0) })
+        XCTAssertEqual(made, .some(nil))
+        XCTAssertEqual(board.writes, 0, "written over a clipboard that couldn't be put back")
+        XCTAssertEqual(pasted, 0)
+    }
+
+    func testAPasteWaitsWhileADictationIsBeingHeard() {
+        let board = FakePasteboard(), later = Later()
+        var pasted = 0
+        let paster = ClipboardPaster(pasteboard: board, paste: { pasted += 1 }, schedule: later.schedule)
+        var hearing = true
+        paster.waitWhile = { hearing }
+        paster.paste("dictated")
+        later.advance(to: 0.5)
+        XCTAssertEqual(board.snapshots, 0, "the clipboard was read while a dictation was being heard")
+        XCTAssertEqual(pasted, 0)
+        hearing = false
+        later.advance(to: 0.7)
+        XCTAssertEqual(pasted, 1)
+        later.advance(to: 2)
+        XCTAssertEqual(board.text, "the person's")
     }
 
     func testTwoOverlappingPastesLeaveThePersonsClipboardNotADictation() {

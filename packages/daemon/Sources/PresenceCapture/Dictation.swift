@@ -68,6 +68,8 @@ struct DictationParts {
     }
     /// Puts back a clipboard a paste is holding, and drops pastes not yet made (quitting).
     var finishTyping: () -> Void = {}
+    /// Given what says a dictation is being heard: pastes wait while it does.
+    var pasteWaitWhile: (@escaping () -> Bool) -> Void = { _ in }
     /// Whether the selected key is down now, by its physical key: never a modifier the other hand
     /// may also be holding.
     var keyDown: (DictationKey) -> Bool = { CGEventSource.keyState(.combinedSessionState, key: CGKeyCode($0.keyCode)) }
@@ -154,6 +156,9 @@ final class Dictation: Dictating, @unchecked Sendable {
         (self.store, self.spans, self.defaults, self.held, self.paused, self.fragments, self.log) = (store, spans, defaults, held, paused, fragments, log)
         hold = DictationHold(key: DictationSettings.key(defaults))
         self.parts = parts ?? Self.realParts(log: log)
+        // A paste saves the clipboard on this thread, which can wait on the app that copied: never
+        // while a dictation is being heard, whose release and cancels need it.
+        self.parts.pasteWaitWhile { [weak self] in self?.listening != nil }
     }
 
     /// The microphone, the panel, Accessibility and the clipboard, as the app uses them.
@@ -165,7 +170,8 @@ final class Dictation: Dictating, @unchecked Sendable {
                               type: { text, focus, check, proceed, done in
                                   inserter.type(text, into: focus.element as? AXElement, check: check, proceed: proceed) { done($0?.rawValue) }
                               },
-                              finishTyping: { inserter.paster.finishNow() })
+                              finishTyping: { inserter.paster.finishNow() },
+                              pasteWaitWhile: { inserter.paster.waitWhile = $0 })
     }
 
     // MARK: For tests
@@ -400,7 +406,7 @@ final class Dictation: Dictating, @unchecked Sendable {
             // fetched now (dictation is on, so it may be), and the next dictation tries again.
             guard going(token) else { return }
             listener.prepare(download: true)
-            panel.say("Dictation needs Apple's speech model, which isn't ready yet. It's being fetched: try again shortly.")
+            if panelIsMine(token) { panel.say("Dictation needs Apple's speech model, which isn't ready yet. It's being fetched: try again shortly.") }
             log("dictation.no_transcriber")
             return done(token, hidePanel: false)
         }
@@ -430,7 +436,7 @@ final class Dictation: Dictating, @unchecked Sendable {
         let typing = secure ? .secure : DictationOutcome.typing(began: origin.focus, released: released.focus, now: now.focus)
         switch typing {
         case .type where !parts.canType():
-            panel.hold(text)
+            if panelIsMine(token) { panel.hold(text) }
             log("dictation.no_accessibility")
             done(token, hidePanel: false)
             keep()
@@ -487,27 +493,30 @@ final class Dictation: Dictating, @unchecked Sendable {
                     self.log("dictation.cancelled why=paused")
                 } else if refusedSecure.contains(token) {
                     // Moved to a field that is, or might be, a password field: nothing shown or kept.
-                    self.panel.say("Nothing is typed into a password field.")
+                    if self.panelIsMine(token) { self.panel.say("Nothing is typed into a password field.") }
                     self.log("dictation.secure_field")
                     self.done(token, hidePanel: false)
                 } else {
-                    self.panel.hold(text)
+                    if self.panelIsMine(token) { self.panel.hold(text) }
                     self.done(token, hidePanel: false)
                     self.log("dictation.focus_moved")
                     keep()
                 }
             })
         case .focusMoved:
-            panel.hold(text)
+            if panelIsMine(token) { panel.hold(text) }
             log("dictation.focus_moved")
             done(token, hidePanel: false)
             keep()
         case .secure:
-            panel.say("Nothing is typed into a password field.")
+            if panelIsMine(token) { panel.say("Nothing is typed into a password field.") }
             log("dictation.secure_field")
             done(token, hidePanel: false)
         }
     }
+
+    /// The panel is this dictation's, or no one's: one finishing never replaces a newer one's.
+    private func panelIsMine(_ token: Int) -> Bool { shown == token || shown == nil }
 
     /// The dictation is over: nothing after this can cancel it.
     private func done(_ token: Int, hidePanel: Bool = true) {

@@ -24,6 +24,13 @@ Dictation is experimental in 0.1.
   so an app slower than 750 ms to read it pastes your restored clipboard
   instead. The live check measures this in TextEdit, Safari, Messages, Notes
   and Terminal (`docs/benchmarks.md`).
+- **Saving your clipboard can wait on the app that copied.** Before a paste,
+  every format on the clipboard is read so it can be put back, and an app that
+  copied something large, or promised it, can be slow to give it. That read
+  happens only while no dictation is being heard, so it never delays one's
+  release or cancel, but the menu can be slow to respond meanwhile. If any
+  format can't be read, the clipboard isn't touched: the words are held in the
+  panel to copy instead.
 - **Input Monitoring is a keyboard permission.** Holding a key needs it. The
   event tap is listen-only and asks for modifier changes alone, so it never
   sees what's typed, but the permission macOS grants is broader than that.

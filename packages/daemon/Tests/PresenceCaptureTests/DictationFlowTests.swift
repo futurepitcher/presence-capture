@@ -150,6 +150,8 @@ final class DictationFlowTests: XCTestCase {
     private var focusRead = FocusRead()
     private var spans = DictationSpans()
     private var place = Where()
+    /// What dictation says holds pastes back (a dictation being heard).
+    private var pastesWait: (() -> Bool)?
     private var fragments: [String]? = []
     private var isHeld = false
     private var defaults: UserDefaults!
@@ -197,7 +199,7 @@ final class DictationFlowTests: XCTestCase {
                                        focusRead.pass()
                                        return !place.focusLost && place.sample.focus == focus
                                    },
-                                   finishTyping: {}, keyDown: { _ in true })
+                                   finishTyping: {}, pasteWaitWhile: { [unowned self] in pastesWait = $0 }, keyDown: { _ in true })
         return Dictation(store: store, spans: spans, defaults: defaults, held: { [unowned self] in isHeld },
                          paused: { [unowned self] in isHeld }, fragments: { [unowned self] in fragments }, log: { _ in }, parts: parts)
     }
@@ -437,6 +439,16 @@ final class DictationFlowTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(since.count, 2)
         XCTAssertTrue((beforeDown...afterDown).contains(since[0]), "the key-down sample wasn't timed from key-down")
         XCTAssertTrue((beforeUp...afterUp).contains(since[1]), "the release sample wasn't timed from the release")
+    }
+
+    func testPastesWaitWhileADictationIsBeingHeard() async throws {
+        let dictation = try dictation()
+        XCTAssertEqual(pastesWait?(), false)
+        dictation.press(keyCode: 63, flags: fn, at: 0)
+        XCTAssertEqual(pastesWait?(), true, "a paste could save the clipboard while the microphone is on")
+        dictation.press(keyCode: 63, flags: 0, at: 2)
+        XCTAssertEqual(pastesWait?(), false)
+        await until { !typed.isEmpty }
     }
 
     func testAnotherAppComingToTheFrontWhileTheFieldIsCheckedTypesNothing() async throws {

@@ -4,8 +4,9 @@ import Foundation
 public protocol Clipboard: AnyObject {
     /// Goes up with every write, by anyone.
     var changeCount: Int { get }
-    /// Every item, every type, as it is now.
-    func snapshot() -> [[String: Data]]
+    /// Every item, every type, as it is now; nil when any type it offers can't be read, so it
+    /// couldn't be put back whole.
+    func snapshot() -> [[String: Data]]?
     /// Puts items back as they were.
     func restore(_ items: [[String: Data]])
     /// Replaces what's there with `text`.
@@ -31,6 +32,11 @@ public final class ClipboardPaster {
     /// Quitting: nothing more is pasted, whatever a check still to answer says.
     private var stopped = false
     private var busy = false
+    private var waiting = false
+    /// While this says yes, pastes wait their turn: saving the clipboard can wait on the app that
+    /// copied, and holds this thread, which a dictation being heard needs for its release and cancels.
+    public var waitWhile: () -> Bool = { false }
+    static let waitStep: TimeInterval = 0.1
 
     /// `paste` posts ⌘V; `schedule` runs a closure after a delay.
     public init(pasteboard: Clipboard, paste: @escaping () -> Void,
@@ -44,11 +50,12 @@ public final class ClipboardPaster {
     /// the dictation wasn't cancelled): a paste that waited behind another is checked when it's made,
     /// not when it was asked for. The person's clipboard is saved first (reading it can wait on the app
     /// that copied), then `check` is asked, and the text is written and pasted as it answers, with
-    /// nothing in between that can wait. `check` answers through its callback, on this thread, so it
-    /// can ask elsewhere (Accessibility, off the main thread) without holding this one. `done` hears
-    /// nil when it wasn't made (`check` said no, or something copied while it was asked), else whether
-    /// the person's clipboard was put back (false when something else copied meanwhile, and it was
-    /// left as it is).
+    /// nothing in between that can wait. A clipboard that can't be saved whole, or that changes from
+    /// before it's saved until `check` answers, isn't touched. `check` answers through its callback,
+    /// on this thread, so it can ask elsewhere (Accessibility, off the main thread) without holding
+    /// this one. `done` hears nil when it wasn't made (`check` said no, or the clipboard couldn't be
+    /// saved, or changed), else whether the person's clipboard was put back (false when something
+    /// else copied meanwhile, and it was left as it is).
     public func paste(_ text: String, check: @escaping (@escaping (Bool) -> Void) -> Void = { $0(true) },
                       done: @escaping (Bool?) -> Void = { _ in }) {
         guard !stopped else { return done(nil) }
@@ -66,11 +73,23 @@ public final class ClipboardPaster {
     }
 
     private func next() {
-        guard !busy, !queue.isEmpty else { return }
+        guard !busy, !waiting, !queue.isEmpty else { return }
+        if waitWhile() {
+            waiting = true
+            return schedule(Self.waitStep) { [self] in
+                waiting = false
+                next()
+            }
+        }
         busy = true
         let (text, check, done) = queue.removeFirst()
-        let saved = pasteboard.snapshot()
         let savedAt = pasteboard.changeCount
+        guard let saved = pasteboard.snapshot(), pasteboard.changeCount == savedAt else {
+            // Not saved whole, or something copied while it was read: the clipboard isn't touched.
+            busy = false
+            done(nil)
+            return next()
+        }
         check { [self] allowed in
             // Something copied while it was asked: what was saved isn't the clipboard now.
             guard allowed, !stopped, pasteboard.changeCount == savedAt else {

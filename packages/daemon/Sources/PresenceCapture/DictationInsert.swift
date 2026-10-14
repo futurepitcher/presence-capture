@@ -232,10 +232,18 @@ final class SystemClipboard: Clipboard {
 
     var changeCount: Int { board.changeCount }
 
-    func snapshot() -> [[String: Data]] {
-        (board.pasteboardItems ?? []).map { item in
-            Dictionary(item.types.compactMap { type in item.data(forType: type).map { (type.rawValue, $0) } }) { first, _ in first }
+    /// nil when any type an item offers can't be read: it couldn't be put back whole.
+    func snapshot() -> [[String: Data]]? {
+        var items: [[String: Data]] = []
+        for item in board.pasteboardItems ?? [] {
+            var types: [String: Data] = [:]
+            for type in item.types where types[type.rawValue] == nil {
+                guard let data = item.data(forType: type) else { return nil }
+                types[type.rawValue] = data
+            }
+            items.append(types)
         }
+        return items
     }
 
     func restore(_ items: [[String: Data]]) {
