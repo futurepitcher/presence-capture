@@ -30,10 +30,13 @@ public enum MasterKeyItem {
 
     /// Only the person's own default (login) keychain is searched. Left to the search list, a query
     /// also asks every other keychain on it, and a locked one (a build's signing keychain left
-    /// behind) prompts for a password the person doesn't know, again and again.
-    public static var searchList: [Any] {
+    /// behind) prompts for a password the person doesn't know, again and again. No default keychain
+    /// is an error, never an empty list: searching nothing would find nothing, and a missing key
+    /// would be made anew.
+    public static func searchList() throws -> [Any] {
         var keychain: SecKeychain?
-        guard SecKeychainCopyDefault(&keychain) == errSecSuccess, let keychain else { return [] }
+        let status = SecKeychainCopyDefault(&keychain)
+        guard status == errSecSuccess, let keychain else { throw MasterKeyError.status(status == errSecSuccess ? errSecNoDefaultKeychain : status) }
         return [keychain]
     }
 
@@ -47,7 +50,7 @@ public enum MasterKeyItem {
             kSecAttrAccount: account,
             kSecReturnData: true,
             kSecMatchLimit: kSecMatchLimitOne,
-            kSecMatchSearchList: searchList,
+            kSecMatchSearchList: try searchList(),
         ] as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess, let data = result as? Data, data.count == 32 else { throw MasterKeyError.status(status) }
@@ -57,10 +60,13 @@ public enum MasterKeyItem {
 
 public enum MasterKeyError: Error, CustomStringConvertible {
     case status(OSStatus)
+    /// A reader the key is to be shared with isn't in the app's bundle: a broken build.
+    case missingReader(String)
 
     public var description: String {
         switch self {
         case .status(let status): return "Keychain status \(status)"
+        case .missingReader(let name): return "\(name) isn't in the app's bundle"
         }
     }
 }

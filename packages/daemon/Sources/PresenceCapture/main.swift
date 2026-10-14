@@ -103,7 +103,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             log.write("start.ready")
         } catch {
             log.write("start.failed \(String(describing: type(of: error)))")
-            problem = "The capture store couldn't be opened"
+            problem = error is MasterKeyError ? "The store's key couldn't be read from or kept in the Keychain" : "The capture store couldn't be opened"
         }
         watchSleep()
         // Permissions are asked for from the menu, when the person chooses to: never at launch.
