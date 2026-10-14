@@ -69,10 +69,12 @@ node scripts/live-forget-check.mjs \
    window, and asks you to put two words on screen and say them aloud. It
    waits until both are captured and readable through `pcap-mcp`: from the
    screen, and heard by the microphone.
-2. It snapshots, capture by capture, the sealed bytes of everything from the
-   last 20 minutes (wider than the 15 Forget will take): wrapped keys, sealed
-   text and payloads, projection outputs. These are raw bytes, so no key is
-   needed.
+2. It asks you to Pause, and waits until nothing new is captured for two of
+   the app's ticks. Then it snapshots, capture by capture, the sealed bytes of
+   everything from the last 20 minutes (wider than the 15 Forget will take):
+   wrapped keys, sealed text and payloads, projection outputs. These are raw
+   bytes, so no key is needed. Every capture Forget then revokes must have been
+   snapshotted.
 3. It holds a read transaction of its own on the store, so the write-ahead log
    can't be checkpointed. Then it asks you to choose Forget the Last 15
    Minutes… in the menu.
