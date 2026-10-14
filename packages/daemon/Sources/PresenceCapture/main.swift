@@ -124,6 +124,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // window's buttons: never at launch.
         refresh()
         if !defaults.bool(forKey: "onboarded") { showOnboarding() }
+        // A grant a connection left able to read, while the app was quitting: said now.
+        if let warning = defaults.string(forKey: ConnectAgent.pendingWarningKey) {
+            defaults.removeObject(forKey: ConnectAgent.pendingWarningKey)
+            let alert = NSAlert()
+            alert.messageText = "A grant is still able to read"
+            alert.informativeText = warning
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
+        }
     }
 
     private func schedule(capturer: ScreenCapturer, store: CaptureStore) {
