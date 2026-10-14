@@ -123,7 +123,7 @@ const info = {
 writeFileSync(join(args.out, 'build-info.json'), `${JSON.stringify(info, null, 2)}\n`);
 
 const dmg = basename(args.dmg);
-writeFileSync(join(args.out, 'notes.md'), `Presence Capture ${args.version} for macOS 14 or later (dictation and hearing need macOS 26).
+writeFileSync(join(args.out, 'notes.md'), `Presence Capture ${args.version}, for Macs with Apple silicon and macOS 14 or later (hearing and dictation need macOS 26).
 
 | File | SHA-256 |
 |------|---------|
@@ -132,7 +132,7 @@ writeFileSync(join(args.out, 'notes.md'), `Presence Capture ${args.version} for 
 Built in GitHub Actions on a GitHub-hosted runner from \`${info.source.commit ?? 'this tag'}\`, signed with Developer ID and notarized by Apple. To check that this DMG is that build, before you open it:
 
 \`\`\`sh
-gh attestation verify ${dmg} -R ${REPO} --signer-workflow ${REPO}/.github/workflows/release.yml --source-ref refs/tags/v${args.version} --deny-self-hosted-runners
+gh attestation verify ${dmg} -R ${REPO} --signer-workflow ${REPO}/.github/workflows/release.yml --source-ref refs/tags/v${args.version} --source-digest ${info.source.commit ?? '<the commit>'} --deny-self-hosted-runners
 shasum -a 256 -c SHA256SUMS
 \`\`\`
 

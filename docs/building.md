@@ -3,7 +3,10 @@
 ## From source
 
 You need macOS 14 or later, and Xcode 26 or later for its Swift toolchain.
-Hearing and dictation need macOS 26 to run.
+Hearing and dictation need macOS 26 to run. Releases are built for Apple
+silicon only, since the release runner is arm64 and an Intel slice would ship
+untested. On an Intel Mac, build from source: everything here runs there,
+except what needs Apple Intelligence (Tidy What I Say).
 
 ```sh
 git clone https://github.com/futurepitcher/presence-capture

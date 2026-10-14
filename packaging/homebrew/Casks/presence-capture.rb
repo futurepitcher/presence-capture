@@ -10,6 +10,7 @@ cask "presence-capture" do
   desc "Remembers what you see, hear and do on your Mac, for the agents you choose"
   homepage "https://github.com/futurepitcher/presence-capture"
 
+  depends_on arch: :arm64
   depends_on macos: ">= :sonoma"
 
   app "Presence Capture.app"

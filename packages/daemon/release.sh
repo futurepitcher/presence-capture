@@ -102,7 +102,8 @@ if [[ "${UNSIGNED}" == false ]]; then
   fi
   xcrun stapler staple "${OUT_DIR}/${DMG_NAME}"
   xcrun stapler validate "${OUT_DIR}/${DMG_NAME}"
-  spctl -a -vvv -t install "${OUT_DIR}/${DMG_NAME}" 2>&1 | tee "${WORK}/spctl.txt"
+  # Apple's assessment for a disk image (TN2206): the DMG's own signature, as when it's opened.
+  spctl -a -vvv -t open --context context:primary-signature "${OUT_DIR}/${DMG_NAME}" 2>&1 | tee "${WORK}/spctl.txt"
   grep -q "source=Notarized Developer ID" "${WORK}/spctl.txt" || { echo "release.sh: Gatekeeper doesn't accept it as notarized" >&2; exit 1; }
 fi
 

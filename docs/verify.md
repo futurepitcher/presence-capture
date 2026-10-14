@@ -8,31 +8,34 @@ that before you open it.
 
 ## The attestation
 
-With the [GitHub CLI](https://cli.github.com) (version 2.49 or later), for
-release `0.1.0`:
+With a current [GitHub CLI](https://cli.github.com) (one with every flag
+below; update it if one is missing), for release `0.1.0`. `RC` is the
+reviewed commit the release was made from: the one the release notes and
+`build-info.json` name, and the `v0.1.0` tag points to.
 
 ```sh
+RC=<the release's commit>
 gh attestation verify Presence-Capture-0.1.0.dmg \
   -R futurepitcher/presence-capture \
   --signer-workflow futurepitcher/presence-capture/.github/workflows/release.yml \
   --source-ref refs/tags/v0.1.0 \
+  --source-digest "$RC" \
   --deny-self-hosted-runners
 ```
 
 It passes only for a DMG that:
 - this repository's `release.yml` built (`--signer-workflow`), not some other
   workflow, such as CI;
-- was built from the `v0.1.0` tag (`--source-ref`), not a dry run or another
-  version;
+- was built from the `v0.1.0` tag (`--source-ref`), not a dry run on another
+  tag, or another version;
+- was built from that exact commit (`--source-digest`), even if the tag were
+  moved;
 - was built on a GitHub-hosted runner (`--deny-self-hosted-runners`).
 
-To pin the exact commit too, add `--source-digest <commit>`. That's the commit
-the release notes and `build-info.json` name, and the one the `v0.1.0` tag
-points to.
-
 These checks **must fail**. Trying them is how you know the policy is real:
-- a DMG from a dry run, or from a different tag;
+- a DMG from a dry run, which is dispatched on another tag (`v0.0.0`);
 - the command above with `--source-ref refs/tags/v0.0.0`;
+- the command above with `--source-digest` set to any other commit;
 - the command above with
   `--signer-workflow futurepitcher/presence-capture/.github/workflows/ci.yml`.
 
@@ -50,8 +53,11 @@ The DMG's SHA-256 is also in the release notes, and in the Homebrew cask.
 
 ```sh
 xcrun stapler validate Presence-Capture-0.1.0.dmg
-spctl -a -vvv -t install Presence-Capture-0.1.0.dmg   # accepted, source=Notarized Developer ID
+spctl -a -vvv -t open --context context:primary-signature Presence-Capture-0.1.0.dmg   # accepted, source=Notarized Developer ID
 ```
+
+Releases are for Macs with Apple silicon. On an Intel Mac, build from source
+([building.md](building.md)).
 
 ## What it's made of
 
