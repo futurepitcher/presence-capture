@@ -432,9 +432,9 @@ final class Dictation: Dictating, @unchecked Sendable {
             let (allowed, canType) = (parts.allowed, parts.canType)
             parts.type(text, expected, { [weak self] answer in
                 // Before anything is typed or pasted: still this dictation, still allowed, still the app
-                // in front, and still this field, read off the main thread; then the app in front read
-                // again, as the answer is given on the main thread. A field that is, or might be, a
-                // password field is remembered as that.
+                // in front, and still this field, read off the main thread; then all of it asked again
+                // as the answer is given on the main thread, since any of it may have changed while the
+                // field was read. A field that is, or might be, a password field is remembered as that.
                 guard let self, self.going(token), !self.held(), self.parts.canType(), self.parts.front()?.pid == app?.pid else {
                     return answer(false)
                 }
@@ -442,7 +442,13 @@ final class Dictation: Dictating, @unchecked Sendable {
                 Task.detached {
                     let now = sample(front)
                     await MainActor.run { [weak self] in
-                        guard let self, self.live[token] != nil, self.parts.front()?.pid == app?.pid else { return answer(false) }
+                        guard let self, self.going(token), !self.held(), self.parts.canType(), self.parts.front()?.pid == app?.pid else {
+                            return answer(false)
+                        }
+                        if self.parts.secureInput() {
+                            refusedSecure.insert(token)
+                            return answer(false)
+                        }
                         switch DictationOutcome.typing(began: expected, released: expected, now: now.focus) {
                         case .type: answer(true)
                         case .secure:

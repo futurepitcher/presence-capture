@@ -42,10 +42,13 @@ public final class ClipboardPaster {
 
     /// Pastes `text` once its turn comes, if `check` still says yes then (the focus is where it was,
     /// the dictation wasn't cancelled): a paste that waited behind another is checked when it's made,
-    /// not when it was asked for. `check` answers through its callback, on this thread, so it can ask
-    /// elsewhere (Accessibility, off the main thread) without holding this one. `done` hears nil when
-    /// it wasn't made, else whether the person's clipboard was put back (false when something else
-    /// copied meanwhile, and it was left as it is).
+    /// not when it was asked for. The person's clipboard is saved first (reading it can wait on the app
+    /// that copied), then `check` is asked, and the text is written and pasted as it answers, with
+    /// nothing in between that can wait. `check` answers through its callback, on this thread, so it
+    /// can ask elsewhere (Accessibility, off the main thread) without holding this one. `done` hears
+    /// nil when it wasn't made (`check` said no, or something copied while it was asked), else whether
+    /// the person's clipboard was put back (false when something else copied meanwhile, and it was
+    /// left as it is).
     public func paste(_ text: String, check: @escaping (@escaping (Bool) -> Void) -> Void = { $0(true) },
                       done: @escaping (Bool?) -> Void = { _ in }) {
         guard !stopped else { return done(nil) }
@@ -66,13 +69,15 @@ public final class ClipboardPaster {
         guard !busy, !queue.isEmpty else { return }
         busy = true
         let (text, check, done) = queue.removeFirst()
+        let saved = pasteboard.snapshot()
+        let savedAt = pasteboard.changeCount
         check { [self] allowed in
-            guard allowed, !stopped else {
+            // Something copied while it was asked: what was saved isn't the clipboard now.
+            guard allowed, !stopped, pasteboard.changeCount == savedAt else {
                 busy = false
                 done(nil)
                 return next()
             }
-            let saved = pasteboard.snapshot()
             pasteboard.write(text)
             let ours = pasteboard.changeCount
             paste()

@@ -1,5 +1,6 @@
 @testable import CaptureCore
 @testable import CaptureStore
+import CoreMedia
 import CryptoKit
 import Foundation
 @testable import PresenceCapture
@@ -49,6 +50,16 @@ final class DictationAppTests: XCTestCase {
             text = (text as NSString).replacingCharacters(in: NSRange(location: range.location, length: range.length), with: reformat(inserted))
             return true
         }
+    }
+
+    func testAnUtteranceThatEndedTheCutoffAgoIsDroppedNotStampedAsJustSaid() throws {
+        guard #available(macOS 26, *) else { throw XCTSkip("needs macOS 26") }
+        let now = Date(), clock = CMTime(seconds: 10_000, preferredTimescale: 600)
+        let ended = { (ago: Double) in CMTimeRange(start: CMTime(seconds: 10_000 - ago - 2, preferredTimescale: 600),
+                                                   end: CMTime(seconds: 10_000 - ago, preferredTimescale: 600)) }
+        XCTAssertNil(AudioCapturer.times(ended(DictationSpans.cutoff), clockNow: clock, now: now))
+        let times = try XCTUnwrap(AudioCapturer.times(ended(DictationSpans.cutoff - 1), clockNow: clock, now: now))
+        XCTAssertEqual(times.end.timeIntervalSince(now), -(DictationSpans.cutoff - 1), accuracy: 0.01)
     }
 
     func testAFieldIsOpenOnlyWhenItsRoleAndSubroleWereReadAndNeitherIsSecure() {

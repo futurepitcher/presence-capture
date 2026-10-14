@@ -81,6 +81,11 @@ final class DictationFlowTests: XCTestCase {
         private var front: FrontApp?
         private var switchTo: FrontApp?
         private var lost = false
+        private var revoke = false
+        private var revoked = false
+        /// The microphone or Input Monitoring is taken away while the next sample is taken.
+        func revokeWhileSampling() { lock.withLock { revoke = true } }
+        var permissionGone: Bool { lock.withLock { revoked } }
         var sample: DictationSample {
             get { lock.withLock { now } }
             set { lock.withLock { now = newValue } }
@@ -95,6 +100,7 @@ final class DictationFlowTests: XCTestCase {
         func sampled() -> DictationSample {
             lock.withLock {
                 if let to = switchTo { (front, switchTo) = (to, nil) }
+                if revoke { (revoked, revoke) = (true, false) }
                 return now
             }
         }
@@ -166,11 +172,13 @@ final class DictationFlowTests: XCTestCase {
                                            guard allowed else { return done(nil) }
                                            if self.holdPastes { return self.waitingPaste = (text, check, done) }
                                            if self.proceedOffMain {
+                                               // Only touched again on the main actor.
+                                               nonisolated(unsafe) let test = self
                                                return DispatchQueue.global().async {
                                                    let go = proceed()
                                                    Task { @MainActor in
                                                        guard go else { return done(nil) }
-                                                       self.typed.append(text)
+                                                       test.typed.append(text)
                                                        done("test")
                                                    }
                                                }
@@ -180,7 +188,7 @@ final class DictationFlowTests: XCTestCase {
                                            done("test")
                                        }
                                    },
-                                   canType: { true }, allowed: { [unowned self] in allowed }, secureInput: { false },
+                                   canType: { true }, allowed: { [unowned self] in allowed && !place.permissionGone }, secureInput: { false },
                                    stillFocused: { focus, _ in
                                        focusRead.pass()
                                        return !place.focusLost && place.sample.focus == focus
@@ -428,6 +436,20 @@ final class DictationFlowTests: XCTestCase {
             XCTAssertEqual(panel.held, "Send the deck on friday.", "an ordinary move holds the words")
             XCTAssertEqual(try kept(), 1)
         }
+    }
+
+    func testAPermissionTakenAwayWhileThePastesFieldIsReadPastesNothing() async throws {
+        holdPastes = true
+        let dictation = try dictation()
+        dictation.press(keyCode: 63, flags: fn, at: 0)
+        dictation.press(keyCode: 63, flags: 0, at: 2)
+        await until { waitingPaste != nil }
+        place.revokeWhileSampling()
+        await takeTurn()
+        await settle()
+        dictation.flush()
+        XCTAssertEqual(typed, [], "pasted after the microphone or Input Monitoring was taken away")
+        XCTAssertEqual(try kept(), 0)
     }
 
     func testACancelWhileTheFocusIsReadLeavesTheFieldAlone() async throws {

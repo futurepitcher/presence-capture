@@ -150,9 +150,15 @@ final class DictationTests: XCTestCase {
         var changeCount = 0
         var items: [[String: Data]] = [["public.utf8-plain-text": Data("the person's".utf8)]]
         var text: String? { items.first?["public.utf8-plain-text"].map { String(decoding: $0, as: UTF8.self) } }
-        func snapshot() -> [[String: Data]] { items }
+        /// Runs as the clipboard is read (an app slow to give what it copied).
+        var reading: () -> Void = {}
+        private(set) var writes = 0
+        func snapshot() -> [[String: Data]] {
+            reading()
+            return items
+        }
         func restore(_ items: [[String: Data]]) { self.items = items; changeCount += 1 }
-        func write(_ text: String) { items = [["public.utf8-plain-text": Data(text.utf8)]]; changeCount += 1 }
+        func write(_ text: String) { items = [["public.utf8-plain-text": Data(text.utf8)]]; changeCount += 1; writes += 1 }
     }
 
     /// Runs scheduled work when told, in time order, as the main run loop would.
@@ -208,6 +214,31 @@ final class DictationTests: XCTestCase {
         paster.paste("third")
         paster.finishNow()
         XCTAssertEqual(board.text, "the person's", "the clipboard was left holding a dictation")
+    }
+
+    func testTheClipboardIsSavedBeforeTheCheckSoNothingThatWaitsComesBetweenTheCheckAndThePaste() {
+        let board = FakePasteboard(), later = Later()
+        var pasted = 0
+        let paster = ClipboardPaster(pasteboard: board, paste: { pasted += 1 }, schedule: later.schedule)
+        // While the clipboard is being read, the person moves to a password field: the check, asked
+        // after, sees it.
+        var secure = false
+        board.reading = { secure = true }
+        var made: Bool?? = .none
+        paster.paste("dictated", check: { $0(!secure) }, done: { made = .some($0) })
+        XCTAssertEqual(made, .some(nil))
+        XCTAssertEqual(board.writes, 0, "written to the clipboard after the focus moved")
+        XCTAssertEqual(pasted, 0, "pasted after the focus moved")
+
+        // Something copies while the check is being asked: nothing is written, nor put back over it.
+        board.reading = {}
+        var answer: ((Bool) -> Void)?
+        paster.paste("again", check: { answer = $0 }, done: { made = .some($0) })
+        board.write("copied meanwhile")
+        answer?(true)
+        XCTAssertEqual(made, .some(nil))
+        XCTAssertEqual(pasted, 0)
+        XCTAssertEqual(board.text, "copied meanwhile")
     }
 
     func testTwoOverlappingPastesLeaveThePersonsClipboardNotADictation() {

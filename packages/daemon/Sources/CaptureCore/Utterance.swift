@@ -70,7 +70,7 @@ public enum Utterance {
     public static func wallTimes(_ range: CMTimeRange, clockNow: CMTime, now: Date) -> (start: Date, end: Date) {
         let ago = CMTimeGetSeconds(CMTimeSubtract(clockNow, range.end))
         let length = CMTimeGetSeconds(range.duration)
-        let end = ago.isFinite && ago >= 0 && ago < 600 ? now.addingTimeInterval(-ago) : now
+        let end = ago.isFinite && ago >= 0 && ago < DictationSpans.cutoff ? now.addingTimeInterval(-ago) : now
         return (end.addingTimeInterval(-(length.isFinite ? max(0, length) : 0)), end)
     }
 }
