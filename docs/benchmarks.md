@@ -55,7 +55,7 @@ has to beat 40/50 on this eval before it ships.
 Forget, on a real Mac with the app capturing, checked the way someone holding
 a copy of the store would check it: by looking for the exact sealed bytes of
 what was forgotten in every file under the store's folder.
-[`scripts/live-forget-check.mjs`](../scripts/live-forget-check.mjs) walks you
+[`scripts/live-forget-check.mjs`](https://github.com/futurepitcher/presence-capture/blob/main/scripts/live-forget-check.mjs) walks you
 through it, with the app running and capturing for 20 minutes or more, and Hear
 the Microphone on:
 
@@ -94,7 +94,7 @@ It exits 0 on PASS, 1 on any failed check, 2 if it can't run, and 3 if it's
 incomplete: the words were seen but never heard. It revokes its own grant
 however it ends, Ctrl-C included, and checks that it did. The artifact scan is
 the conformance suite's
-([`inspect.js`](../packages/schema/conformance/store/inspect.js)).
+([`inspect.js`](https://github.com/futurepitcher/presence-capture/blob/main/packages/schema/conformance/store/inspect.js)).
 
 ## Still to measure
 
