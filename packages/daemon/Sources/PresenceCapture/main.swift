@@ -26,6 +26,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var approveSensorsItem: NSMenuItem!
     private var retentionMenu: NSMenu!
     private let windows = Windows()
+    /// Store administration (retention, finishing an erasure, Forget, grants) runs here, never on the
+    /// main thread: a store waiting on SQLite's lock (up to five seconds) must not hold up the main
+    /// thread, where locking, sleep and Pause are heard.
+    private let admin = DispatchQueue(label: "presence.capture.admin")
     private var audio: Listener?
     private var store: CaptureStore?
     private var capturer: ScreenCapturer?
@@ -123,7 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let seesScreen = CGPreflightScreenCaptureAccess()
             self.audio?.tick(listening: !held && seesScreen)
             // An erasure a reader held up is finished as soon as the reader lets go (ADR 0002).
-            if store.isErasurePending { _ = try? store.finishErasure() }
+            self.admin.async { if store.isErasurePending { _ = try? store.finishErasure() } }
             // A list that exists but can't be read: nothing is captured until it can be (R8).
             let fragments = Exclusion.load(self.exclusionPath)
             // Activity is noted while capturing, and the lock itself is noted while locked (it
@@ -155,11 +159,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Retention is a revocation (ADR 0003): what's older than the period is erased, with receipts.
     private func retain(_ store: CaptureStore) {
-        do {
-            let result = try store.retain(days: Double(retentionDays))
-            log.write("retention.done revoked=\(result?.revokedCaptureIds.count ?? 0)")
-        } catch {
-            log.write("retention.failed")
+        let (days, log) = (Double(retentionDays), self.log!)
+        admin.async {
+            do {
+                let result = try store.retain(days: days)
+                log.write("retention.done revoked=\(result?.revokedCaptureIds.count ?? 0)")
+            } catch {
+                log.write("retention.failed")
+            }
+        }
+    }
+
+    /// Store work on the admin queue, awaited (for the windows).
+    private func onAdmin<T>(_ work: @escaping () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            admin.async { continuation.resume(with: Result(catching: work)) }
         }
     }
 
@@ -269,25 +283,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let now = Date()
-        do {
-            let result = try store.revoke(scopeKind: "time_range",
-                                          scopeValue: "\(CaptureStore.iso(now.addingTimeInterval(-minutes * 60)))/\(CaptureStore.iso(now))",
-                                          reason: "forget \(Int(minutes))m")
+        admin.async {
+            let outcome = Result {
+                try store.revoke(scopeKind: "time_range",
+                                 scopeValue: "\(CaptureStore.iso(now.addingTimeInterval(-minutes * 60)))/\(CaptureStore.iso(now))",
+                                 reason: "forget \(Int(minutes))m")
+            }
+            DispatchQueue.main.async { [weak self] in self?.forgot(outcome, minutes: minutes, label: label) }
+        }
+    }
+
+    private func forgot(_ outcome: Result<Revocation, Error>, minutes: Double, label: String) {
+        let said = NSAlert()
+        switch outcome {
+        case .success(let result):
             activity?.reset()
             log.write("forget.done minutes=\(Int(minutes)) revoked=\(result.revokedCaptureIds.count) on_disk=\(result.erasedOnDisk)" + (result.erasureError == nil ? "" : " erasure_failed"))
-            let done = NSAlert()
-            done.messageText = "Forgotten"
-            done.informativeText = result.erasedOnDisk
+            said.messageText = "Forgotten"
+            said.informativeText = result.erasedOnDisk
                 ? "\(result.revokedCaptureIds.count) captures from \(label) were erased."
                 : "\(result.revokedCaptureIds.count) captures from \(label) were revoked and can't be read. Their last traces will be erased from disk as soon as the store can finish: an agent may be reading it."
-            done.runModal()
-        } catch {
+        case .failure:
             log.write("forget.failed")
-            let failed = NSAlert()
-            failed.messageText = "Nothing was forgotten"
-            failed.informativeText = "The store couldn't revoke \(label). Nothing was changed."
-            failed.runModal()
+            said.messageText = "Nothing was forgotten"
+            said.informativeText = "The store couldn't revoke \(label). Nothing was changed."
         }
+        NSApp.activate(ignoringOtherApps: true)
+        said.runModal()
     }
 
     @objc private func toggleMicrophone() {
@@ -407,8 +429,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let store else { return storeIsClosed() }
         let log = self.log!
         windows.show("agents", title: "Agents Read") {
-            AgentsReadView(load: { AgentsReadView.Snapshot(grants: try store.grants(), egress: try store.egress(since: Date().addingTimeInterval(-7 * 86_400))) },
-                           revoke: { grantId in if try store.revokeGrant(grantId) { log.write("grant.revoked") } })
+            AgentsReadView(load: { [weak self] in
+                               guard let self else { return AgentsReadView.Snapshot() }
+                               return try await self.onAdmin {
+                                   AgentsReadView.Snapshot(grants: try store.grants(), egress: try store.egress(since: Date().addingTimeInterval(-7 * 86_400)))
+                               }
+                           },
+                           revoke: { [weak self] grantId in
+                               guard let self else { return }
+                               if try await self.onAdmin({ try store.revokeGrant(grantId) }) { log.write("grant.revoked") }
+                           })
         }
     }
 
@@ -431,20 +461,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "Cancel")
         NSApp.activate(ignoringOtherApps: true)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
+        admin.async {
+            let outcome = Result { try store.retain(days: Double(days)) }
+            DispatchQueue.main.async { [weak self] in self?.retained(outcome, days: days) }
+        }
+    }
+
+    /// The period is kept only once what's older is revoked.
+    private func retained(_ outcome: Result<Revocation?, Error>, days: Int) {
         let said = NSAlert()
-        do {
-            let result = try store.retain(days: Double(days))
+        switch outcome {
+        case .success(let result):
             defaults.set(days, forKey: "retentionDays")
             log.write("retention.set days=\(days) revoked=\(result?.revokedCaptureIds.count ?? 0) on_disk=\(result?.erasedOnDisk ?? true)")
             guard let result, !result.erasedOnDisk else { return refresh() }
             said.messageText = "Older captures are revoked"
             said.informativeText = result.erasureError.map { "No one can read them. Erasing them from disk failed (\($0)); it's tried again on its own." }
                 ?? "No one can read them. Their last traces are erased from disk as soon as the store can finish: an agent may be reading it."
-        } catch {
+        case .failure:
             log.write("retention.set_failed days=\(days)")
             said.messageText = "Nothing was erased"
             said.informativeText = "The store couldn't revoke what's older than \(Self.span(days)), so captures are still kept for \(Self.span(retentionDays)). Try again in a moment."
         }
+        NSApp.activate(ignoringOtherApps: true)
         said.runModal()
         refresh()
     }

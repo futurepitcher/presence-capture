@@ -298,12 +298,73 @@ final class ConnectTests: XCTestCase {
         }
     }
 
+    func testAReplacedEntrysStoreIsFoundAsItsServerWouldFindIt() throws {
+        let store = try store()
+        _ = try write(#"{"mcpServers": {"presence-capture": {"command": "/x", "args": ["--grant", "grn_old"], "env": {"PRESENCE_CAPTURE_HOME": "/other"}}}}"#, to: .cursor)
+        let moved = try XCTUnwrap(try connector().connect(.cursor, store: store, grant: grant(.cursor), entry: entry) { _ in true })
+        XCTAssertEqual(moved.stillActive?.why, "it's in another store, /other/store.sqlite")
+        XCTAssertTrue(moved.stillActive?.revoke.hasSuffix("grant revoke grn_old --store /other/store.sqlite") ?? false, moved.stillActive?.revoke ?? "")
+
+        _ = try write(#"{"mcpServers": {"presence-capture": {"command": "/x", "args": ["--grant", "grn_old"], "env": {"PRESENCE_CAPTURE_HOME": "relative"}}}}"#, to: .cursor)
+        let unknown = try XCTUnwrap(try connector().connect(.cursor, store: store, grant: grant(.cursor), entry: entry) { _ in true })
+        XCTAssertTrue(unknown.stillActive?.why.contains("can't be known") ?? false)
+    }
+
+    /// A stand-in `claude` running `script`, with a marker in its command line to look for afterwards.
+    private func claudeRunning(_ script: String) throws -> (claude: URL, marker: String) {
+        let marker = "pcap-test-\(UUID().uuidString.prefix(8))"
+        let claude = home.appendingPathComponent("claude")
+        try Data("#!/bin/sh\n# \(marker)\n\(script)\n".utf8).write(to: claude)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: claude.path)
+        return (claude, marker)
+    }
+
+    private func running(_ marker: String) -> Bool {
+        let ps = Process()
+        ps.executableURL = URL(fileURLWithPath: "/bin/ps")
+        ps.arguments = ["-axo", "command"]
+        let out = Pipe()
+        ps.standardOutput = out
+        try? ps.run()
+        let text = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        ps.waitUntilExit()
+        return text.contains(marker)
+    }
+
+    func testAClaudeThatHangsIsStoppedAtTheDeadlineWithWhatItStarted() throws {
+        let (claude, marker) = try claudeRunning("sleep 30 # child\nsleep 30")
+        var connector = connector(claude: claude)
+        connector.claudeWait = 1
+        let plan = try connector.plan(.claudeCode, entry: entry("grn_new"))
+        let started = Date()
+        XCTAssertThrowsError(try connector.apply(plan)) { error in
+            guard case ConnectError.claudeFailed(_, let output) = error else { return XCTFail("\(error)") }
+            XCTAssertTrue(output.contains("didn't finish"), output)
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 6)
+        Thread.sleep(forTimeInterval: 0.3)
+        XCTAssertFalse(running(marker), "claude, or what it started, was left running")
+    }
+
+    func testWhatClaudeLeavesHoldingItsOutputIsStoppedNotWaitedFor() throws {
+        let marker = "pcap-test-\(UUID().uuidString.prefix(8))"
+        let (claude, _) = try claudeRunning("sh -c 'sleep 30 # \(marker)' &\nexit 0")
+        let plan = try connector(claude: claude).plan(.claudeCode, entry: entry("grn_new"))
+        let started = Date()
+        XCTAssertNoThrow(try connector(claude: claude).apply(plan))
+        XCTAssertLessThan(Date().timeIntervalSince(started), 9, "a descendant holding the output was waited for")
+        Thread.sleep(forTimeInterval: 0.3)
+        XCTAssertFalse(running(marker), "what claude started was left running")
+    }
+
     func testAnEntryNamesTheStoreAndKeyFileWhenTheyArentTheApps() {
         XCTAssertEqual(ServerEntry(pcapMCP: server, grantId: "grn_a", store: "/s/store.sqlite").args, ["--grant", "grn_a", "--store", "/s/store.sqlite"])
         XCTAssertEqual(ServerEntry(pcapMCP: server, grantId: "grn_a", store: "/s/store.sqlite", keyFile: "/s/key").args,
                        ["--grant", "grn_a", "--store", "/s/store.sqlite", "--master-key-file", "/s/key"])
-        XCTAssertEqual(Connector.revokeCommand(["--grant", "grn_a", "--store", "/s/my store.sqlite", "--master-key-file", "/s/key"]),
-                       "pcap grant revoke grn_a --store '/s/my store.sqlite' --master-key-file /s/key")
+        let bundled = Connector(environment: [:], home: home, claude: .some(nil), pcap: "/Applications/Presence Capture.app/Contents/MacOS/pcap")
+        XCTAssertEqual(bundled.revokeCommand(["--grant", "grn_a", "--master-key-file", "/s/key"], store: "/s/my store.sqlite"),
+                       "'/Applications/Presence Capture.app/Contents/MacOS/pcap' grant revoke grn_a --store '/s/my store.sqlite' --master-key-file /s/key")
+        XCTAssertEqual(Connector.shellQuoted("it's $(here)"), #"'it'\''s $(here)'"#)
     }
 
     // MARK: pcap, the command line

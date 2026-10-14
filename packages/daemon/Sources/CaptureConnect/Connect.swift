@@ -100,8 +100,9 @@ public struct ConnectPlan: Sendable {
     public let diff: String
     /// The grant the entry this replaces reads through, revoked once the change is made.
     public let replacing: String?
-    /// That entry's arguments: which store its grant is in.
+    /// That entry's arguments and environment: which store its grant is in.
     let replacedArgs: [String]
+    let replacedEnv: [String: String]
     /// Anything that changes what the client does with it.
     public let notes: [String]
     /// What the change was worked out from: the file's bytes, or for Claude Code its entry. It's
@@ -129,15 +130,18 @@ public struct Connector: Sendable {
 
     /// How long to wait for another connection's turn, and for `claude` to finish, before giving up:
     /// a connection never holds the app (or a terminal) indefinitely.
-    public static let lockWait: TimeInterval = 10
-    public static let claudeWait: TimeInterval = 60
+    public var lockWait: TimeInterval = 10
+    public var claudeWait: TimeInterval = 60
+    /// `pcap`, as a command the person can run: by its absolute path, since the app's isn't on PATH.
+    public var pcap: String
 
     public init(environment: [String: String] = ProcessInfo.processInfo.environment, home: URL? = nil, claude: URL?? = nil,
-                now: @escaping @Sendable () -> Date = { Date() }) {
+                pcap: String = "pcap", now: @escaping @Sendable () -> Date = { Date() }) {
         let home = home ?? Connector.home(environment: environment)
         self.environment = environment
         self.home = home
         self.claude = claude ?? Connector.findClaude(environment: environment, home: home)
+        self.pcap = pcap
         self.now = now
     }
 
@@ -168,6 +172,7 @@ public struct Connector: Sendable {
         var servers = root["mcpServers"] as? [String: Any] ?? [:]
         let old = servers[serverName] as? [String: Any]
         let replacedArgs = old?["args"] as? [String] ?? []
+        let replacedEnv = old?["env"] as? [String: String] ?? [:]
         let replacing = Self.option("--grant", replacedArgs)
         let new = entry.json(for: client)
 
@@ -183,7 +188,7 @@ public struct Connector: Sendable {
             }
             let before = old.map { PrettyJSON.text($0) } ?? ""
             return ConnectPlan(client: client, grantId: entry.grantId, file: file, diff: LineDiff.render(before, PrettyJSON.text(new)),
-                               replacing: replacing, replacedArgs: replacedArgs, notes: notes, before: old.map { Data(PrettyJSON.compact($0).utf8) },
+                               replacing: replacing, replacedArgs: replacedArgs, replacedEnv: replacedEnv, notes: notes, before: old.map { Data(PrettyJSON.compact($0).utf8) },
                                write: .claude(claude, add: add))
         }
 
@@ -192,7 +197,7 @@ public struct Connector: Sendable {
         changed["mcpServers"] = servers
         let after = PrettyJSON.text(changed)
         return ConnectPlan(client: client, grantId: entry.grantId, file: file, diff: LineDiff.render(bytes.map { String(decoding: $0, as: UTF8.self) } ?? "", after),
-                           replacing: replacing, replacedArgs: replacedArgs, notes: [], before: bytes, write: .file(after))
+                           replacing: replacing, replacedArgs: replacedArgs, replacedEnv: replacedEnv, notes: [], before: bytes, write: .file(after))
     }
 
     /// A config's bytes; nil only when there's no file. A file that's there but can't be read, or
@@ -284,7 +289,7 @@ public struct Connector: Sendable {
         let fd = open(folder.path, O_RDONLY)
         guard fd >= 0 else { return try body() }
         defer { close(fd) }
-        let deadline = Date().addingTimeInterval(Self.lockWait)
+        let deadline = Date().addingTimeInterval(lockWait)
         while flock(fd, LOCK_EX | LOCK_NB) != 0 {
             guard Date() < deadline else { throw ConnectError.busy(path: folder.path) }
             Thread.sleep(forTimeInterval: 0.1)
@@ -309,23 +314,40 @@ public struct Connector: Sendable {
         process.standardInput = FileHandle.nullDevice
         let ended = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in ended.signal() }
-        try process.run()
         // Read as it comes, so a chatty `claude` never blocks on a full pipe.
-        var said = Data()
-        let reading = DispatchQueue(label: "presence.connect.claude")
-        let done = DispatchSemaphore(value: 0)
-        reading.async {
-            said = output.fileHandleForReading.readDataToEndOfFile()
-            done.signal()
+        let said = Collected()
+        let drained = DispatchSemaphore(value: 0)
+        output.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if chunk.isEmpty {
+                handle.readabilityHandler = nil
+                drained.signal()
+            } else {
+                said.append(chunk)
+            }
         }
+        try process.run()
+        // `claude` leads a process group of its own (Process starts one): stopping the group stops
+        // anything it started too, so nothing can change the config once this returns.
+        let group = process.processIdentifier
         let command = (["claude"] + arguments).map(Self.shellQuoted).joined(separator: " ")
-        guard ended.wait(timeout: .now() + Self.claudeWait) == .success else {
-            process.terminate()
-            throw ConnectError.claudeFailed(command: command, output: "it didn't finish within \(Int(Self.claudeWait)) seconds")
+        let deadline = DispatchTime.now() + claudeWait
+        guard ended.wait(timeout: deadline) == .success else {
+            kill(-group, SIGTERM)
+            if ended.wait(timeout: .now() + 2) != .success {
+                kill(-group, SIGKILL)
+                _ = ended.wait(timeout: .now() + 2)
+            }
+            output.fileHandleForReading.readabilityHandler = nil
+            throw ConnectError.claudeFailed(command: command, output: "it didn't finish within \(Int(claudeWait)) seconds, and was stopped")
         }
-        done.wait()
+        // Done; anything it left holding its output is stopped, rather than waited for.
+        if drained.wait(timeout: min(deadline, .now() + 5)) != .success {
+            kill(-group, SIGKILL)
+            output.fileHandleForReading.readabilityHandler = nil
+        }
         guard process.terminationStatus == 0 else {
-            throw ConnectError.claudeFailed(command: command, output: String(decoding: said, as: UTF8.self))
+            throw ConnectError.claudeFailed(command: command, output: String(decoding: said.data, as: UTF8.self))
         }
     }
 
@@ -349,18 +371,26 @@ public struct Connector: Sendable {
         return args[index + 1]
     }
 
-    /// The command that revokes the grant an entry's arguments name, in the store they name.
-    public static func revokeCommand(_ args: [String]) -> String {
-        var words = ["pcap", "grant", "revoke", option("--grant", args) ?? "<grant_id>"]
-        if let store = option("--store", args) { words += ["--store", store] }
-        if let key = option("--master-key-file", args) { words += ["--master-key-file", key] }
-        return words.map(shellQuoted).joined(separator: " ")
+    /// The command that revokes the grant an entry's arguments name, in `store`.
+    public func revokeCommand(_ args: [String], store: String?) -> String {
+        var words = [pcap, "grant", "revoke", Self.option("--grant", args) ?? "<grant_id>"]
+        if let store { words += ["--store", store] }
+        if let key = Self.option("--master-key-file", args) { words += ["--master-key-file", key] }
+        return words.map(Self.shellQuoted).joined(separator: " ")
+    }
+
+    /// The store an entry's server opens, as pcap-mcp chooses it: its --store, else its environment's
+    /// PRESENCE_CAPTURE_HOME, else the app's. Nil when that can't be known from here: a relative path,
+    /// which depends on where the client starts it.
+    static func store(args: [String], env: [String: String]) -> String? {
+        let path = option("--store", args) ?? env["PRESENCE_CAPTURE_HOME"].map { $0 + "/store.sqlite" } ?? CaptureStore.defaultHome + "/store.sqlite"
+        return path.hasPrefix("/") ? standardized(path) : nil
     }
 
     static func standardized(_ path: String) -> String { URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path }
 
     /// A word as a shell reads it back, for a command shown to the person to run.
-    static func shellQuoted(_ word: String) -> String {
+    public static func shellQuoted(_ word: String) -> String {
         word.allSatisfy { $0.isLetter || $0.isNumber || "-_./=:@".contains($0) } ? word : "'\(word.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 }
@@ -393,7 +423,8 @@ extension Connector {
         let new = entry(grantId)
         func withdraw(after reason: String) throws {
             do { try store.revokeGrant(grantId) } catch {
-                throw ConnectError.grantLeft(grantId: grantId, after: reason, why: "\(error)", revoke: Self.revokeCommand(new.args))
+                throw ConnectError.grantLeft(grantId: grantId, after: reason, why: "\(error)",
+                                             revoke: revokeCommand(new.args, store: Self.option("--store", new.args)))
             }
         }
         let made: (plan: ConnectPlan, backup: URL?)?
@@ -412,11 +443,13 @@ extension Connector {
         var revoked: String?
         var stillActive: (grantId: String, why: String, revoke: String)?
         if let old = made.plan.replacing, old != grantId {
-            let revoke = Self.revokeCommand(made.plan.replacedArgs)
             let here = Self.option("--store", new.args).map(Self.standardized)
-            let there = Self.standardized(Self.option("--store", made.plan.replacedArgs) ?? CaptureStore.defaultHome + "/store.sqlite")
-            if here != there {
-                stillActive = (old, "it's in another store, \(there)", revoke)
+            let there = Self.store(args: made.plan.replacedArgs, env: made.plan.replacedEnv)
+            let revoke = revokeCommand(made.plan.replacedArgs, store: there)
+            if there == nil {
+                stillActive = (old, "its store can't be known from here (its PRESENCE_CAPTURE_HOME is a relative path)", revoke)
+            } else if here != there {
+                stillActive = (old, "it's in another store, \(there!)", revoke)
             } else {
                 do {
                     if try store.revokeGrant(old) { revoked = old }
@@ -508,4 +541,12 @@ enum LineDiff {
     private static func lines(_ text: String) -> [String] {
         text.isEmpty ? [] : Array(text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init).dropLast(text.hasSuffix("\n") ? 1 : 0))
     }
+}
+
+/// What a subprocess said, gathered from its reader as it comes.
+private final class Collected: @unchecked Sendable {
+    private let lock = NSLock()
+    private var bytes = Data()
+    func append(_ chunk: Data) { lock.withLock { bytes.append(chunk) } }
+    var data: Data { lock.withLock { bytes } }
 }

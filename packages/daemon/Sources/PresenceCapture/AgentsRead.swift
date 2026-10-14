@@ -10,16 +10,18 @@ struct AgentsReadView: View {
         var egress: [EgressDay] = []
     }
 
-    /// Reads the grants and the last week of the log; throws when the store can't be read.
-    let load: () throws -> Snapshot
-    /// Withdraws a grant.
-    let revoke: (String) throws -> Void
+    /// Reads the grants and the last week of the log, off the main thread; throws when the store
+    /// can't be read.
+    let load: () async throws -> Snapshot
+    /// Withdraws one grant, off the main thread.
+    let revoke: (String) async throws -> Void
 
     @State private var snapshot = Snapshot()
     @State private var problem: String?
     /// A withdrawal that failed: kept through a reload, since the grant can still read.
     @State private var failure: String?
     @State private var withdrawing: GrantInfo?
+    @State private var showHistory = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -41,39 +43,62 @@ struct AgentsReadView: View {
         .onAppear(perform: reload)
         .confirmationDialog("Withdraw this grant?", isPresented: Binding(get: { withdrawing != nil }, set: { if !$0 { withdrawing = nil } }),
                             presenting: withdrawing) { grant in
-            Button("Withdraw \(Self.name(grant.clientId))'s Grant", role: .destructive) {
-                do {
-                    try revoke(grant.grantId)
-                    failure = nil
-                } catch {
-                    failure = "\(Self.name(grant.clientId))'s grant couldn't be withdrawn, and can still read. Try again in a moment."
+            Button("Withdraw This Grant", role: .destructive) {
+                Task {
+                    do {
+                        try await revoke(grant.grantId)
+                        failure = nil
+                    } catch {
+                        failure = "\(Self.name(grant.clientId))'s grant \(Self.short(grant.grantId)) couldn't be withdrawn, and can still read. Try again in a moment."
+                    }
+                    reload()
                 }
-                reload()
             }
         } message: { grant in
-            Text("\(Self.name(grant.clientId)) can't read anything from now on. Connect it again to give it a new grant.")
+            Text("\(Self.name(grant.clientId)) can't read through grant \(Self.short(grant.grantId)), issued \(grant.issuedAt.formatted(date: .abbreviated, time: .shortened)), from now on. Any other grant it has stays as it is, listed apart. Connect it again to give it a new one.")
         }
     }
 
     private var grantsSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let (active, history) = Self.split(snapshot.grants)
+        return VStack(alignment: .leading, spacing: 8) {
             Text("Grants").font(.subheadline).bold()
-            if snapshot.grants.isEmpty {
-                Text("No agent has a grant. Choose Connect an Agent in the menu to give one.").foregroundStyle(.secondary)
+            if active.isEmpty {
+                Text("No agent can read now. Choose Connect an Agent in the menu to give one a grant.").foregroundStyle(.secondary)
+            } else {
+                ScrollView { GrantsList(grants: active, withdraw: { withdrawing = $0 }) }.frame(maxHeight: 200)
             }
-            ForEach(snapshot.grants, id: \.grantId) { grant in
-                HStack(alignment: .firstTextBaseline) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(Self.name(grant.clientId)).bold()
-                        Text(Self.scope(grant)).font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Text(Self.state(grant)).foregroundStyle(grant.isActive() ? .primary : .secondary)
-                    if grant.isActive() {
-                        Button("Withdraw…") { withdrawing = grant }
+            if !history.isEmpty {
+                DisclosureGroup("Withdrawn and expired (\(history.count))", isExpanded: $showHistory) {
+                    ScrollView { GrantsList(grants: history, withdraw: nil) }.frame(maxHeight: 160)
+                }
+            }
+        }
+    }
+
+    /// Grants, one a row: the agent, what it may read, its id and when it was issued, and its state.
+    struct GrantsList: View {
+        let grants: [GrantInfo]
+        /// Offered for an active grant; nil for a list of past ones.
+        let withdraw: ((GrantInfo) -> Void)?
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(grants, id: \.grantId) { grant in
+                    HStack(alignment: .firstTextBaseline) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(AgentsReadView.name(grant.clientId)).bold()
+                            Text(AgentsReadView.scope(grant)).font(.caption).foregroundStyle(.secondary)
+                            Text("\(AgentsReadView.short(grant.grantId)) · issued \(grant.issuedAt.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption.monospaced()).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text(AgentsReadView.state(grant)).foregroundStyle(grant.isActive() ? .primary : .secondary)
+                        if let withdraw, grant.isActive() { Button("Withdraw…") { withdraw(grant) } }
                     }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -86,11 +111,13 @@ struct AgentsReadView: View {
     }
 
     private func reload() {
-        do {
-            snapshot = try load()
-            problem = nil
-        } catch {
-            problem = "The store couldn't be read."
+        Task {
+            do {
+                snapshot = try await load()
+                problem = nil
+            } catch {
+                problem = "The store couldn't be read."
+            }
         }
     }
 
@@ -115,6 +142,15 @@ struct AgentsReadView: View {
     }
 
     // MARK: Words
+
+    /// Active grants, and the rest, each newest first as the store gives them: an older grant still
+    /// active is never lost among withdrawn ones.
+    static func split(_ grants: [GrantInfo], now: Date = Date()) -> (active: [GrantInfo], history: [GrantInfo]) {
+        (grants.filter { $0.isActive(at: now) }, grants.filter { !$0.isActive(at: now) })
+    }
+
+    /// A grant's id, short enough to tell grants apart and to say.
+    static func short(_ grantId: String) -> String { String(grantId.prefix(12)) }
 
     /// A connected client by its name; any other agent by the name its grant was given.
     static func name(_ clientId: String) -> String { Client(rawValue: clientId)?.name ?? clientId }
