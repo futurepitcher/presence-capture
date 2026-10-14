@@ -16,6 +16,18 @@ or because it can't be fixed from inside the app.
   When a window's text has to be read by OCR instead, whatever is drawn is
   read: a password field normally shows dots, but one shown in clear (a "show
   password" option) can be captured. Exclude the app or window to keep it out.
+- **An element partly in view is read whole.** Accessibility text is kept for
+  what's inside the window, and a text area only as far as it's scrolled into
+  sight; a text area whose visible part can't be read keeps nothing. But a
+  label or a cell that's only partly in view is read whole.
+- **A page's address is kept, without its query.** The record of a capture
+  keeps the page's scheme, host and path, redacted like text, in plain
+  metadata that stays after Forget. Its query and fragment, where tokens
+  usually are, are never kept; a secret in the path itself, in a shape
+  redaction doesn't know, would be.
+- **Speech that runs into a forgotten stretch.** An utterance is stamped when it
+  began. One that began just before the stretch you forgot, and ran on into
+  it, is kept: at most the length of one utterance.
 - **Every capture is `standard`.** The privacy level doesn't yet tell secrets
   from ordinary text. Exclusion, redaction and a grant's types, sources and
   time window do that work (ADR 0001 §6.3).
@@ -72,7 +84,27 @@ Dictation is experimental in 0.1.
   memory from the rows its grant admits, recorded as tool `index`, so the log
   lists more rows than an agent was shown. What it was shown is in the records
   for the tools it called.
+- **An agent that can run commands can run `pcap`.** `pcap` trusts whoever
+  runs it as you, and an agent with a shell tool runs as you: it could issue
+  itself a wider grant, or Forget (ADR 0001 §6.1, the threat model's "another
+  process running as you"). Agents Read… shows every grant. Give an agent a
+  shell only where you'd give it your account.
+- **A client can make its own server work hard.** `pcap-mcp` puts no limit on
+  how much a request asks for (a very long query, or many at once) beyond each
+  grant's rows a read. Only the client that started it waits on it.
 - **The log is evidence, not a lock.** It's hash-chained, and its triggers
   refuse changes, but it lives in your store's file: a program running as you
   that can write that file can rewrite it, and recompute the chain. `pcap
   check` finds a change made without doing that.
+
+## Keys and logs
+
+- **A store needs its own key.** The key is in your login Keychain, on this Mac
+  only. On a new Mac, or after the Keychain is reset, a store copied across
+  can't be opened, and the app says so rather than making a new key over it:
+  restore the Keychain from the same backup as the store, or move the store
+  aside to start a new one.
+- **The app's log keeps counts after a Forget.** `logs/capture.log` holds
+  counts and states, never what was captured (how many captures a Forget
+  took, that a dictation was kept). Those lines aren't erased with what they
+  count.
