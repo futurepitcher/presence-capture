@@ -85,6 +85,10 @@ actor ScreenCapturer {
             config.width = Int(info.contentRect.width * CGFloat(info.pointPixelScale))
             config.height = Int(info.contentRect.height * CGFloat(info.pointPixelScale))
             config.showsCursor = false
+            // When it was seen, taken before the image is, and kept through reading it: a Forget that
+            // lands while it's taken or read forgets a moment that includes this, and the store
+            // refuses it, rather than taking it stamped after the Forget.
+            let observedAt = Date()
             let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
             // Locked, held or another app in front while it was taken (it may show what's behind the
             // lock screen): not kept, and the rest wait for the next tick.
@@ -125,9 +129,14 @@ actor ScreenCapturer {
                       window.windowID == FrontWindow.of(Set(windows.map(\.windowID)), pid: pid, frontToBack: listedWindows()) else { continue }
                 url = page
             }
-            try store.append(NewCapture(
-                capturedAt: Date(), captureType: "screen_text", source: "screen", sourceApp: front.bundleIdentifier ?? app,
-                sourceUrl: url, contentText: Redact.redact(text), extraction: extraction))
+            do {
+                try store.append(NewCapture(
+                    capturedAt: observedAt, captureType: "screen_text", source: "screen", sourceApp: front.bundleIdentifier ?? app,
+                    sourceUrl: url, contentText: Redact.redact(text), extraction: extraction))
+            } catch StoreError.revoked {
+                log("append.refused_revoked kind=screen")
+                continue
+            }
             frames += 1
         }
     }

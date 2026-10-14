@@ -27,6 +27,21 @@ func required(_ args: [String: Any], _ key: String) throws -> String {
 
 func json(_ value: Any?) -> Any { value ?? NSNull() }
 
+/// An `append` request's arguments as the store takes them. With no `captured_at`, it's now, as
+/// in the reference.
+func capture(_ args: [String: Any]) throws -> NewCapture {
+    var payload: (bytes: Data, mediaType: String)?
+    if let p = args["payload"] as? [String: Any], let b64 = p["bytes_base64"] as? String, let bytes = Data(base64Encoded: b64) {
+        payload = (bytes, p["media_type"] as? String ?? "application/octet-stream")
+    }
+    return NewCapture(
+        captureId: string(args, "capture_id"), capturedAt: string(args, "captured_at").flatMap(CaptureStore.date) ?? Date(),
+        captureType: try required(args, "capture_type"), source: try required(args, "source"), sourceApp: string(args, "source_app"),
+        sourceUrl: string(args, "source_url"), privacyLevel: try required(args, "privacy_level"), classification: string(args, "classification"),
+        contentText: string(args, "content_text"), payload: payload, extraction: string(args, "extraction"),
+        derivedFrom: string(args, "derived_from"), dedupeKey: string(args, "dedupe_key"))
+}
+
 func handle(_ op: String, _ args: [String: Any]) throws -> [String: Any] {
     switch op {
     case "hello":
@@ -38,17 +53,10 @@ func handle(_ op: String, _ args: [String: Any]) throws -> [String: Any] {
         store = try CaptureStore(path: try required(args, "path"), masterKey: SymmetricKey(data: bytes))
         return [:]
     case "append":
-        var payload: (bytes: Data, mediaType: String)?
-        if let p = args["payload"] as? [String: Any], let b64 = p["bytes_base64"] as? String, let bytes = Data(base64Encoded: b64) {
-            payload = (bytes, p["media_type"] as? String ?? "application/octet-stream")
-        }
-        let capture = NewCapture(
-            captureId: string(args, "capture_id"), capturedAt: string(args, "captured_at").flatMap(CaptureStore.date),
-            captureType: try required(args, "capture_type"), source: try required(args, "source"), sourceApp: string(args, "source_app"),
-            sourceUrl: string(args, "source_url"), privacyLevel: try required(args, "privacy_level"), classification: string(args, "classification"),
-            contentText: string(args, "content_text"), payload: payload, extraction: string(args, "extraction"),
-            derivedFrom: string(args, "derived_from"), dedupeKey: string(args, "dedupe_key"))
-        return ["capture_id": try need().append(capture)]
+        return ["capture_id": try need().append(try capture(args))]
+    case "append_all":
+        guard let captures = args["captures"] as? [[String: Any]] else { throw DriverError(code: "bad_request", message: "captures must be an array") }
+        return ["capture_ids": try need().appendAll(try captures.map(capture))]
     case "register_projection":
         try need().registerProjection(name: try required(args, "name"), kind: try required(args, "kind"))
         return [:]
@@ -121,7 +129,7 @@ while let line = readLine() {
     } catch let error as StoreError {
         let code: String
         switch error {
-        case .constraint: code = "constraint"
+        case .constraint, .revoked: code = "constraint"
         case .wrongKey: code = "key"
         case .denied: code = "denied"
         default: code = "internal"

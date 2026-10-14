@@ -9,7 +9,8 @@ import CaptureStore
 ///
 /// The store lives in ~/Library/Application Support/Presence Capture (PRESENCE_CAPTURE_HOME to move
 /// it); its master key in the Keychain. Settings are the app's defaults: `interval` (seconds),
-/// `retentionDays`, `paused`, `hearMicrophone`, `hearSystemAudio`.
+/// `retentionDays`, `paused`, `hearMicrophone` (off until the person turns it on: whether a room is
+/// heard is theirs to choose), `hearSystemAudio`.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let home = ProcessInfo.processInfo.environment["PRESENCE_CAPTURE_HOME"]
         ?? NSHomeDirectory() + "/Library/Application Support/Presence Capture"
@@ -38,7 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var sensorsPath: String { home + "/sensors.json" }
     private var interval: TimeInterval { TimeInterval(defaults.integer(forKey: "interval").nonZero ?? 5) }
     private var retentionDays: Int { defaults.integer(forKey: "retentionDays").nonZero ?? 14 }
-    private var hearMicrophone: Bool { defaults.object(forKey: "hearMicrophone") as? Bool ?? true }
+    private var hearMicrophone: Bool { defaults.object(forKey: "hearMicrophone") as? Bool ?? false }
     private var hearSystemAudio: Bool { defaults.object(forKey: "hearSystemAudio") as? Bool ?? true }
 
     /// Starts as saved (or as `-paused` says at launch), then is the menu's: the launch argument's
@@ -89,7 +90,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if #available(macOS 26, *) {
                 let defaults = self.defaults
                 audio = AudioCapturer(store: store, devices: {
-                    (defaults.object(forKey: "hearMicrophone") as? Bool ?? true, defaults.object(forKey: "hearSystemAudio") as? Bool ?? true)
+                    (defaults.object(forKey: "hearMicrophone") as? Bool ?? false, defaults.object(forKey: "hearSystemAudio") as? Bool ?? true)
                 }, log: log.write)
             }
             let exclusionPath = self.exclusionPath
@@ -138,7 +139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let log = self.log!
             let heard = self.audio?.takeCounts() ?? (input: 0, output: 0)
             for sensor in self.sensors?.takeCounts() ?? [] {
-                log.write("sensors.hour name=\(sensor.name) appended=\(sensor.stats.appended) excluded=\(sensor.stats.excluded) redacted=\(sensor.stats.redacted) invalid=\(sensor.stats.invalid) dropped=\(sensor.dropped)")
+                log.write("sensors.hour name=\(sensor.name) appended=\(sensor.stats.appended) excluded=\(sensor.stats.excluded) redacted=\(sensor.stats.redacted) invalid=\(sensor.stats.invalid) refused=\(sensor.stats.refused) dropped=\(sensor.dropped)")
             }
             Task {
                 let counts = await capturer.takeCounts()

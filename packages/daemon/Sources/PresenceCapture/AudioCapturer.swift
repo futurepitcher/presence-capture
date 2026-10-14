@@ -256,17 +256,23 @@ final class AudioCapturer: NSObject, Listener, SCStreamOutput, SCStreamDelegate,
         }
     }
 
+    /// A segment and its transcript, written together or not at all, stamped when the words were
+    /// said: speech from a range forgotten while it was being transcribed is refused.
     fileprivate func keep(_ spoken: Spoken, from type: SCStreamOutputType) {
         do {
-            let segment = try store.append(NewCapture(
-                capturedAt: spoken.at, captureType: "audio_segment", source: "ambient_audio", sourceApp: spoken.deviceType))
-            try store.append(NewCapture(
-                capturedAt: spoken.at, captureType: "audio_transcript", source: "ambient_audio", sourceApp: spoken.deviceType,
-                contentText: Redact.redact(spoken.text), extraction: "asr", derivedFrom: segment))
+            let segment = CaptureStore.newCaptureId()
+            try store.appendAll([
+                NewCapture(captureId: segment, capturedAt: spoken.at, captureType: "audio_segment", source: "ambient_audio",
+                           sourceApp: spoken.deviceType),
+                NewCapture(capturedAt: spoken.at, captureType: "audio_transcript", source: "ambient_audio", sourceApp: spoken.deviceType,
+                           contentText: Redact.redact(spoken.text), extraction: "asr", derivedFrom: segment),
+            ])
             lock.withLock {
                 kept[type, default: 0] += 1
                 if spoken.deviceType == "input" { counts.input += 1 } else { counts.output += 1 }
             }
+        } catch StoreError.revoked {
+            log("append.refused_revoked kind=audio")
         } catch {
             log("audio.store_failed")
         }

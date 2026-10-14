@@ -10,6 +10,9 @@ public enum StoreError: Error, CustomStringConvertible, Equatable {
     case wrongKey
     /// A read the grant doesn't allow: no grant, a revoked one, an expired one (ADR 0001).
     case denied(String)
+    /// A write that would bring back what a revocation forgot: a capture stamped inside a revoked
+    /// time range or derived from a revoked capture, or a projection entry for a revoked capture.
+    case revoked(String)
     case sealing
     case sqlite(String)
 
@@ -18,6 +21,7 @@ public enum StoreError: Error, CustomStringConvertible, Equatable {
         case .constraint(let message): return "constraint: \(message)"
         case .wrongKey: return "masterKey does not open this store"
         case .denied(let message): return "denied: \(message)"
+        case .revoked(let message): return "revoked: \(message)"
         case .sealing: return "sealing failed"
         case .sqlite(let message): return "capture store: \(message)"
         }
@@ -25,9 +29,13 @@ public enum StoreError: Error, CustomStringConvertible, Equatable {
 }
 
 /// A capture to append. Its text and payload are sealed before anything is written.
+///
+/// `capturedAt` is when it was observed, taken before anything was read, never when it's written:
+/// a revocation refuses what's stamped inside the range it forgot, so a screen read or speech
+/// transcribed while a range was being forgotten can't arrive after it, stamped later, and be kept.
 public struct NewCapture: Sendable {
     public var captureId: String?
-    public var capturedAt: Date?
+    public var capturedAt: Date
     public var captureType: String
     public var source: String
     public var sourceApp: String?
@@ -41,7 +49,7 @@ public struct NewCapture: Sendable {
     public var dedupeKey: String?
 
     public init(
-        captureId: String? = nil, capturedAt: Date? = nil, captureType: String, source: String, sourceApp: String? = nil,
+        captureId: String? = nil, capturedAt: Date, captureType: String, source: String, sourceApp: String? = nil,
         sourceUrl: String? = nil, privacyLevel: String = "standard", classification: String? = nil, contentText: String? = nil,
         payload: (bytes: Data, mediaType: String)? = nil, extraction: String? = nil, derivedFrom: String? = nil, dedupeKey: String? = nil
     ) {
@@ -70,7 +78,6 @@ public final class CaptureStore: @unchecked Sendable {
     /// can't be matched to what it named without the master key.
     private let dedupeSecret: SymmetricKey
     let lock = NSLock()
-    private var erasurePending = false
 
     public static let epoch = "0000-01-01T00:00:00.000Z"
 
@@ -98,6 +105,9 @@ public final class CaptureStore: @unchecked Sendable {
                 throw StoreError.wrongKey
             }
         }
+        // A writer opening the store finishes what an earlier one couldn't: a command-line
+        // revocation, say, that exited while a reader held the log.
+        if try erasurePending() { _ = try truncateLog(attempts: 1) }
     }
 
     /// Opens an existing store as a reader (ADR 0008): restricted by SQLite to reads and egress
@@ -147,38 +157,78 @@ public final class CaptureStore: @unchecked Sendable {
     /// capture never exists half-sealed. The payload hash is over the sealed bytes.
     @discardableResult
     public func append(_ capture: NewCapture) throws -> String {
+        try appendAll([capture])[0]
+    }
+
+    /// Appends several captures in one transaction: all of them or none. A later one can name an
+    /// earlier one as `derivedFrom` by the `captureId` it was given (`newCaptureId()`), so an audio
+    /// segment and its transcript land together, and a duplicate segment (its dedupe key) or a
+    /// failed transcript leaves nothing.
+    @discardableResult
+    public func appendAll(_ captures: [NewCapture]) throws -> [String] {
         try lock.withLock {
-            let captureId = capture.captureId ?? "cap_\(UUID().uuidString.lowercased())"
-            let dataKey = Seal.newKey()
-            let createdAt = Self.iso(Date())
-            try transaction {
-                var payloadHash: String?
-                if let payload = capture.payload {
-                    let sealed = try Seal.seal(payload.bytes, key: dataKey, aad: "payload:\(captureId)")
-                    let hash = SHA256.hash(data: sealed).map { String(format: "%02x", $0) }.joined()
-                    payloadHash = hash
-                    try run("INSERT INTO capture_payload (payload_hash, byte_count, media_type, storage_uri, created_at) VALUES (?, ?, ?, ?, ?)",
-                            hash, sealed.count, payload.mediaType, "payload_blob:\(hash)", createdAt)
-                    try run("INSERT INTO payload_blob (payload_hash, sealed) VALUES (?, ?)", hash, sealed)
-                }
-                try run("""
-                    INSERT INTO capture_event (
-                      capture_id, sequence, captured_at, capture_type, source, source_app, source_url,
-                      privacy_level, classification, payload_hash, extraction, derived_from, dedupe_key
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    captureId, try nextSequence(), capture.capturedAt.map(Self.iso) ?? createdAt, capture.captureType, capture.source,
-                    capture.sourceApp, capture.sourceUrl, capture.privacyLevel, capture.classification, payloadHash,
-                    capture.extraction, capture.derivedFrom, capture.dedupeKey)
-                try run("INSERT INTO capture_key (capture_id, wrapped_key, created_at) VALUES (?, ?, ?)",
-                        captureId, try Seal.seal(Seal.bytes(dataKey), key: masterKey, aad: "key:\(captureId)"), createdAt)
-                if let text = capture.contentText {
-                    try run("INSERT INTO capture_content (capture_id, text_sealed, created_at) VALUES (?, ?, ?)",
-                            captureId, try Seal.seal(Data(text.utf8), key: dataKey, aad: "text:\(captureId)"), createdAt)
-                }
-            }
-            return captureId
+            var ids: [String] = []
+            // Under the write lock from the start, so no revocation can commit between the check
+            // that nothing here was forgotten and the write.
+            try transaction(immediate: true) { ids = try captures.map(appendLocked) }
+            return ids
         }
+    }
+
+    /// An id for a capture not written yet, so another in the same batch can name it.
+    public static func newCaptureId() -> String { "cap_\(UUID().uuidString.lowercased())" }
+
+    private func appendLocked(_ capture: NewCapture) throws -> String {
+        let captureId = capture.captureId ?? Self.newCaptureId()
+        let dataKey = Seal.newKey()
+        let createdAt = Self.iso(Date())
+        let capturedAt = Self.iso(capture.capturedAt)
+        try refuseForgotten(capturedAt: capturedAt, derivedFrom: capture.derivedFrom)
+        var payloadHash: String?
+        if let payload = capture.payload {
+            let sealed = try Seal.seal(payload.bytes, key: dataKey, aad: "payload:\(captureId)")
+            let hash = SHA256.hash(data: sealed).map { String(format: "%02x", $0) }.joined()
+            payloadHash = hash
+            try run("INSERT INTO capture_payload (payload_hash, byte_count, media_type, storage_uri, created_at) VALUES (?, ?, ?, ?, ?)",
+                    hash, sealed.count, payload.mediaType, "payload_blob:\(hash)", createdAt)
+            try run("INSERT INTO payload_blob (payload_hash, sealed) VALUES (?, ?)", hash, sealed)
+        }
+        try run("""
+            INSERT INTO capture_event (
+              capture_id, sequence, captured_at, capture_type, source, source_app, source_url,
+              privacy_level, classification, payload_hash, extraction, derived_from, dedupe_key
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            captureId, try nextSequence(), capturedAt, capture.captureType, capture.source,
+            capture.sourceApp, capture.sourceUrl, capture.privacyLevel, capture.classification, payloadHash,
+            capture.extraction, capture.derivedFrom, capture.dedupeKey)
+        try run("INSERT INTO capture_key (capture_id, wrapped_key, created_at) VALUES (?, ?, ?)",
+                captureId, try Seal.seal(Seal.bytes(dataKey), key: masterKey, aad: "key:\(captureId)"), createdAt)
+        if let text = capture.contentText {
+            try run("INSERT INTO capture_content (capture_id, text_sealed, created_at) VALUES (?, ?, ?)",
+                    captureId, try Seal.seal(Data(text.utf8), key: dataKey, aad: "text:\(captureId)"), createdAt)
+        }
+        return captureId
+    }
+
+    /// A revocation forgets what it names from then on, too. A capture stamped inside a revoked time
+    /// range is refused: speech written after it was said, a screen read while the range was being
+    /// forgotten, anything older than retention. So is one derived from a revoked capture. Either
+    /// would otherwise arrive after the revocation and be readable.
+    private func refuseForgotten(capturedAt: String, derivedFrom: String?) throws {
+        // time_range scopes are kept in canonical form (revoke), so they compare as text.
+        let forgotten = try rows("""
+            SELECT 1 FROM revocation WHERE scope_kind = 'time_range'
+              AND substr(scope_value, 1, instr(scope_value, '/') - 1) <= ?
+              AND substr(scope_value, instr(scope_value, '/') + 1) >= ?
+            LIMIT 1
+            """, capturedAt, capturedAt)
+        if !forgotten.isEmpty { throw StoreError.revoked("captured_at falls in a revoked time range") }
+        if let derivedFrom, try isRevoked(derivedFrom) { throw StoreError.revoked("derived_from names a revoked capture") }
+    }
+
+    private func isRevoked(_ captureId: String) throws -> Bool {
+        try !rows("SELECT 1 FROM revoked_capture WHERE capture_id = ?", captureId).isEmpty
     }
 
     public func registerProjection(name: String, kind: String) throws {
@@ -192,17 +242,23 @@ public final class CaptureStore: @unchecked Sendable {
     /// to prune (R3). With `output` (a kind and its JSON), the store keeps what was derived, sealed
     /// under the capture's own data key (ADR 0007): revoking the capture deletes it and destroys
     /// the key that sealed it.
+    ///
+    /// Under the write lock from the start, so a revocation can't land between the check and the
+    /// insert and leave an entry behind for a capture it pruned.
     public func addProjectionEntry(projection: String, captureId: String, entryRef: String, output: (kind: String, json: Data)? = nil) throws {
         try lock.withLock {
-            var sealed: Data?
-            if let output {
-                guard let wrapped = try rows("SELECT wrapped_key FROM capture_key WHERE capture_id = ?", captureId).first?.data(0) else {
-                    throw StoreError.constraint("no output for a capture that is revoked or unknown")
+            try transaction(immediate: true) {
+                if try isRevoked(captureId) { throw StoreError.revoked("no projection entry for a capture that is revoked or unknown") }
+                var sealed: Data?
+                if let output {
+                    guard let wrapped = try rows("SELECT wrapped_key FROM capture_key WHERE capture_id = ?", captureId).first?.data(0) else {
+                        throw StoreError.revoked("no output for a capture that is revoked or unknown")
+                    }
+                    sealed = try Seal.seal(output.json, key: try dataKey(captureId, wrapped: wrapped), aad: "projection:\(projection):\(captureId):\(entryRef)")
                 }
-                sealed = try Seal.seal(output.json, key: try dataKey(captureId, wrapped: wrapped), aad: "projection:\(projection):\(captureId):\(entryRef)")
+                try run("INSERT INTO projection_entry (projection_name, capture_id, entry_ref, created_at, output_kind, output_sealed) VALUES (?, ?, ?, ?, ?, ?)",
+                        projection, captureId, entryRef, Self.iso(Date()), output?.kind, sealed)
             }
-            try run("INSERT INTO projection_entry (projection_name, capture_id, entry_ref, created_at, output_kind, output_sealed) VALUES (?, ?, ?, ?, ?, ?)",
-                    projection, captureId, entryRef, Self.iso(Date()), output?.kind, sealed)
         }
     }
 
@@ -257,12 +313,18 @@ public final class CaptureStore: @unchecked Sendable {
         try lock.withLock {
             let revocationId = "rev_\(UUID().uuidString.lowercased())"
             let revokedAt = Self.iso(Date())
-            let affected = try resolve(scopeKind: scopeKind, scopeValue: scopeValue)
-            let ids = affected.map(\.id)
-            let list = Array(repeating: "?", count: ids.count).joined(separator: ",")
-            try transaction {
+            // Kept in canonical form, so later appends compare against it as text (refuseForgotten).
+            let value = scopeKind == "time_range" ? try Self.canonicalRange(scopeValue) : scopeValue
+            var ids: [String] = []
+            // The scope is resolved under the write lock, in the transaction that records it: a capture
+            // another writer appends meanwhile is either in the set, or appended after this commits and
+            // refused (refuseForgotten).
+            try transaction(immediate: true) {
+                let affected = try resolve(scopeKind: scopeKind, scopeValue: value)
+                ids = affected.map(\.id)
+                let list = Array(repeating: "?", count: ids.count).joined(separator: ",")
                 try run("INSERT INTO revocation (revocation_id, sequence, revoked_at, scope_kind, scope_value, reason) VALUES (?, ?, ?, ?, ?, ?)",
-                        revocationId, try nextSequence(), revokedAt, scopeKind, scopeValue, reason)
+                        revocationId, try nextSequence(), revokedAt, scopeKind, value, reason)
                 for (id, cascaded) in affected {
                     try run("INSERT INTO revoked_capture (capture_id, revocation_id, revoked_at, cascaded) VALUES (?, ?, ?, ?) ON CONFLICT (capture_id) DO NOTHING",
                             id, revocationId, revokedAt, cascaded ? 1 : 0)
@@ -291,32 +353,53 @@ public final class CaptureStore: @unchecked Sendable {
         }
     }
 
-    /// An erasure a reader held up and that isn't finished yet.
-    public var isErasurePending: Bool { lock.withLock { erasurePending } }
+    /// An erasure a reader held up and that isn't finished yet, by this process or another.
+    public var isErasurePending: Bool { lock.withLock { (try? erasurePending()) ?? true } }
 
     /// Finishes an erasure a reader held up: true once nothing revoked is left in the log.
     public func finishErasure() throws -> Bool {
-        try lock.withLock { erasurePending ? try truncateLog(attempts: 1) : true }
+        try lock.withLock {
+            guard try erasurePending() else { return true }
+            _ = try truncateLog(attempts: 1)
+            return try !erasurePending()
+        }
+    }
+
+    /// Kept in the store (migration 008), not in this process, so an erasure a process couldn't
+    /// finish before it exited is finished by the next writer.
+    private func erasurePending() throws -> Bool {
+        try !rows("SELECT 1 FROM erasure_receipt WHERE completed_at IS NULL LIMIT 1").isEmpty
     }
 
     /// The deleted pages, zeroed by secure_delete, are still preceded in the write-ahead log by
     /// the frames that wrote the content: the log is folded in and truncated, so they're gone too.
     /// A reader in another process holding a snapshot blocks that, and SQLite says so only in the
     /// result row (busy = 1), never as an error. Retried for about a second; true once truncated.
+    /// Until it is, the erasure isn't reported done and its receipt has no completed_at.
     private func truncateLog(attempts: Int = 20) throws -> Bool {
-        // Retried on its own short schedule, so SQLite's busy wait is off while it tries: with it on,
-        // each attempt would wait out the whole busy timeout.
-        sqlite3_busy_timeout(db, 0)
-        defer { sqlite3_busy_timeout(db, 5000) }
-        for attempt in 0..<attempts {
-            if try rows("PRAGMA wal_checkpoint(TRUNCATE)").first?.int(0) == 0 {
-                erasurePending = false
-                return true
+        var truncated = false
+        do {
+            // Retried on its own short schedule, so SQLite's busy wait is off while it tries: with it
+            // on, each attempt would wait out the whole busy timeout.
+            sqlite3_busy_timeout(db, 0)
+            defer { sqlite3_busy_timeout(db, 5000) }
+            for attempt in 0..<attempts where !truncated {
+                truncated = try rows("PRAGMA wal_checkpoint(TRUNCATE)").first?.int(0) == 0
+                if !truncated && attempt < attempts - 1 { Thread.sleep(forTimeInterval: 0.05) }
             }
-            if attempt < attempts - 1 { Thread.sleep(forTimeInterval: 0.05) }
         }
-        erasurePending = true
-        return false
+        if truncated { try stampErasures() }
+        return truncated
+    }
+
+    /// Every erasure pending until now is done: the log holding its frames was just truncated.
+    /// Recorded in the store, so it survives this process. If the stamp can't be written now
+    /// (another writer held the lock throughout the busy timeout), the receipts stay pending, which
+    /// is never wrong, and the next truncation stamps them.
+    private func stampErasures() throws {
+        do {
+            try run("UPDATE erasure_receipt SET completed_at = ? WHERE completed_at IS NULL", Self.iso(Date()))
+        } catch StoreError.sqlite where sqlite3_errcode(db) == SQLITE_BUSY {}
     }
 
     /// Everything captured `days` or more before `now`, revoked with reason "retention" (ADR 0003).
@@ -346,8 +429,7 @@ public final class CaptureStore: @unchecked Sendable {
             seeds = try rows("SELECT capture_id FROM capture_event WHERE privacy_level = ?", scopeValue).map { $0.text(0) }
         case "time_range":
             // In the form captured_at is kept in, so "...05Z" can't sort after "...05.999Z".
-            let bounds = scopeValue.split(separator: "/", maxSplits: 1).map(String.init).compactMap(Self.date).map(Self.iso)
-            guard bounds.count == 2 else { throw StoreError.sqlite("time_range is from/to, each an ISO 8601 time") }
+            let bounds = try Self.canonicalRange(scopeValue).split(separator: "/").map(String.init)
             seeds = try rows("SELECT capture_id FROM capture_event WHERE captured_at >= ? AND captured_at <= ?", bounds[0], bounds[1]).map { $0.text(0) }
         default:
             throw StoreError.sqlite("unknown scope kind: \(scopeKind)")
@@ -487,8 +569,24 @@ public final class CaptureStore: @unchecked Sendable {
     // MARK: Time
 
     /// ISO 8601 with milliseconds, as the reference writes it, so ranges compare as text.
+    ///
+    /// To the nearest millisecond, written out by hand: the formatter truncates, and a time read back
+    /// from text (a range's bounds, a driver's captured_at) can sit a hair under its millisecond, so
+    /// it would come back a millisecond early, and a capture in that millisecond could fall outside a
+    /// range it's in. Rounded, a time written, read and written again is the same text.
     public static func iso(_ date: Date) -> String {
-        date.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true, timeZone: TimeZone(identifier: "UTC")!))
+        let ms = Int64((date.timeIntervalSince1970 * 1000).rounded())
+        let (seconds, fraction) = (ms - ((ms % 1000) + 1000) % 1000, ((ms % 1000) + 1000) % 1000)
+        let whole = Date(timeIntervalSince1970: TimeInterval(seconds / 1000))
+            .formatted(Date.ISO8601FormatStyle(timeZone: TimeZone(identifier: "UTC")!))
+        return whole.dropLast() + String(format: ".%03dZ", fraction)
+    }
+
+    /// A time_range's bounds, each in that form.
+    static func canonicalRange(_ value: String) throws -> String {
+        let bounds = value.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false).map(String.init).compactMap(date).map(iso)
+        guard bounds.count == 2 else { throw StoreError.sqlite("time_range is from/to, each an ISO 8601 time") }
+        return bounds.joined(separator: "/")
     }
 
     public static func date(_ text: String) -> Date? {

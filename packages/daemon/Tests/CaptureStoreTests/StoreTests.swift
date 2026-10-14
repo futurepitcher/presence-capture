@@ -23,6 +23,16 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(CaptureStore.iso(try XCTUnwrap(CaptureStore.date("2026-10-06T09:00:05Z"))), "2026-10-06T09:00:05.000Z")
     }
 
+    /// A range's bounds are read back from text and written again before they're compared: a
+    /// millisecond lost on the way would let a capture in that millisecond out of the range.
+    func testWritesATimeReadBackAsTheSameText() throws {
+        for ms in 0..<1000 {
+            let text = String(format: "2026-10-06T09:00:05.%03dZ", ms)
+            XCTAssertEqual(CaptureStore.iso(try XCTUnwrap(CaptureStore.date(text))), text)
+        }
+        XCTAssertEqual(CaptureStore.iso(try XCTUnwrap(CaptureStore.date(CaptureStore.epoch))), CaptureStore.epoch)
+    }
+
     func testForgetsTheLastStretchAndKeepsWhatCameBefore() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -47,7 +57,7 @@ final class HeldLogTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
         let path = dir.appendingPathComponent("store.sqlite").path
         let store = try CaptureStore(path: path, masterKey: Seal.newKey())
-        let id = try store.append(NewCapture(captureType: "screen_text", source: "screen", contentText: "read while forgotten"))
+        let id = try store.append(NewCapture(capturedAt: Date(), captureType: "screen_text", source: "screen", contentText: "read while forgotten"))
 
         var reader: OpaquePointer?
         XCTAssertEqual(sqlite3_open_v2(path, &reader, SQLITE_OPEN_READONLY, nil), SQLITE_OK)
