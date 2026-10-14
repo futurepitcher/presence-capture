@@ -326,11 +326,12 @@ test('recall: a session runs up to, not including, the capture that ended it', (
   assert.ok(!contents.some((c) => c.includes('Xcode')), 'the session took in the capture that ended it');
 }));
 
-test('recall: now while idle says so, and speech is from the five minutes before the call', () => withServer({
+test('recall: now while idle says so, and speech is everything from the five minutes before the call, newest first', () => withServer({
   seed: [
     activity(30, 'Notes', 'Plan'),
     ['standard', 'said a while ago', { captureType: 'audio_transcript', source: 'ambient_audio', sourceApp: 'input', extraction: 'asr', capturedAt: ago(25) }],
     activity(20, 'Notes', 'Plan', 'idle'),
+    ['standard', 'the call said this first', { captureType: 'audio_transcript', source: 'ambient_audio', sourceApp: 'output', extraction: 'asr', capturedAt: ago(4) }],
     ['standard', 'said just now', { captureType: 'audio_transcript', source: 'ambient_audio', sourceApp: 'input', extraction: 'asr', capturedAt: ago(2) }],
   ],
 }, async ({ rpc }) => {
@@ -338,7 +339,8 @@ test('recall: now while idle says so, and speech is from the five minutes before
   assert.ok(session.ended_at, 'an idle person was shown as still in the session');
   const contents = ids(envelopes);
   assert.ok(contents.some((c) => c.includes('"idle"')), 'now did not say the person is idle');
-  assert.ok(contents.includes('said just now'));
+  assert.deepEqual(contents.filter((c) => c.startsWith('said') || c.startsWith('the call')), ['said just now', 'the call said this first'],
+    'now did not give everything said in the last five minutes, newest first');
   assert.ok(!contents.includes('said a while ago'), 'speech from well before the call was given as the last five minutes');
 }));
 

@@ -48,7 +48,7 @@ enforcing below the tool layer rather than inside it.
   | `recent(limit?)` | The newest captures first |
   | `timeline(from?, to?, limit?)` | Everything in a span (by default the last hour), in order |
   | `transcript(from?, to?, device?, limit?)` | What was said, from the microphone (`input`), this Mac (`output`), or both |
-  | `now()` | The latest session, with its activity, screen text, and what was said in the last five minutes |
+  | `now()` | The latest session, with its activity, screen text, and everything said in the last five minutes, newest first |
   | `session(id, limit?)` | One session and everything captured during it |
 
   A session ([`cases/sessions.json`](../schema/cases/sessions.json)) is a

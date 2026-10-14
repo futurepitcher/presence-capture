@@ -41,7 +41,7 @@ let tools: [[String: Any]] = [
      "description": "What was said between two times (by default the last hour), in order: from the microphone (input), from this Mac (output), or both. \(untrusted)",
      "inputSchema": ["type": "object", "properties": ["from": time, "to": time, "device": ["type": "string", "enum": ["input", "output"]], "limit": limit]]],
     ["name": "now",
-     "description": "What the person is doing now: the latest session, with its latest activity, screen text, and anything said in the last five minutes. \(sessionNote) \(untrusted)",
+     "description": "What the person is doing now: the latest session, with its latest activity, screen text, and everything said in the last five minutes, newest first. \(sessionNote) \(untrusted)",
      "inputSchema": ["type": "object", "properties": [String: Any]()]],
     ["name": "session",
      "description": "One session, by its id (from now), and everything captured during it, in order. \(sessionNote) \(untrusted)",
