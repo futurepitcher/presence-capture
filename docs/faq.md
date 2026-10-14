@@ -150,16 +150,25 @@ receipts. A shorter period erases at once, so the app asks first. Detail:
 Two ways, depending on what you want.
 
 **Erase the captures, keep the app.** Choose **Pause** in the menu. Then forget
-the last 24 hours, and then set the retention period to 1 day. The first step
-erases the last day, and the second erases everything older.
+the last 24 hours, and have retention erase everything older:
 
 ```sh
 "/Applications/Presence Capture.app/Contents/MacOS/pcap" forget 24h
 ```
 
-Then choose **Keep Captures For**, then **1 Day**. The app asks first. Both steps
-erase from disk, with receipts. With Homebrew, `pcap` is on your `PATH`. Set the
-period back afterward if you want a longer one, and choose **Resume**.
+Then choose **Keep Captures For**, then **1 Day**, and confirm. Choosing the
+period it already has does nothing, so if it's already **1 Day**, choose a
+longer period first, then **1 Day** again. Last, check that both erasures
+finished:
+
+```sh
+"/Applications/Presence Capture.app/Contents/MacOS/pcap" check
+```
+
+It ends `erasure: complete`. If it says `pending`, an agent's server is reading:
+run it again in a moment. Both steps erase from disk, with receipts. With
+Homebrew, `pcap` is on your `PATH`. Set the period back afterward if you want a
+longer one, and choose **Resume**.
 
 **Remove everything.** Quit the app, then delete its folder, then the Keychain
 items that hold its key:

@@ -117,8 +117,8 @@ So a sensor runs only as approved:
   command names, by absolute path. That includes an argument that is a path, and
   the path in a `--flag=path`. A directory it watches isn't code and isn't
   pinned.
-- Every sensor is started in `/`, so **a relative path names nothing.** Use
-  absolute paths.
+- Every sensor is started in `/`, so **a relative path is read from `/`**, not
+  from where you wrote it. Use absolute paths.
 - A sensor whose files change (a swapped script, an upgraded interpreter) isn't
   run again, not even after a relaunch, until it's approved again.
 

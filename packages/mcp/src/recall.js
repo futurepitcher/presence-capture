@@ -24,11 +24,15 @@ export class ChangedError extends Error {
   }
 }
 
+// A date and a time to the second (a fraction allowed), with a zone: as pcap-mcp takes them.
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/;
+
 /** A time argument, as the store writes times; RangeError for anything else. */
 function timeArg(value, name, fallback) {
   if (value == null) return fallback;
-  const date = new Date(value);
-  if (typeof value !== 'string' || Number.isNaN(date.getTime())) throw new RangeError(`${name} must be an ISO 8601 time`);
+  // An offset written without its colon (-0700), which Date doesn't read, given one.
+  const date = typeof value === 'string' && ISO_TIME.test(value) ? new Date(value.replace(/([+-]\d{2})(\d{2})$/, '$1:$2')) : new Date(NaN);
+  if (Number.isNaN(date.getTime())) throw new RangeError(`${name} must be an ISO 8601 time`);
   return date.toISOString();
 }
 
