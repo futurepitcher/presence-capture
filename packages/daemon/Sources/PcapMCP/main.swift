@@ -1,3 +1,5 @@
+import CaptureCore
+import CaptureRecall
 import CaptureStore
 import CryptoKit
 import Foundation
@@ -106,7 +108,8 @@ func failure(_ id: Any, _ code: Int, _ message: String) -> [String: Any] {
 }
 
 // In memory, built through the grant; every result is served through it again (Recall.swift).
-let recall = Recall(store: store, grantId: grantId)
+// Search fuses keyword and meaning when this Mac has the sentence embedding the daemon embeds with.
+let recall = Recall(store: store, grantId: grantId, embedder: Embedder())
 
 /// One request's response, or nil for a notification.
 func handle(_ request: [String: Any]) -> [String: Any]? {

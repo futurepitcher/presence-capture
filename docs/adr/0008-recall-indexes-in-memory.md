@@ -3,6 +3,15 @@
 ## Status
 
 **Accepted** — 2026-10-10. Shapes M3 (search, vectors, sessions, `pcap-mcp`).
+**Amended** — 2026-10-14: the embedding model is the sentence embedding (§5).
+
+The original choice was `NLContextualEmbedding`, mean-pooled. Five pairs were
+each measured three ways: a text, a paraphrase of it, and an unrelated text.
+Mean-pooled contextual vectors put the unrelated text nearer in one pair of
+five, and every similarity sat between 0.71 and 0.91. Apple's sentence
+embedding (`NLEmbedding.sentenceEmbedding`) put the paraphrase nearer in all
+five, by wide margins. It's also on-device, needs no asset download, and runs
+in about 4 ms a text. The pairs are `EmbedderTests`.
 
 ## Context
 
@@ -71,7 +80,9 @@ FTS5 table on disk. That breaks the project's central guarantee:
 
 5. **Projectors run in the daemon, the writer.**
    - Embeddings are computed by the daemon, as a first-party projector
-     (`NLContextualEmbedding`, ADR 0004), and stored sealed. The reader loads
+     (the sentence embedding, ADR 0004, chunks of about 60 words), and stored
+     sealed, each a unit vector quantized to a byte a component (about 700
+     bytes for 512 dimensions, with the model's name). The reader loads
      them; it embeds only the query.
    - Projector plugins (ADR 0007) are hosted by the daemon too, in a helper
      process it can kill at a capture's time limit. The helper never opens

@@ -305,22 +305,68 @@ public final class CaptureStore: @unchecked Sendable {
     public func addProjectionEntry(projection: String, captureId: String, entryRef: String, output: (kind: String, json: Data)? = nil) throws {
         try lock.withLock {
             try transaction(immediate: true) {
-                if try isRevoked(captureId) { throw StoreError.revoked("no projection entry for a capture that is revoked or unknown") }
-                var sealed: Data?
-                if let output {
-                    guard let wrapped = try rows("SELECT wrapped_key FROM capture_key WHERE capture_id = ?", captureId).first?.data(0) else {
-                        throw StoreError.revoked("no output for a capture that is revoked or unknown")
-                    }
-                    sealed = try Seal.seal(output.json, key: try dataKey(captureId, wrapped: wrapped), aad: "projection:\(projection):\(captureId):\(entryRef)")
-                }
-                // Recording again that an entry exists changes nothing, so an index that failed after
-                // recording can retry. An entry with an output is kept once.
-                let again = output == nil ? " ON CONFLICT (projection_name, capture_id, entry_ref) DO NOTHING" : ""
-                // An output takes the next number in the store's sequence (migration 010), so a reader
-                // that follows outputs finds one written after its capture.
-                try run("INSERT INTO projection_entry (projection_name, capture_id, entry_ref, created_at, output_kind, output_sealed, output_sequence) VALUES (?, ?, ?, ?, ?, ?, ?)" + again,
-                        projection, captureId, entryRef, Self.iso(Date()), output?.kind, sealed, output == nil ? nil : try nextSequence())
+                try addProjectionEntryLocked(projection: projection, captureId: captureId, entryRef: entryRef, output: output)
             }
+        }
+    }
+
+    /// A projector's outputs for one capture and its watermark, in one transaction (ADR 0007): a
+    /// capture is projected whole or not at all, and the watermark never passes a capture whose
+    /// outputs weren't all kept. A capture revoked meanwhile is refused (`StoreError.revoked`).
+    public func recordProjection(projection: String, captureId: String, outputs: [(ref: String, kind: String, json: Data)],
+                                 consumer: String, sequence: Int) throws {
+        try lock.withLock {
+            try transaction(immediate: true) {
+                for output in outputs {
+                    try addProjectionEntryLocked(projection: projection, captureId: captureId, entryRef: output.ref, output: (output.kind, output.json))
+                }
+                try setWatermarkLocked(consumer: consumer, sequence: sequence)
+            }
+        }
+    }
+
+    /// A consumer's position in the event stream (R4): the last sequence it processed.
+    public func watermark(consumer: String) throws -> Int {
+        try lock.withLock { try rows("SELECT last_sequence FROM replay_watermark WHERE consumer = ?", consumer).first?.int(0) ?? 0 }
+    }
+
+    public func setWatermark(consumer: String, sequence: Int) throws {
+        try lock.withLock { try setWatermarkLocked(consumer: consumer, sequence: sequence) }
+    }
+
+    private func setWatermarkLocked(consumer: String, sequence: Int) throws {
+        try run("""
+            INSERT INTO replay_watermark (consumer, last_sequence, updated_at) VALUES (?, ?, ?)
+            ON CONFLICT (consumer) DO UPDATE SET last_sequence = excluded.last_sequence, updated_at = excluded.updated_at
+            """, consumer, sequence, Self.iso(Date()))
+    }
+
+    private func addProjectionEntryLocked(projection: String, captureId: String, entryRef: String, output: (kind: String, json: Data)?) throws {
+        if try isRevoked(captureId) { throw StoreError.revoked("no projection entry for a capture that is revoked or unknown") }
+        var sealed: Data?
+        if let output {
+            guard let wrapped = try rows("SELECT wrapped_key FROM capture_key WHERE capture_id = ?", captureId).first?.data(0) else {
+                throw StoreError.revoked("no output for a capture that is revoked or unknown")
+            }
+            sealed = try Seal.seal(output.json, key: try dataKey(captureId, wrapped: wrapped), aad: "projection:\(projection):\(captureId):\(entryRef)")
+        }
+        // Recording again that an entry exists changes nothing, so an index that failed after
+        // recording can retry. An entry with an output is kept once.
+        let again = output == nil ? " ON CONFLICT (projection_name, capture_id, entry_ref) DO NOTHING" : ""
+        // An output takes the next number in the store's sequence (migration 010), so a reader
+        // that follows outputs finds one written after its capture.
+        try run("INSERT INTO projection_entry (projection_name, capture_id, entry_ref, created_at, output_kind, output_sealed, output_sequence) VALUES (?, ?, ?, ?, ?, ?, ?)" + again,
+                projection, captureId, entryRef, Self.iso(Date()), output?.kind, sealed, output == nil ? nil : try nextSequence())
+    }
+
+    /// The id of a grant to `clientId` that's in force (not revoked, not expired), if there is one: how
+    /// a first-party projector finds the grant it reads through.
+    public func grantInForce(clientId: String) throws -> String? {
+        try lock.withLock {
+            try rows("""
+                SELECT grant_id FROM grant_record WHERE client_id = ? AND revoked_at IS NULL AND expires_at > ?
+                ORDER BY expires_at DESC LIMIT 1
+                """, clientId, Self.iso(Date())).first?.text(0)
         }
     }
 

@@ -18,14 +18,17 @@ let package = Package(
         .target(name: "CaptureStore", linkerSettings: [.linkedLibrary("sqlite3")]),
         // What can be tested without a screen: reading text, which window is in front, speech to text.
         .target(name: "CaptureCore"),
-        .executableTarget(name: "PresenceCapture", dependencies: ["CaptureStore", "CaptureCore"]),
+        // Recall (ADR 0008): the reader's in-memory index and tools, embeddings and their fusion.
+        .target(name: "CaptureRecall", dependencies: ["CaptureStore", "CaptureCore"]),
+        .executableTarget(name: "PresenceCapture", dependencies: ["CaptureStore", "CaptureCore", "CaptureRecall"]),
         // The conformance driver (docs/spec/DRIVER.md) over CaptureStore.
         .executableTarget(name: "PcapDriver", dependencies: ["CaptureStore"]),
         // The native MCP server (ADR 0008): reads through grants; writes only egress records.
-        .executableTarget(name: "PcapMCP", dependencies: ["CaptureStore"]),
+        .executableTarget(name: "PcapMCP", dependencies: ["CaptureStore", "CaptureCore", "CaptureRecall"]),
         .testTarget(name: "CaptureStoreTests", dependencies: ["CaptureStore"]),
         .testTarget(name: "CaptureCoreTests", dependencies: ["CaptureCore"]),
         .testTarget(name: "PresenceCaptureTests", dependencies: ["PresenceCapture", "CaptureStore"]),
+        .testTarget(name: "CaptureRecallTests", dependencies: ["CaptureRecall", "CaptureStore", "CaptureCore"]),
     ],
     swiftLanguageModes: [.v5]
 )
