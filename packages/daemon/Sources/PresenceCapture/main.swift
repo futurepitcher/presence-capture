@@ -165,14 +165,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Retention is a revocation (ADR 0003): what's older than the period is erased, with receipts.
-    /// The period is read when the sweep runs, not when it's queued: one waiting behind other store
-    /// work never erases by a period the person has since lengthened.
+    /// The period is read once the store is held for writing, not when the sweep is queued or starts:
+    /// one waiting behind other store work never erases by a period the person has since lengthened.
     private func retain(_ store: CaptureStore) {
         let (defaults, log) = (self.defaults, self.log!)
         admin.async {
             do {
-                let days = Double(defaults.integer(forKey: "retentionDays").nonZero ?? 14)
-                let result = try store.retain(days: days)
+                let result = try store.retain(policy: { Double(defaults.integer(forKey: "retentionDays").nonZero ?? 14) })
                 log.write("retention.done revoked=\(result?.revokedCaptureIds.count ?? 0)")
             } catch {
                 log.write("retention.failed")
