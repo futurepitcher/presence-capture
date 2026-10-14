@@ -249,3 +249,23 @@ test('store R3: recording again that a projection entry exists changes nothing, 
   await call('add_projection_entry', { projection: 'vectors', capture_id: id, entry_ref: 'vec:1' });
   assert.equal(query(path, 'SELECT COUNT(*) AS n FROM projection_entry')[0].n, 1);
 }));
+
+test('store R10: revoking a capture again reaches what an earlier version let be derived from it after it was revoked', () => withStore(async ({ call, path }) => {
+  const { capture_id: parent } = await call('append', { capture_type: 'audio_segment', source: 'ambient_audio', privacy_level: 'standard' });
+  await call('revoke', { scope_kind: 'capture', scope_value: parent });
+
+  // Written by a version before R13, which didn't refuse a capture derived from a revoked one.
+  const db = new DatabaseSync(path);
+  try {
+    db.prepare(`
+      INSERT INTO capture_event (capture_id, sequence, captured_at, capture_type, source, privacy_level, derived_from)
+      VALUES ('cap_orphan', (SELECT COALESCE(MAX(s), 0) + 1 FROM (
+        SELECT MAX(sequence) AS s FROM capture_event UNION ALL SELECT MAX(sequence) AS s FROM revocation)),
+        '2026-10-06T09:00:00.000Z', 'audio_transcript', 'ambient_audio', 'standard', ?)
+    `).run(parent);
+  } finally {
+    db.close();
+  }
+  const { revoked_capture_ids: revoked } = await call('revoke', { scope_kind: 'capture', scope_value: parent });
+  assert.deepEqual(revoked, ['cap_orphan']);
+}));

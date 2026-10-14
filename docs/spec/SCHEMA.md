@@ -293,7 +293,7 @@ PRESENCE_CAPTURE_DRIVER="/path/to/your-driver" npm run conformance:store
 
 The reference implementation also passes an API layer covering its read path
 (grants, envelope and egress, ADR 0001 T1–T12) and replay (R4). The store
-layer has 57 tests and the API layer 79, among them the five that distinguish
+layer has 58 tests and the API layer 79, among them the five that distinguish
 this schema:
 
 - **revocation propagation** — derived views and vector entries do not survive

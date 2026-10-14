@@ -402,8 +402,10 @@ export function openStore(path = ':memory:', { masterKey, onTruncated } = {}) {
 
   /**
    * Fills temp.revoking with what a revocation reaches: the captures its scope
-   * names that aren't revoked yet (those were erased when they were), and
-   * everything derived from them (R10). All in SQL, so a scope of any size
+   * names and everything derived from them (R10), less what's already revoked
+   * (erased when it was). The chain is followed through revoked captures too:
+   * a store from before R13 can hold a readable capture derived from one. All
+   * in SQL, so a scope of any size
    * (retention's, from the epoch, takes in every capture ever revoked) never
    * becomes a list of parameters. Kept in memory (temp_store), never in a file.
    */
@@ -420,8 +422,7 @@ export function openStore(path = ':memory:', { masterKey, onTruncated } = {}) {
     db.exec('DELETE FROM temp.revoking');
     db.prepare(`
       WITH RECURSIVE reached (capture_id, depth) AS (
-        SELECT capture_id, 0 FROM capture_event
-        WHERE ${where} AND capture_id NOT IN (SELECT capture_id FROM revoked_capture)
+        SELECT capture_id, 0 FROM capture_event WHERE ${where}
         UNION
         SELECT e.capture_id, r.depth + 1 FROM capture_event e JOIN reached r ON e.derived_from = r.capture_id
       )

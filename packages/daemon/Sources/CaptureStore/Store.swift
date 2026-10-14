@@ -491,9 +491,10 @@ public final class CaptureStore: @unchecked Sendable {
         return try revoke(scopeKind: "time_range", scopeValue: "\(Self.epoch)/\(cutoff)", reason: "retention")
     }
 
-    /// Fills temp.revoking with what a revocation reaches: the captures its scope names that aren't
-    /// revoked yet (those were erased when they were), and everything derived from them (R10), each
-    /// with how far down the chain it was reached. All in SQL, so a scope of any size (retention's,
+    /// Fills temp.revoking with what a revocation reaches: the captures its scope names and everything
+    /// derived from them (R10), each with how far down the chain it was reached, less what's already
+    /// revoked (erased when it was). The chain is followed through revoked captures too: a store from
+    /// before R13 can hold a readable capture derived from one. All in SQL, so a scope of any size (retention's,
     /// from the epoch, takes in every capture ever revoked) never becomes a list of parameters. Kept
     /// in memory (temp_store), never in a file.
     private func resolve(scopeKind: String, scopeValue: String) throws {
@@ -513,8 +514,7 @@ public final class CaptureStore: @unchecked Sendable {
         try exec("DELETE FROM temp.revoking")
         _ = try runCounting("""
             WITH RECURSIVE reached (capture_id, depth) AS (
-              SELECT capture_id, 0 FROM capture_event
-              WHERE \(clause) AND capture_id NOT IN (SELECT capture_id FROM revoked_capture)
+              SELECT capture_id, 0 FROM capture_event WHERE \(clause)
               UNION
               SELECT e.capture_id, r.depth + 1 FROM capture_event e JOIN reached r ON e.derived_from = r.capture_id
             )
