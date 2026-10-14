@@ -1,3 +1,4 @@
+import CaptureCore
 import CaptureStore
 import Foundation
 
@@ -88,10 +89,14 @@ final class SensorPlugins: @unchecked Sendable {
             stopping = true
             return Array(running.values)
         }
-        processes.forEach { $0.terminate() }
-        // One that ignores being told to stop is killed, so it can't outlive the app.
+        // Each sensor is told to stop with what it started (its process group), so nothing it ran
+        // outlives the app; one that ignores being told is killed, group and all.
+        for process in processes {
+            kill(-process.processIdentifier, SIGTERM)
+            process.terminate()
+        }
         DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
-            for process in processes where process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            for process in processes { kill(-process.processIdentifier, SIGKILL) }
         }
     }
 
@@ -120,7 +125,7 @@ final class SensorPlugins: @unchecked Sendable {
         process.standardError = FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
         let gate = Gate(store: store, source: "sensor:\(config.name)")
-        var buffer = Data()
+        var buffer = LineBuffer()
         var named = false
         out.fileHandleForReading.readabilityHandler = { [weak self] handle in
             guard let self else { return }
@@ -129,10 +134,14 @@ final class SensorPlugins: @unchecked Sendable {
                 handle.readabilityHandler = nil
                 return
             }
-            buffer.append(chunk)
-            while let end = buffer.firstIndex(of: UInt8(ascii: "\n")) {
-                let line = buffer[buffer.startIndex..<end]
-                buffer.removeSubrange(buffer.startIndex...end)
+            guard let lines = buffer.add(chunk) else {
+                // A line past its limit with no end: nothing more is read of it, and it's stopped.
+                handle.readabilityHandler = nil
+                self.log("sensors.line_too_long name=\(config.name)")
+                kill(-process.processIdentifier, SIGKILL)
+                return
+            }
+            for line in lines {
                 let value = try? JSONSerialization.jsonObject(with: line, options: [.fragmentsAllowed])
                 if !named {
                     // The header must name the sensor it was configured as.
