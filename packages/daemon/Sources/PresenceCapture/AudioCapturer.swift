@@ -54,11 +54,17 @@ final class AudioCapturer: NSObject, Listener, SCStreamOutput, SCStreamDelegate,
     private var formatLogged: Set<SCStreamOutputType> = []
     private var retryAfter = Date.distantPast
     private var counts = (input: 0, output: 0)
+    /// Dictations (R2b): ambient audio doesn't keep what was dictated, nor what arrives too late to
+    /// be checked against them.
+    private let spans: DictationSpans
+    private var dropped = (dictated: 0, tooLate: 0)
     /// Quitting: from then nothing makes it listen again, whatever a tick says.
     private var ending = false
 
-    init(store: CaptureStore, devices: @escaping @Sendable () -> (microphone: Bool, systemAudio: Bool), log: @escaping @Sendable (String) -> Void) {
+    init(store: CaptureStore, devices: @escaping @Sendable () -> (microphone: Bool, systemAudio: Bool), spans: DictationSpans = DictationSpans(),
+         log: @escaping @Sendable (String) -> Void) {
         self.store = store
+        self.spans = spans
         self.devices = devices
         self.log = log
     }
@@ -102,10 +108,20 @@ final class AudioCapturer: NSObject, Listener, SCStreamOutput, SCStreamDelegate,
     }
 
     func takeCounts() -> (input: Int, output: Int) {
-        lock.withLock {
-            defer { counts = (0, 0) }
-            return counts
+        let (kept, drops) = lock.withLock { () -> ((input: Int, output: Int), (dictated: Int, tooLate: Int)) in
+            defer { (counts, dropped) = ((0, 0), (0, 0)) }
+            return (counts, dropped)
         }
+        if drops.dictated + drops.tooLate > 0 { log("audio.dropped dictated=\(drops.dictated) too_late=\(drops.tooLate)") }
+        return kept
+    }
+
+    /// Whether an utterance is kept: not if it was said while dictating (from the microphone: the
+    /// dictation has it), and not if it arrives more than `DictationSpans.cutoff` after it ended
+    /// (from either device), which is too late to be checked against the dictations kept.
+    static func admits(_ spoken: Spoken, spans: DictationSpans, now: Date) -> DictationSpans.Verdict {
+        let verdict = spans.verdict(at: spoken.at, seconds: spoken.seconds, now: now)
+        return verdict == .dictated && spoken.deviceType != "input" ? .keep : verdict
     }
 
     /// After whatever is queued.
@@ -259,6 +275,11 @@ final class AudioCapturer: NSObject, Listener, SCStreamOutput, SCStreamDelegate,
     /// A segment and its transcript, written together or not at all, stamped when the words were
     /// said: speech from a range forgotten while it was being transcribed is refused.
     fileprivate func keep(_ spoken: Spoken, from type: SCStreamOutputType) {
+        switch Self.admits(spoken, spans: spans, now: Date()) {
+        case .keep: break
+        case .dictated: return lock.withLock { dropped.dictated += 1 }
+        case .tooLate: return lock.withLock { dropped.tooLate += 1 }
+        }
         do {
             let segment = CaptureStore.newCaptureId()
             try store.appendAll([

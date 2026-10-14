@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import AVFoundation
 import CaptureConnect
+import CaptureCore
 import CaptureStore
 
 /// Presence Capture: a menu-bar app that reads the screen, hears this Mac and notes what's in front,
@@ -25,6 +26,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hearSystemAudioItem: NSMenuItem!
     private var approveSensorsItem: NSMenuItem!
     private var retentionMenu: NSMenu!
+    /// Dictation (R2b, macOS 26): its spans are shared with ambient audio, which drops what was dictated.
+    private let dictationSpans = DictationSpans()
+    private var dictation: Dictating?
+    private var dictationItem: NSMenuItem!
+    private var dictateItem: NSMenuItem!
+    private var dictationKeyItems: [NSMenuItem] = []
+    private var rememberDictationItem: NSMenuItem!
+    private var tidyDictationItem: NSMenuItem!
     private let windows = Windows()
     /// Store administration (retention, finishing an erasure, Forget, grants) runs here, never on the
     /// main thread: a store waiting on SQLite's lock (up to five seconds) must not hold up the main
@@ -80,7 +89,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let held = going || heldFor != nil
         heldNow.value = held
         audio?.tick(listening: !held && CGPreflightScreenCaptureAccess())
-        if held { activity?.reset() }
+        if held {
+            activity?.reset()
+            dictation?.cancel(paused ? .paused : .locked)
+        }
         guard let capturer else { return }
         Task { await capturer.hold(held) }
     }
@@ -102,7 +114,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let defaults = self.defaults
                 audio = AudioCapturer(store: store, devices: {
                     (defaults.object(forKey: "hearMicrophone") as? Bool ?? false, defaults.object(forKey: "hearSystemAudio") as? Bool ?? true)
-                }, log: log.write)
+                }, spans: dictationSpans, log: log.write)
+                let exclusions = self.exclusionPath
+                dictation = Dictation(store: store, spans: dictationSpans, defaults: defaults,
+                                      held: { [weak self] in self?.heldFor != nil }, paused: { [weak self] in self?.paused ?? true },
+                                      fragments: { Exclusion.load(exclusions) }, log: log.write)
             }
             let exclusionPath = self.exclusionPath
             let heldNow = self.heldNow
@@ -110,6 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                     held: { heldNow.value }, log: log.write)
             holdCapture()
             sensors?.start()
+            dictation?.apply()
             schedule(capturer: capturer, store: store)
             retain(store)
             log.write("start.ready")
@@ -140,6 +157,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let fragments, !held || (screenLocked() && !self.paused) {
                 self.activity?.tick(fragments: fragments, seesScreen: seesScreen)
             }
+            // A permission taken away stops dictation.
+            self.dictation?.check()
             Task {
                 await capturer.hold(held)
                 if !held { await capturer.tick(fragments: fragments) }
@@ -208,6 +227,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let forgetHour = NSMenuItem(title: "Forget the Last Hour…", action: #selector(forgetHour), keyEquivalent: "")
         hearMicrophoneItem = NSMenuItem(title: "Hear the Microphone", action: #selector(toggleMicrophone), keyEquivalent: "")
         hearSystemAudioItem = NSMenuItem(title: "Hear System Audio", action: #selector(toggleSystemAudio), keyEquivalent: "")
+        dictationItem = NSMenuItem(title: "Dictation", action: nil, keyEquivalent: "")
+        let dictationMenu = NSMenu()
+        dictateItem = NSMenuItem(title: "Hold a Key to Dictate", action: #selector(toggleDictation), keyEquivalent: "")
+        dictationMenu.addItem(dictateItem)
+        dictationMenu.addItem(.separator())
+        for key in DictationKey.allCases {
+            let item = NSMenuItem(title: "Hold \(key.name)", action: #selector(chooseDictationKey(_:)), keyEquivalent: "")
+            item.representedObject = key.rawValue
+            dictationMenu.addItem(item)
+            dictationKeyItems.append(item)
+        }
+        dictationMenu.addItem(.separator())
+        rememberDictationItem = NSMenuItem(title: "Remember What I Dictate", action: #selector(toggleRememberDictation), keyEquivalent: "")
+        tidyDictationItem = NSMenuItem(title: "Tidy What I Say", action: #selector(toggleTidyDictation), keyEquivalent: "")
+        dictationMenu.addItem(rememberDictationItem)
+        dictationMenu.addItem(tidyDictationItem)
+        for item in dictationMenu.items where item.action != nil { item.target = self }
+        dictationItem.submenu = dictationMenu
         let exclusions = NSMenuItem(title: "Edit Excluded Apps and Windows…", action: #selector(editExclusions), keyEquivalent: "")
         approveSensorsItem = NSMenuItem(title: "Approve Sensors…", action: #selector(approveSensors), keyEquivalent: "")
         let screenItem = NSMenuItem(title: "Allow Screen Recording…", action: #selector(allowScreen), keyEquivalent: "")
@@ -234,7 +271,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let setUp = NSMenuItem(title: "Set Up Presence Capture…", action: #selector(showOnboarding), keyEquivalent: "")
         let updates = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
         for item in [stateItem!, audioItem!, .separator(), pauseItem!, forgetQuarter, forgetHour, .separator(), connect, agents, .separator(),
-                     hearMicrophoneItem!, hearSystemAudioItem!, retention, exclusions, approveSensorsItem!, .separator(),
+                     hearMicrophoneItem!, hearSystemAudioItem!, dictationItem!, retention, exclusions, approveSensorsItem!, .separator(),
                      screenItem, microphoneItem!, accessibilityItem!, setUp, updates, .separator()] {
             menu.addItem(item)
         }
@@ -261,6 +298,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hearMicrophoneItem.state = hearMicrophone ? .on : .off
         for item in retentionMenu.items { item.state = item.tag == retentionDays ? .on : .off }
         hearSystemAudioItem.state = hearSystemAudio ? .on : .off
+        dictationItem.isHidden = dictation == nil
+        dictateItem.state = DictationSettings.on(defaults) ? .on : .off
+        for item in dictationKeyItems { item.state = item.representedObject as? String == DictationSettings.key(defaults).rawValue ? .on : .off }
+        rememberDictationItem.state = DictationSettings.remember(defaults) ? .on : .off
+        tidyDictationItem.state = DictationSettings.tidy(defaults) ? .on : .off
         let waiting = sensors?.unapproved.count ?? 0
         approveSensorsItem.isHidden = waiting == 0
         approveSensorsItem.title = waiting == 1 ? "Approve 1 Sensor…" : "Approve \(waiting) Sensors…"
@@ -415,6 +457,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func showOnboarding() {
         windows.show("onboarding", title: "Welcome to Presence Capture", closed: { [weak self] in self?.defaults.set(true, forKey: "onboarded") }) {
             OnboardingView(permissions: { Permissions.now }, canHear: audio != nil, hearing: { [weak self] in self?.hearMicrophone ?? false },
+                           dictation: dictation == nil ? nil : DictationControls(
+                               on: { [weak self] in self.map { DictationSettings.on($0.defaults) } ?? false },
+                               turnOn: { [weak self] in self?.turnOnDictation() },
+                               key: { [weak self] in self.map { DictationSettings.key($0.defaults) } ?? .fn },
+                               setKey: { [weak self] key in self?.setDictationKey(key) },
+                               remember: { [weak self] in self.map { DictationSettings.remember($0.defaults) } ?? true },
+                               setRemember: { [weak self] on in self?.defaults.set(on, forKey: "rememberDictation"); self?.refresh() },
+                               globeClash: DictationSettings.globeClash),
                            allowScreen: { [weak self] in self?.allowScreen() },
                            allowMicrophone: { [weak self] in self?.askForMicrophone(thenHear: true) },
                            allowAccessibility: { [weak self] in self?.allowAccessibility() },
@@ -518,6 +568,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func checkForUpdates() { Updates.check() }
 
+    // MARK: Dictation (R2b)
+
+    @objc private func toggleDictation() {
+        if DictationSettings.on(defaults) {
+            defaults.set(false, forKey: "dictation")
+            dictation?.apply()
+            refresh()
+        } else {
+            turnOnDictation()
+        }
+    }
+
+    /// On, by the person's choice, with its permissions asked for then, each once: the microphone,
+    /// Input Monitoring (for the key alone: the tap sees modifier changes and nothing else), and
+    /// Accessibility (to type in).
+    private func turnOnDictation() {
+        defaults.set(true, forKey: "dictation")
+        askForMicrophone(thenHear: false)
+        if !CGPreflightListenEventAccess(), !CGRequestListenEventAccess(),
+           let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
+            NSWorkspace.shared.open(url)
+        }
+        if !AXIsProcessTrusted() { allowAccessibility() }
+        dictation?.apply()
+        refresh()
+    }
+
+    private func setDictationKey(_ key: DictationKey) {
+        defaults.set(key.rawValue, forKey: "dictationKey")
+        dictation?.apply()
+        refresh()
+    }
+
+    @objc private func chooseDictationKey(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let key = DictationKey(rawValue: raw) else { return }
+        setDictationKey(key)
+    }
+
+    @objc private func toggleRememberDictation() {
+        defaults.set(!DictationSettings.remember(defaults), forKey: "rememberDictation")
+        refresh()
+    }
+
+    @objc private func toggleTidyDictation() {
+        defaults.set(!DictationSettings.tidy(defaults), forKey: "tidyDictation")
+        refresh()
+    }
+
     private func storeIsClosed() {
         let alert = NSAlert()
         alert.messageText = "The store isn't open"
@@ -541,6 +639,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         holdCapture(going: true)
         quitting = true
         ConnectAgent.quitting = true
+        dictation?.stop()
         Self.finishWriting(activity: activity, audio: audio, admin: admin, connecting: ConnectAgent.underWay) {
             NSApp.reply(toApplicationShouldTerminate: true)
         }

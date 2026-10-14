@@ -36,6 +36,13 @@ final class DictationTests: XCTestCase {
         XCTAssertEqual(hold.poll(flags: 0, at: 1.5), .none)
     }
 
+    func testPollingTakesTheModifierWhenTheSystemsFlagsLackTheRightHandBit() {
+        var hold = DictationHold(key: .rightOption)
+        _ = hold.flagsChanged(keyCode: 61, flags: 0x40 | CGEventFlags.maskAlternate.rawValue, at: 0)
+        XCTAssertEqual(hold.poll(flags: CGEventFlags.maskAlternate.rawValue, at: 1), .none, "a held key read without its device bit ended the dictation")
+        XCTAssertEqual(hold.poll(flags: 0, at: 1.25), .end(1))
+    }
+
     func testAHoldPastTheLimitIsCancelled() {
         var hold = DictationHold(key: .rightOption)
         _ = hold.flagsChanged(keyCode: 61, flags: 0x40, at: 0)

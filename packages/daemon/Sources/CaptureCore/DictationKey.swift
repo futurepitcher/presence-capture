@@ -34,6 +34,17 @@ public enum DictationKey: String, CaseIterable, Sendable {
         }
     }
 
+    /// Whether the key is still held, by the system's flags while polling: its device bit when the
+    /// flags carry one, else the modifier itself. That can't tell left from right, but the hold
+    /// already began on the right one.
+    public func isHeld(_ flags: UInt64) -> Bool {
+        switch self {
+        case .fn: return isDown(flags)
+        case .rightOption: return isDown(flags) || flags & CGEventFlags.maskAlternate.rawValue != 0
+        case .rightCommand: return isDown(flags) || flags & CGEventFlags.maskCommand.rawValue != 0
+        }
+    }
+
     /// What the event tap asks for: `flagsChanged`, and nothing else. It never sees a key typed.
     public static let eventMask: CGEventMask = 1 << CGEventType.flagsChanged.rawValue
 }
@@ -105,7 +116,7 @@ public struct DictationHold: Sendable {
     public mutating func poll(flags: UInt64, at now: TimeInterval) -> HoldAction {
         guard let held else { return .none }
         if now - held.since >= Self.longest { return cancel(.tooLong) }
-        return key.isDown(flags) ? .none : release(at: now)
+        return key.isHeld(flags) ? .none : release(at: now)
     }
 
     /// Stops the dictation under way, for `why`.

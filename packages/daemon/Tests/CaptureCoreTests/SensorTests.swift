@@ -141,6 +141,41 @@ final class TranscriberTests: XCTestCase {
 }
 
 extension TranscriberTests {
+    /// Dictation's first word (R2b): audio heard before the transcriber is ready is held, then given
+    /// first, so the opening word is in the text.
+    func testTheFirstWordFedBeforeTheTranscriberIsReadyIsHeard() async throws {
+        guard #available(macOS 26, *) else { throw XCTSkip("needs macOS 26") }
+        guard let locale = try await Transcriber.prepare(locale: Locale(identifier: "en_US"), download: false) else { throw XCTSkip("no speech model on this Mac") }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("pc-say-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let speech = dir.appendingPathComponent("speech.wav")
+        let say = Process()
+        say.executableURL = URL(fileURLWithPath: "/usr/bin/say")
+        say.arguments = ["-o", speech.path, "--data-format=LEI16@22050", "Pineapple meeting moved to Thursday."]
+        try say.run()
+        say.waitUntilExit()
+
+        let feed = DictationFeed<AVAudioPCMBuffer>()
+        let file = try AVAudioFile(forReading: speech)
+        let rate = file.processingFormat.sampleRate
+        var position: AVAudioFramePosition = 0
+        // All of it heard before there's a transcriber.
+        while position < file.length {
+            let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 4096))
+            try file.read(into: buffer)
+            feed.take(buffer, at: CMTime(seconds: 1000 + Double(position) / rate, preferredTimescale: 48_000), seconds: Double(buffer.frameLength) / rate)
+            position += AVAudioFramePosition(buffer.frameLength)
+        }
+        let heard = Heard()
+        let transcriber = try await Transcriber(locale: locale) { text, range, _ in heard.add(text, range) }
+        feed.ready { buffer, time in transcriber.feed(buffer, at: time) }
+        feed.close()
+        await transcriber.finish()
+        let words = heard.all.map(\.text).joined(separator: " ").lowercased()
+        XCTAssertTrue(words.hasPrefix("pineapple"), "the first word was lost: \(words)")
+    }
+
     /// A source that went quiet (no more buffers, as system audio sends none in silence): by the
     /// clock, all it heard is older than the cutoff, so all of it is finished, without more audio.
     func testFinishesWhatAQuietSourceHeardByTheClock() async throws {
