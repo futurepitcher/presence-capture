@@ -85,15 +85,28 @@ export function createRecall({ store, grantId }) {
         afterSequence = Math.max(afterSequence, p.sequence);
       }
     }
-    const revoked = store.db.prepare(`
-      SELECT rc.capture_id, r.sequence FROM revoked_capture rc JOIN revocation r USING (revocation_id)
-      WHERE r.sequence > ? ORDER BY r.sequence
-    `).all(afterRevocation);
-    for (const { capture_id: id, sequence } of revoked) {
+    // Every revocation since the last look, one that revoked nothing new
+    // included, and what they revoked, read together: the cursor moves past
+    // all of them, so none is taken for a change still to come.
+    store.db.exec('BEGIN');
+    let through;
+    let revoked;
+    try {
+      through = store.db.prepare('SELECT COALESCE(MAX(sequence), 0) AS s FROM revocation').get().s;
+      revoked = store.db.prepare(`
+        SELECT rc.capture_id FROM revoked_capture rc JOIN revocation r USING (revocation_id)
+        WHERE r.sequence > ? AND r.sequence <= ?
+      `).all(afterRevocation, through);
+      store.db.exec('COMMIT');
+    } catch (err) {
+      store.db.exec('ROLLBACK');
+      throw err;
+    }
+    for (const { capture_id: id } of revoked) {
       memory.prepare('DELETE FROM doc WHERE capture_id = ?').run(id);
       memory.prepare('DELETE FROM words WHERE capture_id = ?').run(id);
-      afterRevocation = Math.max(afterRevocation, sequence);
     }
+    afterRevocation = Math.max(afterRevocation, through);
   }
 
   /**
@@ -226,8 +239,9 @@ export function createRecall({ store, grantId }) {
   return {
     /** Runs a tool, after bringing memory up to date with the store. */
     call(name, args) {
+      // Its own six, and nothing an object inherits (`constructor`, `toString`).
+      if (typeof name !== 'string' || !Object.hasOwn(tools, name)) throw new Error(`unknown tool: ${name}`);
       const tool = tools[name];
-      if (!tool) throw new Error(`unknown tool: ${name}`);
       refresh();
       return tool(args ?? {});
     },

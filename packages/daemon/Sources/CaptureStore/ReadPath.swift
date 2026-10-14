@@ -126,14 +126,21 @@ extension CaptureStore {
         try lock.withLock { try rows("SELECT COALESCE(MAX(sequence), 0) FROM capture_event").first?.int(0) ?? 0 }
     }
 
-    /// The captures revoked by revocations after `sequence`, each with its revocation's sequence, in
-    /// order: ids and numbers only, so a reader can evict them from what it holds in memory.
-    public func revoked(after sequence: Int) throws -> [(captureId: String, sequence: Int)] {
+    /// How far revocation has got (its highest sequence), and the captures revoked by revocations after
+    /// `sequence` up to there, read together: ids and numbers only, so a reader can evict them and move
+    /// its cursor past every revocation, one that revoked nothing new included.
+    public func revoked(after sequence: Int) throws -> (through: Int, captureIds: [String]) {
         try lock.withLock {
-            try rows("""
-                SELECT rc.capture_id, r.sequence FROM revoked_capture rc JOIN revocation r ON r.revocation_id = rc.revocation_id
-                WHERE r.sequence > ? ORDER BY r.sequence
-                """, sequence).map { ($0.text(0), $0.int(1)) }
+            var out = (through: sequence, captureIds: [String]())
+            try transaction {
+                let through = try rows("SELECT COALESCE(MAX(sequence), 0) FROM revocation").first?.int(0) ?? 0
+                let ids = try rows("""
+                    SELECT rc.capture_id FROM revoked_capture rc JOIN revocation r ON r.revocation_id = rc.revocation_id
+                    WHERE r.sequence > ? AND r.sequence <= ?
+                    """, sequence, through).map { $0.text(0) }
+                out = (max(through, sequence), ids)
+            }
+            return out
         }
     }
 

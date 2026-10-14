@@ -354,3 +354,27 @@ test('recall: now with only idle time so far says so, with no session', () => wi
   assert.ok(contents.some((c) => c.includes('"idle"')), 'now said nothing of the idle state');
   assert.ok(contents.includes('said just now'));
 }));
+
+test('recall: a revocation that revokes nothing new is passed over, and now and session still answer', () => withServer({
+  seed: [activity(10, 'Notes', 'Plan'), ['standard', 'kept', { capturedAt: ago(5) }]],
+}, async ({ rpc, admin }) => {
+  assert.equal(resultOf(await call(rpc, 'now')).session.ended_at, null);
+  // A Forget of a window with nothing in it, and a capture revoked twice.
+  admin.revoke({ scopeKind: 'time_range', scopeValue: `${ago(1000)}/${ago(900)}` });
+  const kept = admin.db.prepare("SELECT capture_id FROM capture_event WHERE capture_type = 'screen_text'").get().capture_id;
+  admin.revoke({ scopeKind: 'capture', scopeValue: kept });
+  admin.revoke({ scopeKind: 'capture', scopeValue: kept });
+  for (const tool of ['now', 'now']) {
+    const res = await call(rpc, tool);
+    assert.equal(res.result.isError, false, `${tool} kept failing after a revocation that revoked nothing new: ${res.result.content[0].text}`);
+  }
+  const { session } = resultOf(await call(rpc, 'now'));
+  assert.equal(resultOf(await call(rpc, 'session', { id: session.id })).session.id, session.id);
+}));
+
+test('recall: a name an object inherits is not a tool', () => withServer({}, async ({ rpc }) => {
+  for (const name of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+    const res = await call(rpc, name);
+    assert.ok(res.error, `${name} was answered as a tool`);
+  }
+}));
