@@ -90,12 +90,15 @@ public final class Recall {
                 }
             }
         }
-        for (id, sequence) in try store.revoked(after: afterRevocation) {
+        // Every revocation since the last look, one that revoked nothing new included: the cursor moves
+        // past all of them, so none is taken for a change still to come.
+        let (through, revoked) = try store.revoked(after: afterRevocation)
+        for id in revoked {
             memory.run("DELETE FROM doc WHERE capture_id = ?", id)
             memory.run("DELETE FROM words WHERE capture_id = ?", id)
             vectors[id] = nil
-            afterRevocation = max(afterRevocation, sequence)
         }
+        afterRevocation = through
     }
 
     private static func parts(_ envelope: CanonicalJSON) -> (provenance: [String: Any], content: String?) {
@@ -204,7 +207,7 @@ public final class Recall {
     private func consistent(_ answer: () throws -> CanonicalJSON) throws -> CanonicalJSON {
         for _ in 0..<3 {
             let result = try answer()
-            if try store.revoked(after: afterRevocation).isEmpty { return result }
+            if try store.revoked(after: afterRevocation).through == afterRevocation { return result }
             try refresh()
         }
         // Never an answer known to be stale: the caller can ask again.
