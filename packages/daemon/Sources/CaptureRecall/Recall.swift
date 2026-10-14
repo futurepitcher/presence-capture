@@ -11,14 +11,18 @@ import Foundation
 /// after the last one read, and revocations after the last one seen, which are evicted. Whatever it
 /// ranks is then served by id through the grant again, so nothing it holds is served without the
 /// store's say: a capture revoked or a grant withdrawn since serves nothing.
-final class Recall {
+///
+/// Search by meaning isn't here for 0.1: Apple's on-device sentence embedding, measured on the eval,
+/// found 1 of 25 paraphrased questions among 15,000 captures and made fused results worse (ADR 0008,
+/// amended). It waits for a stronger model, on the branch wip/embeddings-0.2.
+public final class Recall {
     private let store: CaptureStore
     private let grantId: String
     private let memory = MemoryIndex()
     private var afterSequence = 0
     private var afterRevocation = 0
 
-    init(store: CaptureStore, grantId: String) {
+    public init(store: CaptureStore, grantId: String) {
         self.store = store
         self.grantId = grantId
         memory.exec("""
@@ -32,7 +36,7 @@ final class Recall {
     }
 
     /// Runs a tool, after bringing memory up to date with the store.
-    func call(_ name: String, _ args: [String: Any]) throws -> CanonicalJSON {
+    public func call(_ name: String, _ args: [String: Any]) throws -> CanonicalJSON {
         guard ["search", "recent", "timeline", "transcript", "now", "session"].contains(name) else { throw ToolError.unknown(name) }
         try refresh()
         switch name {
@@ -88,17 +92,17 @@ final class Recall {
 
     // MARK: Tools
 
-    /// Keyword search, ranked by BM25: any word of the query.
+    /// Keyword search, ranked by BM25: any word of the query, as many results as asked for.
     private func search(_ args: [String: Any]) throws -> [CanonicalJSON] {
         guard let query = args["query"] as? String else { throw ToolError.invalid("query must be text") }
+        let (from, to, max) = (try time(args, "from") ?? "0000-01-01T00:00:00.000Z", try time(args, "to") ?? "9999-12-31T23:59:59.999Z", try limit(args, 10))
         let words = Self.words(query)
         guard !words.isEmpty else { return try serve("search", query, []) }
-        let match = words.map { "\"\($0)\"" }.joined(separator: " OR ")
         let ids = memory.ids("""
             SELECT words.capture_id FROM words JOIN doc ON doc.capture_id = words.capture_id
             WHERE words MATCH ? AND doc.captured_at >= ? AND doc.captured_at <= ?
             ORDER BY bm25(words), doc.sequence DESC LIMIT ?
-            """, match, try time(args, "from") ?? "0000-01-01T00:00:00.000Z", try time(args, "to") ?? "9999-12-31T23:59:59.999Z", try limit(args, 10))
+            """, words.map { "\"\($0)\"" }.joined(separator: " OR "), from, to, max)
         return try serve("search", query, ids)
     }
 
@@ -224,7 +228,7 @@ final class Recall {
     }
 }
 
-enum ToolError: Error {
+public enum ToolError: Error {
     case unknown(String)
     /// A malformed argument: the caller's error, answered as invalid params, and nothing is served.
     case invalid(String)

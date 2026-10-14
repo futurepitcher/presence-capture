@@ -1,3 +1,4 @@
+import CaptureRecall
 import CaptureStore
 import CryptoKit
 import Foundation
@@ -106,6 +107,7 @@ func failure(_ id: Any, _ code: Int, _ message: String) -> [String: Any] {
 }
 
 // In memory, built through the grant; every result is served through it again (Recall.swift).
+// In memory, built through the grant; every result is served through it again (CaptureRecall).
 let recall = Recall(store: store, grantId: grantId)
 
 /// One request's response, or nil for a notification.

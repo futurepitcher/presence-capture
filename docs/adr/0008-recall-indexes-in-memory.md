@@ -3,6 +3,28 @@
 ## Status
 
 **Accepted** — 2026-10-10. Shapes M3 (search, vectors, sessions, `pcap-mcp`).
+**Amended** — 2026-10-14: 0.1 ships keyword search alone; embeddings wait for
+a model that measures better (§5).
+
+The eval (`packages/schema/bin/eval.js`) was run on a 30-day store of 18,036
+captures, with 50 questions, 25 of them asked in words the answer doesn't use.
+
+| Ranking | Recall@5 |
+|---|---|
+| Keyword (BM25) alone | 40/50 |
+| Apple's on-device embeddings alone | 15/50, and 1 of the 25 paraphrased questions |
+| The two fused | 37/50 |
+
+Ordinary text scored 0.5–0.65 against nearly any question, above the real
+answers. Mean-pooled `NLContextualEmbedding` was worse still on paraphrase
+pairs (`EmbedderTests`), so the sentence embedding was the one measured.
+
+So 0.1 runs no embedding projector and keeps no vectors: they would cost
+storage and CPU for a worse answer. The store's side (sealed projection
+outputs, `output_sequence`, `readOutputs`) is in place. The projector, the
+quantized vector format and fusion are kept on the branch
+`wip/embeddings-0.2`, for a stronger open on-device model (Core ML), shipped
+only if it beats keyword search on this eval.
 
 ## Context
 

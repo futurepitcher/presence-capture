@@ -27,7 +27,7 @@ On macOS, the default for each job is the Apple framework:
 |-----|---------|----------|
 | Screen text | Accessibility text, then **Vision** `RecognizeTextRequest` | — |
 | Speech to text | **SpeechAnalyzer** + `SpeechTranscriber` (macOS 26) | `SFSpeechRecognizer`, on-device only (macOS 14–15) |
-| Embeddings | **NaturalLanguage** `NLContextualEmbedding` | `NLEmbedding`, or a small Apache-licensed Core ML model if the eval demands it |
+| Embeddings | None in 0.1. Apple's sentence and contextual embeddings were measured and found worse than keyword search (ADR 0008, amended) | A small open Core ML model, if it beats keyword search on the eval |
 | Language ID | `NLLanguageRecognizer` | — |
 | Session labels, digests | **Foundation Models** (on-device, macOS 26 with Apple Intelligence) | templates from app, window title and top terms |
 | Content sealing | **CryptoKit** AES-GCM; master key in the **Keychain** | — |
