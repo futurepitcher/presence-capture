@@ -128,6 +128,18 @@ test('T3: the grant caps rows even when the tool call asks for more', () => with
   },
 ));
 
+test('T3: a malformed limit never lifts the grant cap', () => withServer(
+  { grant: { maxRowsPerQuery: 1, privacyLevels: ['standard', 'sensitive'] } },
+  async ({ rpc }) => {
+    for (const limit of ['invalid', -1, 1.5, null]) {
+      const response = await call(rpc, 'recent', { limit });
+      // Refused as a bad argument, or served within the cap: never more.
+      if (response.error) continue;
+      assert.ok(envelopesFrom(response).length <= 1, `limit ${JSON.stringify(limit)} lifted the grant's cap`);
+    }
+  },
+));
+
 test('T5: a revoked grant stops serving mid-session', () => withServer({}, async ({ rpc, admin, grantId }) => {
   assert.equal(envelopesFrom(await call(rpc, 'recent')).length, 1);
   admin.revokeGrant(grantId);

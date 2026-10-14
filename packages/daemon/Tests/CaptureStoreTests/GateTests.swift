@@ -63,4 +63,42 @@ final class GateTests: XCTestCase {
         let revoked = try store.revoke(scopeKind: "source", scopeValue: "sensor:git-activity")
         XCTAssertEqual(revoked.revokedCaptureIds.count, 1, "a sensor's captures revoke together by its source")
     }
+
+    private func events(_ store: CaptureStore) throws -> Int {
+        try store.rows("SELECT COUNT(*) FROM capture_event").first?.int(0) ?? -1
+    }
+
+    func testAudioWhoseTranscriptFailsLeavesNoSegmentAndItsRetryLandsWhole() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try CaptureStore(path: dir.appendingPathComponent("store.sqlite").path, masterKey: Seal.newKey())
+        let gate = Gate(store: store)
+        let heard: [String: Any] = ["at": "2026-10-06T09:00:00.000Z", "kind": "audio", "device": "input",
+                                    "transcript": "we agreed to ship on friday", "dedupe": "utterance-1"]
+
+        // The transcript's write fails (a full disk, say) after its segment's.
+        try store.exec("CREATE TEMP TRIGGER transcript_fails BEFORE INSERT ON capture_event WHEN NEW.capture_type = 'audio_transcript' BEGIN SELECT RAISE(ABORT, 'disk full'); END")
+        XCTAssertThrowsError(try gate.ingest(heard, fragments: []))
+        XCTAssertEqual(try events(store), 0, "a segment was kept without its transcript")
+
+        try store.exec("DROP TRIGGER transcript_fails")
+        try gate.ingest(heard, fragments: [])
+        XCTAssertEqual(gate.stats, Gate.Stats(appended: 2), "the retry was taken for a duplicate, or didn't land whole")
+        let rows = try store.rows("SELECT capture_id, derived_from FROM capture_event ORDER BY sequence")
+        XCTAssertEqual(rows[1].optionalText(1), rows[0].text(0), "the transcript isn't derived from its segment")
+        XCTAssertEqual(try store.contentText(rows[1].text(0)), "we agreed to ship on friday")
+    }
+
+    func testAnObservationStampedInsideAForgottenRangeIsRefusedNotTakenForADuplicate() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try CaptureStore(path: dir.appendingPathComponent("store.sqlite").path, masterKey: Seal.newKey())
+        let gate = Gate(store: store)
+        try store.revoke(scopeKind: "time_range", scopeValue: "2026-10-06T08:55:00Z/2026-10-06T09:10:00Z")
+
+        try gate.ingest(["at": "2026-10-06T09:00:00.000Z", "kind": "audio", "device": "input", "transcript": "said", "dedupe": "u-2"], fragments: [])
+        try gate.ingest(["at": "2026-10-06T09:01:00.000Z", "kind": "screen", "app": "Notes", "window": "Plans", "text": "read"], fragments: [])
+        XCTAssertEqual(gate.stats, Gate.Stats(refused: 2))
+        XCTAssertEqual(try events(store), 0)
+    }
 }

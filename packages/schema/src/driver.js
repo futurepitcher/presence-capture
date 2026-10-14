@@ -4,7 +4,7 @@
  * its own executable, and the store-layer suite drives it the same way.
  */
 
-import { AuthorizationError, openStore } from './store.js';
+import { AuthorizationError, RevokedError, openStore } from './store.js';
 
 export const DRIVER_PROTOCOL_VERSION = '1';
 
@@ -19,10 +19,32 @@ class DriverError extends Error {
 function codeFor(err) {
   if (err instanceof DriverError) return err.code;
   if (err instanceof AuthorizationError) return 'denied';
+  if (err instanceof RevokedError) return 'constraint';
   if (/does not open this store|needs its masterKey|masterKey must be/.test(err.message)) return 'key';
+  if (/limit must be/.test(err.message)) return 'bad_request';
   if (/constraint|append-only|write-once/i.test(err.message)) return 'constraint';
   return 'internal';
 }
+
+/** An `append` request's arguments as the store takes them. */
+const captureFrom = (a) => ({
+  captureId: a.capture_id,
+  capturedAt: a.captured_at,
+  captureType: a.capture_type,
+  source: a.source,
+  sourceApp: a.source_app,
+  sourceUrl: a.source_url,
+  privacyLevel: a.privacy_level,
+  classification: a.classification,
+  contentText: a.content_text,
+  payload: a.payload && {
+    bytes: Buffer.from(a.payload.bytes_base64, 'base64'),
+    mediaType: a.payload.media_type,
+  },
+  extraction: a.extraction,
+  derivedFrom: a.derived_from,
+  dedupeKey: a.dedupe_key,
+});
 
 /**
  * @param {{open?: typeof openStore}} [options]  `open` lets the mutation suite
@@ -52,26 +74,12 @@ export function createDriverHandler({ open = openStore } = {}) {
       return {};
     },
 
-    append: (a) => ({
-      capture_id: need().appendCapture({
-        captureId: a.capture_id,
-        capturedAt: a.captured_at,
-        captureType: a.capture_type,
-        source: a.source,
-        sourceApp: a.source_app,
-        sourceUrl: a.source_url,
-        privacyLevel: a.privacy_level,
-        classification: a.classification,
-        contentText: a.content_text,
-        payload: a.payload && {
-          bytes: Buffer.from(a.payload.bytes_base64, 'base64'),
-          mediaType: a.payload.media_type,
-        },
-        extraction: a.extraction,
-        derivedFrom: a.derived_from,
-        dedupeKey: a.dedupe_key,
-      }),
-    }),
+    append: (a) => ({ capture_id: need().appendCapture(captureFrom(a)) }),
+
+    append_all: ({ captures }) => {
+      if (!Array.isArray(captures)) throw new DriverError('bad_request', 'captures must be an array');
+      return { capture_ids: need().appendAll(captures.map(captureFrom)) };
+    },
 
     register_projection: ({ name, kind }) => {
       need().registerProjection({ name, kind });

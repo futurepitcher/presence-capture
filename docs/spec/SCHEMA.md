@@ -30,8 +30,8 @@ content is classified, and what a consumer does with the result.
 
 | # | Requirement | Store layer (`conformance/store/`) |
 |---|-------------|------------------|
-| R1 | Capture events are append-only; payloads are content-addressed and stored apart from metadata | `capture.test.js` |
-| R2 | Revocation is a first-class event, never a row delete | `revocation.test.js` |
+| R1 | Capture events are append-only; payloads are content-addressed and stored apart from metadata | `capture.test.js`; batches: `writers.test.js` |
+| R2 | Revocation is a first-class event, never a row delete | `revocation.test.js`, `writers.test.js` |
 | R3 | Revocation propagates to projections and vector indices, verifiably | `revocation.test.js`; vector backends: `api/vector-store.test.js` |
 | R4 | Replay receipts and watermarks record consumer position; replay is deterministic | reference only: `api/replay.test.js` |
 | R5 | Every event carries a privacy level, enforced at read boundaries | `capture.test.js`; read boundary: `api/privacy.test.js` |
@@ -40,8 +40,9 @@ content is classified, and what a consumer does with the result.
 | R8 | Per-application exclusion is supported at capture time | daemon-side; shared cases in `packages/schema/cases/` |
 | R9 | The event shape is platform-neutral | by inspection, and by the store layer holding every implementation to the same files |
 | R10 | Derived artifacts — transcripts, alignments, embeddings — are projections subject to R3 | `revocation.test.js` |
-| R11 | Revocation erases content: no plaintext ever reaches disk, and a revoked capture's key, text and bytes are gone from every file the store leaves, with a receipt | `erasure.test.js`, `capture.test.js`, `revocation.test.js`; the check itself: `mutation.test.js` |
+| R11 | Revocation erases content: no plaintext ever reaches disk, and a revoked capture's key, text and bytes are gone from every file the store leaves, with a receipt | `erasure.test.js`, `capture.test.js`, `revocation.test.js`, `held-log.test.js`; the check itself: `mutation.test.js` |
 | R12 | Retention is a scheduled revocation, never a delete | `retention.test.js` |
+| R13 | A revocation holds against later writes: nothing stamped inside a revoked time range or derived from a revoked capture is stored, and no projection entry is added for a revoked capture | `writers.test.js` |
 
 ## Entities
 
@@ -64,7 +65,7 @@ and live in `payload_blob` or a file `storage_uri` names.
 |-------|------|-------|
 | `capture_id` | TEXT PK | |
 | `sequence` | INTEGER UNIQUE | Monotonic. The replay ordering — **not** `captured_at`, which can go backwards |
-| `captured_at` | TEXT | ISO 8601 UTC with milliseconds (`2026-10-06T09:00:05.000Z`), always. Times are compared as text, so an implementation MUST write this one form, and MUST read a revocation's `time_range` bounds into it before comparing |
+| `captured_at` | TEXT | When it was **observed**, not when it was written: taken before anything is read (a screen image, a window's text), so a capture read while its moment is being forgotten is refused (R13). ISO 8601 UTC with milliseconds (`2026-10-06T09:00:05.000Z`), always. Times are compared as text, so an implementation MUST write this one form, and MUST write a revocation's `time_range` bounds in it |
 | `capture_type` | TEXT | `screen_frame`, `screen_text`, `audio_segment`, `audio_transcript`, `audio_alignment`, `activity` |
 | `source` | TEXT | Source family. Platform-neutral (R9) |
 | `source_app` | TEXT NULL | Bundle id or executable where known |
@@ -93,12 +94,16 @@ Content is sealed per capture and erased by revocation
 | `capture_key` | `capture_id` PK, `wrapped_key` BLOB, `created_at` | The capture's 32-byte data key, sealed by the master key with AAD `key:<capture_id>`. Write-once |
 | `capture_content` | `capture_id` PK, `text_sealed` BLOB, `created_at` | Extracted text sealed by the data key, AAD `text:<capture_id>`. **Attacker-controlled** once unsealed. Write-once |
 | `payload_blob` | `payload_hash` PK, `sealed` BLOB | Payload bytes sealed by the data key, AAD `payload:<capture_id>`. An implementation MAY keep them in files instead, sealed the same way |
-| `erasure_receipt` | `revocation_id` PK, `applied_at`, `keys_destroyed`, `contents_erased`, `payloads_erased` | Append-only |
+| `erasure_receipt` | `revocation_id` PK, `applied_at`, `keys_destroyed`, `contents_erased`, `payloads_erased`, `completed_at` | Append-only, but for `completed_at` (migration 008): NULL until the write-ahead log holding the erased frames has been truncated, then stamped once |
 
 **Sealing.** AES-256-GCM, combined form `nonce(12) ‖ ciphertext ‖ tag(16)`,
 byte-compatible with CryptoKit's `AES.GCM.SealedBox.combined`. The master key
 MUST NOT be written to the store or beside it; on macOS it lives in the
-Keychain. A store MUST refuse to open with the wrong master key.
+Keychain. A store MUST refuse to open with the wrong master key, even once
+every capture is revoked: `key_check` (migration 009) holds `presence-capture
+key check` sealed by the master key with AAD `key_check`, written once by the
+first writer to open the store, after its key has been checked against a
+capture's where there is one.
 
 **Erasure.** In the transaction that records a revocation, an implementation
 MUST delete the revoked set's sealed payloads, sealed text and keys, and write
@@ -107,9 +112,18 @@ MUST be overwritten (`secure_delete`) and any write-ahead log holding the
 earlier frames MUST be checkpointed and truncated. A reader in another process
 can hold the log, and SQLite reports that only in the checkpoint's result row.
 While it does, the implementation MUST NOT report the erasure done, and MUST
-complete it once the log can be truncated. **A revocation with no
-erasure receipt is non-conformant.** Plaintext content MUST NOT reach disk at
-any time.
+complete it once the log can be truncated. Once the revocation is committed,
+nothing that fails after can undo it: a failure finishing the erasure is
+reported as an erasure pending, never as a revocation that didn't happen.
+
+Completion is kept in the store, not in the memory of the process that
+revoked, which may exit first (a command-line Forget while an MCP server
+reads). The receipt's `completed_at` stays NULL until a truncation succeeds,
+and is stamped then, but only on receipts whose revocation was committed
+before that truncation began: another writer's revocation committed after it
+is not proven by it. A writer that opens the store MUST try to finish any
+pending erasure. **A revocation with no erasure receipt is non-conformant.**
+Plaintext content MUST NOT reach disk at any time.
 
 ### Retention (R12)
 
@@ -126,10 +140,48 @@ or a privacy level. Resolving the scope yields a set of captures, which MUST be
 extended transitively through `derived_from` — revoking audio revokes its
 transcript, and the alignment derived from that transcript (R10).
 
+A capture already revoked isn't revoked again: it was erased then, and its
+receipts were written then. Resolution and erasure MUST NOT depend on how many
+captures a scope takes in: retention's scope, from the epoch, takes in every
+capture ever revoked.
+
+The scope MUST be resolved in the transaction that records the revocation,
+under the write lock taken before anything is read (`BEGIN IMMEDIATE`), so a
+capture another writer commits meanwhile is either in the revoked set or
+refused afterwards (R13). A `time_range` scope's `scope_value` MUST be written
+with both bounds in the form `captured_at` is written, so the two compare as
+text. A range a version before migration 008 kept in another form MUST still
+be honoured, read into that form when it's compared.
+
+**A revocation holds against later writes (R13).** A capture can arrive after
+the moment it records: speech is written once it's transcribed, a screen once
+it's read, a plugin's observation once it's sent. So an implementation MUST
+refuse, with `constraint` in the driver protocol, an append whose `captured_at`
+falls inside any revoked `time_range` (retention's included), or whose
+`derived_from` names a revoked capture, and MUST refuse a projection entry for
+a revoked capture. Other scopes forget what exists, not what's to come: a
+revoked source can be captured again, and exclusion (R8) is how a source is
+never captured.
+
 `revoked_capture.cascaded` records whether a capture was named directly or
 reached through the chain.
 
 Revocations are append-only: a revocation cannot be unmade.
+
+### More than one writer
+
+A store has several writers: the capturing daemon, a command line that
+forgets or issues grants, and every MCP server, which writes its egress
+records. Any write that depends on something read MUST take the write lock
+before reading it (`BEGIN IMMEDIATE`), so no other writer can commit in
+between: an append and its R13 check, a projection entry and its check, a
+revocation and its scope, and each migration and the check that it's still
+pending. A read MAY choose and unseal what it serves under a read snapshot,
+which holds no lock, but MUST then check its grant again, leave out anything
+revoked since, and record its egress, in one transaction under the write lock.
+A batch of captures that belong together (an audio segment and its
+transcript) MUST be written in one transaction, so a failure leaves neither,
+and a `dedupe_key` doesn't outlive a batch that failed.
 
 ### `projection`, `projection_entry`, `projection_revocation` (R3)
 
@@ -240,9 +292,9 @@ PRESENCE_CAPTURE_DRIVER="/path/to/your-driver" npm run conformance:store
 ```
 
 The reference implementation also passes an API layer covering its read path
-(grants, envelope and egress, ADR 0001 T1–T12) and replay (R4). Together the
-two layers cover 64 assertions, including the five that distinguish this
-schema:
+(grants, envelope and egress, ADR 0001 T1–T12) and replay (R4). The store
+layer has 59 tests and the API layer 80, among them the five that distinguish
+this schema:
 
 - **revocation propagation** — derived views and vector entries do not survive
   a revocation, and a receipt proves it;

@@ -12,14 +12,14 @@ final class RestrictedTests: XCTestCase {
         let path = dir.appendingPathComponent("store.sqlite").path
         let key = Seal.newKey()
         let writer = try CaptureStore(path: path, masterKey: key)
-        let id = try writer.append(NewCapture(captureType: "screen_text", source: "screen", contentText: "readable"))
+        let id = try writer.append(NewCapture(capturedAt: Date(), captureType: "screen_text", source: "screen", contentText: "readable"))
         let grant = try writer.issueGrant(NewGrant(clientId: "editor", expiresAt: Date().addingTimeInterval(3600)))
 
         let reader = try CaptureStore(readerPath: path, masterKey: key)
         XCTAssertEqual(try reader.read(grantId: grant, ReadRequest(tool: "recent")).count, 1)
         XCTAssertEqual(try reader.read(grantId: grant, ReadRequest(tool: "recent")).count, 1, "a second egress record (AUTOINCREMENT) was refused")
 
-        XCTAssertThrowsError(try reader.append(NewCapture(captureType: "screen_text", source: "screen", contentText: "planted")))
+        XCTAssertThrowsError(try reader.append(NewCapture(capturedAt: Date(), captureType: "screen_text", source: "screen", contentText: "planted")))
         XCTAssertThrowsError(try reader.revoke(scopeKind: "capture", scopeValue: id))
         XCTAssertThrowsError(try reader.issueGrant(NewGrant(clientId: "itself", expiresAt: Date().addingTimeInterval(3600))))
         XCTAssertThrowsError(try reader.revokeGrant(grant))

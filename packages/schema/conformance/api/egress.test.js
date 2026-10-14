@@ -142,3 +142,27 @@ test('T11: readers cannot mutate capture state', () => {
   }
   store.close();
 });
+
+test('ADR 0001: a reader kept and reused is refused once its grant is revoked', () => {
+  const { store, grantId } = readableStore();
+  const reader = store.createReader(grantId);
+  assert.equal(reader.read({ tool: 'recent' }).length, 1);
+
+  store.revokeGrant(grantId);
+  assert.throws(() => reader.read({ tool: 'recent' }), { name: 'AuthorizationError' });
+  store.close();
+});
+
+test('ADR 0001: a limit that is not a whole number is refused, so the grant cap holds', () => {
+  const store = openStore();
+  for (const text of ['one', 'two', 'three']) {
+    store.appendCapture({ captureType: 'screen_text', source: 'screen', privacyLevel: 'standard', contentText: text });
+  }
+  const grantId = store.issueGrant({ clientId: 'editor', expiresAt: FUTURE, maxRowsPerQuery: 1 });
+  const reader = store.createReader(grantId);
+  for (const limit of ['invalid', NaN, 1.5, -1]) {
+    assert.throws(() => reader.read({ tool: 'recent', limit }), RangeError, `limit ${limit} was taken`);
+  }
+  assert.equal(reader.read({ tool: 'recent', limit: 50 }).length, 1);
+  store.close();
+});

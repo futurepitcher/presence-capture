@@ -5,9 +5,11 @@
  * fake sensor and sensor plugins (ADR 0007) all go through it.
  */
 
+import { randomUUID } from 'node:crypto';
 import { isExcluded } from './exclusion.js';
 import { observationError } from './observations.js';
 import { redact } from './redact.js';
+import { RevokedError } from './store.js';
 
 /**
  * @param {object} store  a store from openStore()
@@ -16,22 +18,28 @@ import { redact } from './redact.js';
  *   (`sensor:<name>`); unset, each kind keeps its built-in source.
  */
 export function createGate(store, { fragments = [], platform = 'macos', source } = {}) {
-  const stats = { appended: 0, excluded: 0, redacted: 0, invalid: 0, duplicates: 0, captureIds: [] };
-  const append = (event) => {
-    const id = store.appendCapture({ privacyLevel: 'standard', ...event });
-    stats.appended += 1;
-    stats.captureIds.push(id);
-    return id;
-  };
-  // An observation a sensor marked with `dedupe` lands once per source: a
-  // sensor restarted, or replaying what it already sent, adds nothing, and
-  // what was revoked doesn't come back. Null when it's a duplicate.
-  const first = (event, o) => {
-    if (o.dedupe == null) return append(event);
+  const stats = { appended: 0, excluded: 0, redacted: 0, invalid: 0, duplicates: 0, refused: 0, captureIds: [] };
+  // One observation's captures, all in one transaction (an audio segment and
+  // its transcript land together, or neither does). An observation a sensor
+  // marked with `dedupe` lands once per source: a sensor restarted, or
+  // replaying what it already sent, adds nothing, and what was revoked
+  // doesn't come back. One stamped inside a revoked time range is refused, as
+  // the store refuses it. The first capture's id, or null when nothing landed.
+  const append = (events, o) => {
+    const [head, ...rest] = events.map((e) => ({ privacyLevel: 'standard', ...e }));
+    const marked = o.dedupe == null ? head : { ...head, dedupeKey: store.dedupeKeyFor(head.source, o.dedupe) };
     try {
-      return append({ ...event, dedupeKey: store.dedupeKeyFor(event.source, o.dedupe) });
+      const ids = store.appendAll([marked, ...rest]);
+      stats.appended += ids.length;
+      stats.captureIds.push(...ids);
+      return ids[0];
     } catch (err) {
-      if (!/UNIQUE/i.test(err.message)) throw err;
+      if (err instanceof RevokedError) {
+        stats.refused += 1;
+        return null;
+      }
+      // Only a dedupe key already kept: any other refusal is a failure, and is raised.
+      if (o.dedupe == null || !/UNIQUE.*capture_event\.dedupe_key/.test(err.message)) throw err;
       stats.duplicates += 1;
       return null;
     }
@@ -49,14 +57,13 @@ export function createGate(store, { fragments = [], platform = 'macos', source }
     }
 
     if (o.kind === 'audio') {
-      const audioId = first({
-        captureType: 'audio_segment', source: source ?? 'ambient_audio', sourceApp: o.device, capturedAt: o.at,
-      }, o);
-      if (audioId === null) return;
-      append({
+      const audioId = `cap_${randomUUID()}`;
+      append([{
+        captureId: audioId, captureType: 'audio_segment', source: source ?? 'ambient_audio', sourceApp: o.device, capturedAt: o.at,
+      }, {
         captureType: 'audio_transcript', source: source ?? 'ambient_audio', sourceApp: o.device, capturedAt: o.at,
         contentText: clean(o.transcript), extraction: 'asr', derivedFrom: audioId,
-      });
+      }], o);
       return;
     }
 
@@ -67,24 +74,24 @@ export function createGate(store, { fragments = [], platform = 'macos', source }
     if (isExcluded({ app: o.app, window: o.window ?? '' }, { fragments, platform })) {
       stats.excluded += 1;
       if (o.kind === 'activity') {
-        first({
+        append([{
           captureType: 'activity', source: source ?? 'activity', capturedAt: o.at,
           contentText: JSON.stringify({ state: o.state, excluded: true }), extraction: 'none',
-        }, o);
+        }], o);
       }
       return;
     }
 
     if (o.kind === 'screen') {
-      first({
+      append([{
         captureType: 'screen_text', source: source ?? 'screen', sourceApp: o.bundle ?? o.app,
         sourceUrl: o.url ?? null, capturedAt: o.at, contentText: clean(o.text), extraction: o.extraction ?? 'ocr',
-      }, o);
+      }], o);
     } else {
-      first({
+      append([{
         captureType: 'activity', source: source ?? 'activity', sourceApp: o.bundle ?? o.app, capturedAt: o.at,
         contentText: JSON.stringify({ app: o.app, window: clean(o.window ?? ''), state: o.state }), extraction: 'none',
-      }, o);
+      }], o);
     }
   }
 

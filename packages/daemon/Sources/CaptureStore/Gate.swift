@@ -63,9 +63,12 @@ public final class Gate: @unchecked Sendable {
         public var redacted = 0
         public var invalid = 0
         public var duplicates = 0
+        /// Stamped inside a time range that was forgotten, so refused (R13).
+        public var refused = 0
 
-        public init(appended: Int = 0, excluded: Int = 0, redacted: Int = 0, invalid: Int = 0, duplicates: Int = 0) {
-            (self.appended, self.excluded, self.redacted, self.invalid, self.duplicates) = (appended, excluded, redacted, invalid, duplicates)
+        public init(appended: Int = 0, excluded: Int = 0, redacted: Int = 0, invalid: Int = 0, duplicates: Int = 0, refused: Int = 0) {
+            (self.appended, self.excluded, self.redacted, self.invalid, self.duplicates, self.refused) =
+                (appended, excluded, redacted, invalid, duplicates, refused)
         }
     }
 
@@ -100,22 +103,21 @@ public final class Gate: @unchecked Sendable {
             if out != value { lock.withLock { counts.redacted += 1 } }
             return out
         }
-        func append(_ capture: NewCapture) throws -> String {
-            let id = try store.append(capture)
-            lock.withLock { counts.appended += 1 }
-            return id
-        }
-        // An observation marked with `dedupe` lands once per source: a restarted sensor adds nothing
-        // it already sent, and nothing revoked comes back. Nil when it's a duplicate.
-        func first(_ capture: NewCapture) throws -> String? {
-            guard let value = text("dedupe") else { return try append(capture) }
-            var marked = capture
-            marked.dedupeKey = store.dedupeKey(source: capture.source, value: value)
+        // One observation's captures, all in one transaction (an audio segment and its transcript
+        // land together, or neither does). An observation marked with `dedupe` lands once per
+        // source: a restarted sensor adds nothing it already sent, and nothing revoked comes back.
+        // One stamped inside a forgotten range is refused, as the store refuses it.
+        func append(_ captures: [NewCapture]) throws {
+            var batch = captures
+            if let value = text("dedupe") { batch[0].dedupeKey = store.dedupeKey(source: batch[0].source, value: value) }
             do {
-                return try append(marked)
-            } catch StoreError.constraint {
+                let ids = try store.appendAll(batch)
+                lock.withLock { counts.appended += ids.count }
+            } catch StoreError.revoked {
+                lock.withLock { counts.refused += 1 }
+            } catch StoreError.constraint(let message) where text("dedupe") != nil && message.contains("capture_event.dedupe_key") {
+                // Only a dedupe key already kept: any other refusal is a failure, and is raised.
                 lock.withLock { counts.duplicates += 1 }
-                return nil
             }
         }
         func json(_ object: [String: Any]) -> String {
@@ -125,9 +127,12 @@ public final class Gate: @unchecked Sendable {
         let kind = text("kind")!
         if kind == "audio" {
             let device = text("device")!
-            guard let segment = try first(NewCapture(capturedAt: at, captureType: "audio_segment", source: source ?? "ambient_audio", sourceApp: device)) else { return }
-            _ = try append(NewCapture(capturedAt: at, captureType: "audio_transcript", source: source ?? "ambient_audio", sourceApp: device,
-                                      contentText: clean(text("transcript")!), extraction: "asr", derivedFrom: segment))
+            let segment = CaptureStore.newCaptureId()
+            try append([
+                NewCapture(captureId: segment, capturedAt: at, captureType: "audio_segment", source: source ?? "ambient_audio", sourceApp: device),
+                NewCapture(capturedAt: at, captureType: "audio_transcript", source: source ?? "ambient_audio", sourceApp: device,
+                           contentText: clean(text("transcript")!), extraction: "asr", derivedFrom: segment),
+            ])
             return
         }
 
@@ -137,17 +142,17 @@ public final class Gate: @unchecked Sendable {
         if Exclusion.isExcluded(app: app, window: window, fragments: fragments) {
             lock.withLock { counts.excluded += 1 }
             if kind == "activity" {
-                _ = try first(NewCapture(capturedAt: at, captureType: "activity", source: source ?? "activity",
-                                         contentText: json(["state": text("state")!, "excluded": true]), extraction: "none"))
+                try append([NewCapture(capturedAt: at, captureType: "activity", source: source ?? "activity",
+                                        contentText: json(["state": text("state")!, "excluded": true]), extraction: "none")])
             }
             return
         }
         if kind == "screen" {
-            _ = try first(NewCapture(capturedAt: at, captureType: "screen_text", source: source ?? "screen", sourceApp: text("bundle") ?? app,
-                                      sourceUrl: text("url"), contentText: clean(text("text")!), extraction: text("extraction") ?? "ocr"))
+            try append([NewCapture(capturedAt: at, captureType: "screen_text", source: source ?? "screen", sourceApp: text("bundle") ?? app,
+                                   sourceUrl: text("url"), contentText: clean(text("text")!), extraction: text("extraction") ?? "ocr")])
         } else {
-            _ = try first(NewCapture(capturedAt: at, captureType: "activity", source: source ?? "activity", sourceApp: text("bundle") ?? app,
-                                      contentText: json(["app": app, "window": clean(window), "state": text("state")!]), extraction: "none"))
+            try append([NewCapture(capturedAt: at, captureType: "activity", source: source ?? "activity", sourceApp: text("bundle") ?? app,
+                                   contentText: json(["app": app, "window": clean(window), "state": text("state")!]), extraction: "none")])
         }
     }
 }

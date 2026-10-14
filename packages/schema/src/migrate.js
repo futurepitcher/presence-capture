@@ -20,21 +20,27 @@ export function migrate(db) {
     );
   `);
 
-  const applied = new Set(
+  const applied = () => new Set(
     db.prepare('SELECT name FROM schema_migration').all().map((r) => r.name),
   );
 
   const pending = readdirSync(MIGRATIONS_DIR)
     .filter((f) => f.endsWith('.sql'))
     .sort()
-    .filter((f) => !applied.has(f));
+    .filter((f) => !applied().has(f));
 
+  // Each under the write lock, and checked again inside it: two writers
+  // opening an older store at once can't both apply the same migration.
+  const ran = [];
   for (const name of pending) {
-    db.exec('BEGIN');
+    db.exec('BEGIN IMMEDIATE');
     try {
-      db.exec(readFileSync(join(MIGRATIONS_DIR, name), 'utf8'));
-      db.prepare('INSERT INTO schema_migration (name, applied_at) VALUES (?, ?)')
-        .run(name, new Date().toISOString());
+      if (!applied().has(name)) {
+        db.exec(readFileSync(join(MIGRATIONS_DIR, name), 'utf8'));
+        db.prepare('INSERT INTO schema_migration (name, applied_at) VALUES (?, ?)')
+          .run(name, new Date().toISOString());
+        ran.push(name);
+      }
       db.exec('COMMIT');
     } catch (err) {
       db.exec('ROLLBACK');
@@ -42,5 +48,5 @@ export function migrate(db) {
     }
   }
 
-  return pending;
+  return ran;
 }

@@ -47,10 +47,10 @@ Unset, the suite drives the reference driver
 
 | Code | Meaning |
 |------|---------|
-| `constraint` | The schema refused the write: an unknown privacy level, a duplicate `dedupe_key`, or a write to an append-only table |
+| `constraint` | The schema refused the write: an unknown privacy level, a duplicate `dedupe_key`, a write to an append-only table, or a write a revocation refuses (SCHEMA.md R13) |
 | `key` | The master key doesn't open this store |
 | `denied` | A read the grant doesn't allow: no grant, or a revoked or expired one (ADR 0001) |
-| `bad_request` | An unknown op, missing arguments, or no store is open |
+| `bad_request` | An unknown op, missing or malformed arguments (a `limit` that isn't a whole number), or no store is open |
 | `internal` | Anything else |
 
 The suite checks codes, never messages.
@@ -63,11 +63,12 @@ fields may be omitted or `null`.
 | Op | Args | Result |
 |----|------|--------|
 | `hello` | — | `{protocol: "1", implementation}` |
-| `open` | `path`, `master_key_hex` (64 hex chars) | `{}`. Creates the store when `path` doesn't exist. Fails with `key` when the store exists and the key doesn't open it |
+| `open` | `path`, `master_key_hex` (64 hex chars) | `{}`. Creates the store when `path` doesn't exist. Fails with `key` when the store exists and the key doesn't open it. Finishes any erasure an earlier writer left pending, when nothing holds the log |
 | `append` | `capture_type`, `source`, `privacy_level`; optional `capture_id`, `captured_at`, `source_app`, `source_url`, `classification`, `content_text`, `payload: {bytes_base64, media_type}`, `extraction`, `derived_from`, `dedupe_key` | `{capture_id}` |
+| `append_all` | `captures`: an array of `append` arguments | `{capture_ids}`, in order. One transaction: every capture is written, or none is. A capture can name an earlier one in the batch as `derived_from` by the `capture_id` it gives it |
 | `register_projection` | `name`, `kind` (`index`, `vector`, `summary`) | `{}` |
 | `add_projection_entry` | `projection`, `capture_id`, `entry_ref`; optional `output_kind` and `output_json`, the output kept sealed under the capture's key | `{}` |
-| `revoke` | `scope_kind`, `scope_value`; optional `reason` | `{revocation_id, revoked_capture_ids, erased_on_disk}`, including captures reached through `derived_from`. `erased_on_disk` is false while a reader holds the write-ahead log and the revoked bytes may still be in it |
+| `revoke` | `scope_kind`, `scope_value`; optional `reason` | `{revocation_id, revoked_capture_ids, erased_on_disk}`, including captures reached through `derived_from`. `erased_on_disk` is false while a reader holds the write-ahead log and the revoked bytes may still be in it; the receipt's `completed_at` stays NULL until the erasure is finished |
 | `retain` | `days`; optional `now` (ISO 8601, for tests) | As `revoke`, or `{revocation_id: null, revoked_capture_ids: []}` when nothing was old enough |
 | `issue_grant` | `client_id`, `expires_at`; optional `privacy_levels`, `capture_types`, `sources`, `domains`, `time_from`, `time_to`, `max_rows_per_query` | `{grant_id}`. Fails with `constraint` for a grant naming `sacred_mode` |
 | `revoke_grant` | `grant_id` | `{}` |
@@ -80,7 +81,7 @@ fields may be omitted or `null`.
 
 After driving writes, the suite opens the store file **read-only** with
 SQLite. It expects the tables and the sealing format of SCHEMA.md
-(migrations `001`–`005`).
+(migrations `001`–`009`).
 
 Payload bytes are read from `payload_blob`, or from a file named by
 `capture_payload.storage_uri` in the form `file:<path relative to the store's

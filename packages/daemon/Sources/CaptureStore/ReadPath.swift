@@ -125,73 +125,97 @@ extension CaptureStore {
     }
 
     /// What the grant allows of what the request asks, enveloped, in sequence order, and logged.
+    ///
+    /// Chosen and unsealed under a read snapshot, which never holds the write lock, so a search
+    /// through a long history doesn't keep the daemon, or a Forget, waiting while it reads. Then
+    /// served only once the grant is checked again and the serving recorded, in one transaction under
+    /// the write lock (BEGIN IMMEDIATE): a grant revoked meanwhile serves nothing, a capture revoked
+    /// meanwhile isn't served (R2), and every row served is recorded, chained to the record before it
+    /// (migration 007 refuses a fork besides).
     public func read(grantId: String, _ request: ReadRequest) throws -> [CanonicalJSON] {
         try lock.withLock {
-            guard let grant = try rows("""
-                SELECT client_id, expires_at, revoked_at, domains, time_from, time_to, privacy_levels, capture_types, sources, max_rows_per_query
-                FROM grant_record WHERE grant_id = ?
-                """, grantId).first else { throw StoreError.denied("no grant: default deny") }
-            if grant.optionalText(2) != nil { throw StoreError.denied("grant revoked") }
-            if grant.text(1) <= Self.iso(Date()) { throw StoreError.denied("grant expired") }
-            let decode = { (i: Int) -> [String] in
-                (try? JSONSerialization.jsonObject(with: Data(grant.text(i).utf8)) as? [String]) ?? []
+            var chosen: [(id: String, level: String, envelope: CanonicalJSON)] = []
+            try transaction { chosen = try admitted(by: try authorizedGrant(grantId), request) }
+            var served: [CanonicalJSON] = []
+            try transaction(immediate: true) {
+                let grant = try authorizedGrant(grantId)
+                let kept = try chosen.filter { try !isRevoked($0.id) }
+                var levelsServed: [String] = []
+                for item in kept where !levelsServed.contains(item.level) { levelsServed.append(item.level) }
+                let fingerprint = SHA256.hash(data: Data("\(request.tool)\u{0}\(request.query)\u{0}\(request.contains ?? "")".utf8))
+                    .map { String(format: "%02x", $0) }.joined()
+                try appendEgressLocked(
+                    clientId: grant.text(0), grantId: grantId, tool: request.tool, queryFingerprint: fingerprint,
+                    captureIds: kept.map(\.id), privacyLevelsServed: levelsServed,
+                    byteCount: CanonicalJSON.array(kept.map(\.envelope)).text.utf8.count)
+                served = kept.map(\.envelope)
             }
-            let (domains, levels, types, sources) = (decode(3), decode(6), decode(7), decode(8))
-
-            // sacred_mode can never appear here: the CHECK in 004 refuses a grant that names it.
-            var clauses = ["e.capture_id NOT IN (SELECT capture_id FROM revoked_capture)"]
-            var params: [Any?] = []
-            func among(_ column: String, _ values: [String]) {
-                clauses.append("\(column) IN (\(Array(repeating: "?", count: values.count).joined(separator: ",")))")
-                params += values
-            }
-            among("e.privacy_level", levels)
-            if !types.contains("*") { among("e.capture_type", types) }
-            if !domains.contains("*") { among("e.classification", domains) }
-            if !sources.contains("*") { among("e.source", sources) }
-            if let from = grant.optionalText(4) { clauses.append("e.captured_at >= ?"); params.append(from) }
-            if let to = grant.optionalText(5) { clauses.append("e.captured_at <= ?"); params.append(to) }
-            if let after = request.afterSequence { clauses.append("e.sequence > ?"); params.append(after) }
-
-            let maximum = grant.int(9)
-            let cap = min(request.limit ?? maximum, maximum)
-            let needle = request.contains?.lowercased()
-            var served: [(id: String, level: String, envelope: CanonicalJSON)] = []
-            // Stepped one row at a time, stopping at the cap: a short read of a long history holds
-            // only what it serves.
-            try eachRow("""
-                SELECT e.capture_id, e.sequence, e.captured_at, e.source_app, e.source_url, e.capture_type, e.privacy_level, e.extraction
-                FROM capture_event e WHERE \(clauses.joined(separator: " AND ")) ORDER BY e.sequence
-                """, values: params) { row in
-                guard served.count < cap else { return false }
-                let id = row.text(0)
-                let content = try unsealedText(id)
-                if let needle, !(content?.lowercased().contains(needle) ?? false) { return true }
-                // Provenance comes from the capture's metadata, never from its content (T10).
-                let envelope = CanonicalJSON.object([("presence_capture_untrusted", .object([
-                    ("envelope_version", .string(Self.envelopeVersion)),
-                    ("provenance", .object([
-                        ("capture_id", .string(id)), ("sequence", .int(row.int(1))), ("captured_at", .string(row.text(2))),
-                        ("source_app", .optional(row.optionalText(3))), ("source_url", .optional(row.optionalText(4))),
-                        ("capture_type", .string(row.text(5))), ("privacy_level", .string(row.text(6))),
-                        ("extraction", .optional(row.optionalText(7))),
-                    ])),
-                    ("content", .optional(content)),
-                ]))])
-                served.append((id, row.text(6), envelope))
-                return served.count < cap
-            }
-
-            var levelsServed: [String] = []
-            for item in served where !levelsServed.contains(item.level) { levelsServed.append(item.level) }
-            let fingerprint = SHA256.hash(data: Data("\(request.tool)\u{0}\(request.query)\u{0}\(request.contains ?? "")".utf8))
-                .map { String(format: "%02x", $0) }.joined()
-            try appendEgress(
-                clientId: grant.text(0), grantId: grantId, tool: request.tool, queryFingerprint: fingerprint,
-                captureIds: served.map(\.id), privacyLevelsServed: levelsServed,
-                byteCount: CanonicalJSON.array(served.map(\.envelope)).text.utf8.count)
-            return served.map(\.envelope)
+            return served
         }
+    }
+
+    /// The grant a read is made under, as it is now: refused when it's missing, revoked or expired.
+    private func authorizedGrant(_ grantId: String) throws -> Row {
+        guard let grant = try rows("""
+            SELECT client_id, expires_at, revoked_at, domains, time_from, time_to, privacy_levels, capture_types, sources, max_rows_per_query
+            FROM grant_record WHERE grant_id = ?
+            """, grantId).first else { throw StoreError.denied("no grant: default deny") }
+        if grant.optionalText(2) != nil { throw StoreError.denied("grant revoked") }
+        if grant.text(1) <= Self.iso(Date()) { throw StoreError.denied("grant expired") }
+        return grant
+    }
+
+    /// The captures a grant admits, in sequence order, enveloped with their text unsealed, up to its cap.
+    private func admitted(by grant: Row, _ request: ReadRequest) throws -> [(id: String, level: String, envelope: CanonicalJSON)] {
+        let decode = { (i: Int) -> [String] in
+            (try? JSONSerialization.jsonObject(with: Data(grant.text(i).utf8)) as? [String]) ?? []
+        }
+        let (domains, levels, types, sources) = (decode(3), decode(6), decode(7), decode(8))
+
+        // sacred_mode can never appear here: the CHECK in 004 refuses a grant that names it.
+        var clauses = ["e.capture_id NOT IN (SELECT capture_id FROM revoked_capture)"]
+        var params: [Any?] = []
+        func among(_ column: String, _ values: [String]) {
+            clauses.append("\(column) IN (\(Array(repeating: "?", count: values.count).joined(separator: ",")))")
+            params += values
+        }
+        among("e.privacy_level", levels)
+        if !types.contains("*") { among("e.capture_type", types) }
+        if !domains.contains("*") { among("e.classification", domains) }
+        if !sources.contains("*") { among("e.source", sources) }
+        if let from = grant.optionalText(4) { clauses.append("e.captured_at >= ?"); params.append(from) }
+        if let to = grant.optionalText(5) { clauses.append("e.captured_at <= ?"); params.append(to) }
+        if let after = request.afterSequence { clauses.append("e.sequence > ?"); params.append(after) }
+
+        let maximum = grant.int(9)
+        let cap = min(request.limit ?? maximum, maximum)
+        let needle = request.contains?.lowercased()
+        var served: [(id: String, level: String, envelope: CanonicalJSON)] = []
+        // Stepped one row at a time, stopping at the cap: a short read of a long history holds
+        // only what it serves.
+        try eachRow("""
+            SELECT e.capture_id, e.sequence, e.captured_at, e.source_app, e.source_url, e.capture_type, e.privacy_level, e.extraction
+            FROM capture_event e WHERE \(clauses.joined(separator: " AND ")) ORDER BY e.sequence
+            """, values: params) { row in
+            guard served.count < cap else { return false }
+            let id = row.text(0)
+            let content = try unsealedText(id)
+            if let needle, !(content?.lowercased().contains(needle) ?? false) { return true }
+            // Provenance comes from the capture's metadata, never from its content (T10).
+            let envelope = CanonicalJSON.object([("presence_capture_untrusted", .object([
+                ("envelope_version", .string(Self.envelopeVersion)),
+                ("provenance", .object([
+                    ("capture_id", .string(id)), ("sequence", .int(row.int(1))), ("captured_at", .string(row.text(2))),
+                    ("source_app", .optional(row.optionalText(3))), ("source_url", .optional(row.optionalText(4))),
+                    ("capture_type", .string(row.text(5))), ("privacy_level", .string(row.text(6))),
+                    ("extraction", .optional(row.optionalText(7))),
+                ])),
+                ("content", .optional(content)),
+            ]))])
+            served.append((id, row.text(6), envelope))
+            return served.count < cap
+        }
+        return served
     }
 
     /// A capture's text, unsealed, for a caller already holding the lock.
@@ -204,17 +228,8 @@ extension CaptureStore {
         return String(decoding: try Seal.open(row.data(1), key: key, aad: "text:\(captureId)"), as: UTF8.self)
     }
 
-    /// One record of what was served, chained to the one before it (ADR 0001 §4.2, SCHEMA.md), under
-    /// the write lock: BEGIN IMMEDIATE takes it before the last record is read, so another process
-    /// can't take the same one and fork the chain (migration 007 refuses a fork besides).
-    private func appendEgress(clientId: String, grantId: String, tool: String, queryFingerprint: String,
-                              captureIds: [String], privacyLevelsServed: [String], byteCount: Int) throws {
-        try transaction(immediate: true) {
-            try appendEgressLocked(clientId: clientId, grantId: grantId, tool: tool, queryFingerprint: queryFingerprint,
-                                   captureIds: captureIds, privacyLevelsServed: privacyLevelsServed, byteCount: byteCount)
-        }
-    }
-
+    /// One record of what was served, chained to the one before it (ADR 0001 §4.2, SCHEMA.md), for a
+    /// read holding the write lock.
     private func appendEgressLocked(clientId: String, grantId: String, tool: String, queryFingerprint: String,
                                     captureIds: [String], privacyLevelsServed: [String], byteCount: Int) throws {
         let previous = try rows("SELECT record_hash FROM egress_record ORDER BY egress_id DESC LIMIT 1").first?.text(0) ?? Self.genesisHash

@@ -25,6 +25,7 @@ let package = Package(
         .executableTarget(name: "PcapMCP", dependencies: ["CaptureStore"]),
         .testTarget(name: "CaptureStoreTests", dependencies: ["CaptureStore"]),
         .testTarget(name: "CaptureCoreTests", dependencies: ["CaptureCore"]),
+        .testTarget(name: "PresenceCaptureTests", dependencies: ["PresenceCapture", "CaptureStore"]),
     ],
     swiftLanguageModes: [.v5]
 )
