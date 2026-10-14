@@ -101,12 +101,21 @@ node ../schema/bin/sensor-kit.js -- node ../plugins/git-activity/sensor.mjs --on
 
 ```sh
 swift build --product pcap-mcp
-pcap-mcp --store <path> --grant <grant_id> --master-key-file <path>
+"/Applications/Presence Capture.app/Contents/MacOS/pcap-mcp" --grant <grant_id>     # the app's store and key
+pcap-mcp --check                                                                   # opens it as a reader, prints counts
+pcap-mcp --store <path> --grant <grant_id> --master-key-file <path>                # any other store (tests)
 ```
 
-Opening the app's own store takes the master key from the Keychain. That
-waits on the Keychain item trusting `pcap-mcp` as well as the app, which is
-next.
+Run from inside the app's bundle, `pcap-mcp` opens the app's store with the
+master key from the Keychain, and nothing asks. The key is kept in a
+**versioned** item (`store.shared.v<N>`, `MasterKeyItem` in `CaptureStore`)
+whose access list, set when it's made, trusts the app and the readers in its
+bundle by their code signatures. When a reader is added, the version goes up,
+and the app makes the new item from the newest older one, with the same key,
+at its next launch: an access list is never changed, because changing one
+makes macOS ask for authorization, sometimes again and again. Only the
+person's default (login) keychain is searched, so a locked keychain left on
+the search list (a build's signing keychain) never prompts.
 
 ## The menu
 
