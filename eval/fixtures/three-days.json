@@ -1,5 +1,5 @@
 {
- "_": "Three hand-written days for the recall eval (pcap-eval): a day of code, a day of calls, a day of reading and messaging. Every capture names its id, and every question the ids that answer it. Half the questions use the captures' own words (keyword), half ask in other words (paraphrase), which only search by meaning can answer. Synthetic: every person, company and number is made up.",
+ "_": "Three hand-written days for the recall eval (pcap-eval): a day of code, a day of calls, a day of reading and messaging. Every capture names its id, and every question the ids that answer it, each on its own: a capture that only mentions the subject (a roadmap listing the Windows port) or only part of the answer (the CSV export, without its date) is not one. Half the questions use the captures' own words (keyword), half ask in other words (paraphrase), which only search by meaning can answer. Synthetic: every person, company and number is made up.",
  "captures": [
   {
    "id": "d1_activity_cursor",
@@ -342,7 +342,6 @@
    },
    "expect": [
     "d2_said_windows",
-    "d2_roadmap_doc",
     "d2_notes_call"
    ]
   },
@@ -542,7 +541,6 @@
    },
    "expect": [
     "d2_said_dana",
-    "d2_said_csv",
     "d2_notes_call"
    ]
   },

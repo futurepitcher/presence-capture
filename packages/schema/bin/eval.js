@@ -14,11 +14,16 @@
  * every question through `search`.
  *
  * It reports recall@1, recall@5 and MRR (over the first ten results), for all
- * questions and for keyword and paraphrase questions apart, and p50 and p95
- * latency for each tool, after a first call that builds the server's memory
+ * questions and for keyword and paraphrase questions apart, from a first pass
+ * over a quiet store, so the scores are the same every run. Then it times
+ * every tool twice: quiet, and again while eval/writer.js appends beside the
+ * server (as the daemon does while an agent reads), with the calls a writer's
+ * batch apart, so each one indexes new captures and meets a write. It reports
+ * p50 and p95 for each, after a first call that builds the server's memory
  * (cold start, reported on its own). It exits 1 below the targets the release
- * plan sets: recall@5 at least 0.80, search p95 under 300 ms. --no-gate only
- * reports.
+ * plan sets: recall@5 at least 0.80, search p95 under 300 ms while writing.
+ * --no-gate only reports. A run that can't finish (a server that exits, stops
+ * answering, or answers with an error) exits 2, never 0.
  *
  * `--server` and `--embed` are one executable path, or a JSON array for a
  * command with arguments, as the conformance suites take them. Unset,
@@ -39,6 +44,12 @@ import { openStore } from '../src/store.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const TARGET = { recallAt5: 0.8, searchP95Ms: 300 };
+/** How long a call may take before the run fails, and a server that won't exit is killed. */
+const REQUEST_TIMEOUT_MS = 60_000;
+const EXIT_TIMEOUT_MS = 10_000;
+/** The writer's batch interval (eval/writer.js): the loaded pass waits this long between calls. */
+const PACE_MS = 250;
+const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
 function args() {
   const out = { fixture: join(ROOT, 'eval/fixtures/three-days.json'), days: 0, perDay: 600, gate: true };
@@ -66,22 +77,49 @@ const percentile = (values, p) => {
   return sorted[Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1)];
 };
 
-/** An MCP server over stdio, as a client starts one. */
+/**
+ * An MCP server over stdio, as a client starts one. Every request settles: with
+ * its answer, or failing when the server can't start, exits, closes its
+ * output, or takes longer than REQUEST_TIMEOUT_MS.
+ */
 function startServer(command, { path, grantId, keyFile }) {
   const server = spawn(command[0], [...command.slice(1), '--store', path, '--grant', grantId, '--master-key-file', keyFile], {
     stdio: ['pipe', 'pipe', 'inherit'],
   });
   const waiting = new Map();
+  let gone = null;
+  const end = (why) => {
+    gone ??= why;
+    for (const pending of waiting.values()) pending.fail(new Error(gone));
+    waiting.clear();
+  };
+  server.once('error', (err) => end(`the server couldn't run: ${err.message}`));
+  server.once('close', (code, signal) => end(`the server exited (${signal ?? code})`));
+  server.stdin.on('error', (err) => end(`the server's input closed: ${err.message}`));
   eachLine(server.stdout, (line) => {
     if (line.trim() === '') return;
-    const message = JSON.parse(line);
-    waiting.get(message.id)?.(message);
+    let message;
+    try {
+      message = JSON.parse(line);
+    } catch {
+      return end('the server wrote a line that isn\'t JSON');
+    }
+    const pending = waiting.get(message.id);
     waiting.delete(message.id);
+    pending?.done(message);
   });
   let nextId = 1;
-  const rpc = (method, params) => new Promise((done) => {
+  const rpc = (method, params) => new Promise((done, fail) => {
+    if (gone) return fail(new Error(gone));
     const id = nextId++;
-    waiting.set(id, done);
+    const timer = setTimeout(() => {
+      waiting.delete(id);
+      fail(new Error(`${method} got no answer in ${REQUEST_TIMEOUT_MS / 1000} s`));
+    }, REQUEST_TIMEOUT_MS);
+    waiting.set(id, {
+      done: (message) => { clearTimeout(timer); done(message); },
+      fail: (err) => { clearTimeout(timer); fail(err); },
+    });
     server.stdin.write(jsonLine({ jsonrpc: '2.0', id, method, params }));
   });
   /** A tool's answer and how long it took, in milliseconds. */
@@ -94,9 +132,41 @@ function startServer(command, { path, grantId, keyFile }) {
   };
   const close = async () => {
     server.stdin.end();
-    if (server.exitCode === null) await new Promise((done) => server.once('close', done));
+    if (server.exitCode !== null || server.signalCode !== null) return;
+    const killer = setTimeout(() => server.kill('SIGKILL'), EXIT_TIMEOUT_MS);
+    await new Promise((done) => server.once('close', done));
+    clearTimeout(killer);
   };
   return { rpc, call, close };
+}
+
+/**
+ * eval/writer.js against the store, started once its first batch is in.
+ * `stop` resolves to how many captures it wrote, and fails if it wrote none or
+ * exited on its own.
+ */
+async function startWriter({ path, keyFile }) {
+  const writer = spawn(process.execPath, [join(ROOT, 'eval/writer.js'), path, keyFile], { stdio: ['pipe', 'pipe', 'inherit'] });
+  const said = [];
+  let heard = () => {};
+  eachLine(writer.stdout, (line) => {
+    if (line.trim() === '') return;
+    said.push(JSON.parse(line));
+    heard();
+  });
+  const closed = new Promise((done) => writer.once('close', (code, signal) => done(signal ?? code)));
+  const exited = closed.then((how) => { throw new Error(`the writer exited (${how})`); });
+  exited.catch(() => {});
+  await Promise.race([new Promise((done) => { heard = done; }), exited]);
+  return {
+    stop: async () => {
+      writer.stdin.end();
+      const how = await closed;
+      const written = said.find((m) => 'written' in m)?.written ?? 0;
+      if (how !== 0 || written === 0) throw new Error(`the writer failed (${how}), having written ${written}`);
+      return written;
+    },
+  };
 }
 
 const captureIds = (envelopes) => envelopes.map((e) => e.presence_capture_untrusted.provenance.capture_id);
@@ -141,25 +211,49 @@ async function main() {
     }
 
     const server = startServer(options.server, { path, grantId, keyFile });
-    await server.rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'pcap-eval', version: '1' } });
     try {
+      await server.rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'pcap-eval', version: '1' } });
       const { ms: coldStartMs } = await server.call('recent', { limit: 1 });
+      const span = { from: fixture.captures.map((c) => c.at).sort()[0], to: fixture.captures.map((c) => c.at).sort().at(-1) };
+      const ask = (question) => server.call(question.ask.tool, { ...question.ask, tool: undefined, limit: 10 });
 
-      const latency = { search: [], recent: [], timeline: [], now: [] };
+      /** Every question once, then the other tools 20 times each, `pace` ms apart. */
+      const timed = async (pace, onAnswer = () => {}) => {
+        const latency = { search: [], recent: [], timeline: [], now: [] };
+        for (const question of fixture.questions) {
+          if (pace) await sleep(pace);
+          const { answer, ms } = await ask(question);
+          latency.search.push(ms);
+          onAnswer(question, answer);
+        }
+        for (let i = 0; i < 20; i++) {
+          if (pace) await sleep(pace);
+          latency.recent.push((await server.call('recent', { limit: 10 })).ms);
+          latency.timeline.push((await server.call('timeline', { ...span, limit: 50 })).ms);
+          latency.now.push((await server.call('now', {})).ms);
+        }
+        return latency;
+      };
+      const summary = (latency) => Object.fromEntries(Object.entries(latency).map(([tool, values]) => [tool, { p50: percentile(values, 50), p95: percentile(values, 95) }]));
+
+      // Quiet: the scores, and latency with nothing new to index.
       const results = [];
-      for (const question of fixture.questions) {
-        const { answer, ms } = await server.call(question.ask.tool, { ...question.ask, tool: undefined, limit: 10 });
-        latency.search.push(ms);
+      const quiet = summary(await timed(0, (question, answer) => {
         const ids = captureIds(answer);
         const rank = ids.findIndex((id) => question.expect.includes(id));
         results.push({ id: question.id, kind: question.kind, rank: rank === -1 ? null : rank + 1, top: ids.slice(0, 5) });
+      }));
+
+      // Writing: the same calls while the writer appends, a batch apart.
+      const writer = await startWriter({ path, keyFile });
+      let writing;
+      try {
+        writing = summary(await timed(PACE_MS));
+      } catch (err) {
+        await writer.stop().catch(() => {});
+        throw err;
       }
-      const span = { from: fixture.captures.map((c) => c.at).sort()[0], to: fixture.captures.map((c) => c.at).sort().at(-1) };
-      for (let i = 0; i < 20; i++) {
-        latency.recent.push((await server.call('recent', { limit: 10 })).ms);
-        latency.timeline.push((await server.call('timeline', { ...span, limit: 50 })).ms);
-        latency.now.push((await server.call('now', {})).ms);
-      }
+      const written = await writer.stop();
 
       const score = (subset) => ({
         questions: subset.length,
@@ -167,6 +261,7 @@ async function main() {
         recallAt5: subset.filter((r) => r.rank !== null && r.rank <= 5).length / (subset.length || 1),
         mrr: subset.reduce((sum, r) => sum + (r.rank ? 1 / r.rank : 0), 0) / (subset.length || 1),
       });
+      const rounded = (summaryOf) => Object.fromEntries(Object.entries(summaryOf).map(([tool, l]) => [tool, { p50: Math.round(l.p50), p95: Math.round(l.p95) }]));
       const report = {
         server: options.server.join(' '),
         captures: captures.length,
@@ -174,20 +269,24 @@ async function main() {
         all: score(results),
         keyword: score(results.filter((r) => r.kind === 'keyword')),
         paraphrase: score(results.filter((r) => r.kind === 'paraphrase')),
-        latencyMs: Object.fromEntries(Object.entries(latency).map(([tool, values]) => [tool, { p50: Math.round(percentile(values, 50)), p95: Math.round(percentile(values, 95)) }])),
+        latencyMs: { quiet: rounded(quiet), writing: rounded(writing) },
+        writtenDuringTiming: written,
         missed: results.filter((r) => r.rank === null || r.rank > 5).map((r) => r.id),
         target: TARGET,
       };
-      report.pass = report.all.recallAt5 >= TARGET.recallAt5 && report.latencyMs.search.p95 < TARGET.searchP95Ms;
+      // Gated on the measured percentile; rounding is for display only.
+      report.pass = report.all.recallAt5 >= TARGET.recallAt5 && writing.search.p95 < TARGET.searchP95Ms;
 
       const pct = (x) => `${(x * 100).toFixed(0)}%`;
+      const lines = (name, summaryOf) => Object.entries(summaryOf).map(([tool, l]) => `${tool.padEnd(10)} p50 ${String(l.p50).padStart(4)} ms   p95 ${String(l.p95).padStart(4)} ms   (${name})`);
       process.stdout.write([
         `pcap-eval — ${report.captures} captures, server: ${report.server}`,
         `cold start (first call, building memory): ${report.coldStartMs} ms`,
         ...['all', 'keyword', 'paraphrase'].map((k) => `${k.padEnd(10)} recall@1 ${pct(report[k].recallAt1).padStart(4)}  recall@5 ${pct(report[k].recallAt5).padStart(4)}  MRR ${report[k].mrr.toFixed(2)}  (${report[k].questions} questions)`),
-        ...Object.entries(report.latencyMs).map(([tool, l]) => `${tool.padEnd(10)} p50 ${String(l.p50).padStart(4)} ms   p95 ${String(l.p95).padStart(4)} ms`),
+        ...lines('quiet', report.latencyMs.quiet),
+        ...lines(`writing: ${written} captures appended while timed`, report.latencyMs.writing),
         `missed in the top 5: ${report.missed.join(', ') || 'none'}`,
-        `target: recall@5 ≥ ${pct(TARGET.recallAt5)}, search p95 < ${TARGET.searchP95Ms} ms — ${report.pass ? 'PASS' : 'FAIL'}`,
+        `target: recall@5 ≥ ${pct(TARGET.recallAt5)}, search p95 < ${TARGET.searchP95Ms} ms while writing — ${report.pass ? 'PASS' : 'FAIL'}`,
         '',
       ].join('\n'));
       if (options.json) writeFileSync(options.json, `${JSON.stringify({ ...report, results }, null, 2)}\n`);
@@ -200,7 +299,12 @@ async function main() {
   }
 }
 
-main().catch((err) => {
+// A run that stops before reporting never exits 0, however it stopped.
+let finished = false;
+process.on('exit', (code) => {
+  if (!finished && code === 0) process.exitCode = 2;
+});
+main().then(() => { finished = true; }, (err) => {
   process.stderr.write(`pcap-eval: ${err.message}\n`);
   process.exit(2);
 });

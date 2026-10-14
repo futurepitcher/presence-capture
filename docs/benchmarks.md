@@ -14,20 +14,28 @@ npm run eval -- --days 30 --server "$(swift build -c release --package-path pack
 
 | | Recall@1 | Recall@5 | MRR |
 |---|---|---|---|
-| All 50 questions | 70% | **80%** | 0.74 |
-| 25 keyword questions | 100% | 100% | 1.00 |
+| All 50 questions | 68% | **80%** | 0.73 |
+| 25 keyword questions | 96% | 100% | 0.98 |
 | 25 paraphrased questions | 40% | 60% | 0.49 |
 
-| Tool | p50 | p95 |
-|---|---|---|
-| `search` | 2 ms | **6 ms** |
-| `recent` | 3 ms | 3 ms |
-| `timeline` | 3 ms | 3 ms |
-| `now` | 12 ms | 12 ms |
+Each tool is timed twice: on a quiet store, and again while
+[`eval/writer.js`](../eval/writer.js) appends twelve captures a second beside
+the server, with the calls a quarter second apart, so each one indexes new
+captures and meets a write. The daemon writes far less (it samples every five
+seconds), so the second column is an upper bound. The gate is on it.
+
+| Tool | p50, quiet | p95, quiet | p50, writing | p95, writing |
+|---|---|---|---|---|
+| `search` | 2 ms | 6 ms | 14 ms | **21 ms** |
+| `recent` | 3 ms | 3 ms | 17 ms | 21 ms |
+| `timeline` | 3 ms | 3 ms | 3 ms | 5 ms |
+| `now` | 12 ms | 12 ms | 14 ms | 14 ms |
 
 - **The store:** 18,036 captures over 30 days.
 - **Cold start:** 1.3 s for the first call, which reads everything the grant admits into memory.
-- **Targets:** recall@5 at least 0.80 and search p95 under 300 ms, both met. Recall is at the target exactly, with no room to spare.
+- **While writing:** 228 captures appended during the timed calls.
+- **Targets:** recall@5 at least 0.80 and search p95 under 300 ms while writing, both met. Recall is at the target exactly, with no room to spare.
+- **Answers:** a question counts as answered only by a capture that answers it on its own; one that only mentions the subject doesn't count.
 
 Search by meaning was measured the same way, with Apple's on-device sentence
 embedding and the same 30 days:
