@@ -73,6 +73,8 @@ struct DictationParts {
     /// Whether the selected key is down now, by its physical key: never a modifier the other hand
     /// may also be holding.
     var keyDown: (DictationKey) -> Bool = { CGEventSource.keyState(.combinedSessionState, key: CGKeyCode($0.keyCode)) }
+    /// The clock key events and polls are timed on: the system's uptime, as the event tap's are.
+    var uptime: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
 }
 
 /// Dictation's settings, in the app's defaults.
@@ -264,7 +266,7 @@ final class Dictation: Dictating, @unchecked Sendable {
             cancelAll(.tapDisabled)
         case .flagsChanged:
             act(hold.flagsChanged(keyCode: event.getIntegerValueField(.keyboardEventKeycode), flags: event.flags.rawValue,
-                                  at: ProcessInfo.processInfo.systemUptime))
+                                  at: parts.uptime()))
         default:
             break
         }
@@ -365,7 +367,7 @@ final class Dictation: Dictating, @unchecked Sendable {
             guard let self else { return }
             // A permission taken away stops it at once, not at the app's next tick.
             guard self.parts.allowed() else { return self.cancelAll(.permissionLost) }
-            self.act(self.hold.poll(keyDown: self.parts.keyDown(self.hold.key), at: ProcessInfo.processInfo.systemUptime))
+            self.act(self.hold.poll(keyDown: self.parts.keyDown(self.hold.key), at: self.parts.uptime()))
         }
         // In every mode, so menu tracking never stops it.
         RunLoop.main.add(timer, forMode: .common)

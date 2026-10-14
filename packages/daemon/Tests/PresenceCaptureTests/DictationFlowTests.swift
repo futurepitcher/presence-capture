@@ -199,7 +199,9 @@ final class DictationFlowTests: XCTestCase {
                                        focusRead.pass()
                                        return !place.focusLost && place.sample.focus == focus
                                    },
-                                   finishTyping: {}, pasteWaitWhile: { [unowned self] in pastesWait = $0 }, keyDown: { _ in true })
+                                   finishTyping: {}, pasteWaitWhile: { [unowned self] in pastesWait = $0 }, keyDown: { _ in true },
+                                   // The key is pressed at test times (0, then 2): polls while it's held are at 1.
+                                   uptime: { 1 })
         return Dictation(store: store, spans: spans, defaults: defaults, held: { [unowned self] in isHeld },
                          paused: { [unowned self] in isHeld }, fragments: { [unowned self] in fragments }, log: { _ in }, parts: parts)
     }
@@ -243,6 +245,17 @@ final class DictationFlowTests: XCTestCase {
         XCTAssertEqual(typed, ["Send the deck on friday."])
         dictation.flush()
         XCTAssertEqual(try kept(), 1)
+    }
+
+    func testAHoldPastAPollIsStillADictation() async throws {
+        let dictation = try dictation()
+        dictation.press(keyCode: 63, flags: fn, at: 0)
+        // Long enough for the poll that reads the key while it's held to run.
+        try await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertTrue(listener.listening, "a held key was cancelled by its poll")
+        dictation.press(keyCode: 63, flags: 0, at: 2)
+        await until { !typed.isEmpty }
+        XCTAssertEqual(typed, ["Send the deck on friday."])
     }
 
     func testAFocusThatMovedTypesNothingButKeepsWhatWasSaid() async throws {
