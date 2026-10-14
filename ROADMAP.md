@@ -131,6 +131,9 @@ surface sits behind the same grants, envelope and egress log as MCP.
   Cursor.
 - ✅ The menu's set-up window, Connect an Agent…, Agents Read…, Keep Captures
   For and Check for Updates.
+- ✅ Dictation (experimental in 0.1): hold a key, speak, and it's typed,
+  transcribed on this Mac. Its limits are in
+  [docs/known-limits.md](docs/known-limits.md#dictation).
 - ✅ The release pipeline: built, signed, notarized and attested in GitHub
   Actions from a `v*` tag, with checksums, an SBOM and how to verify it
   ([docs/verify.md](docs/verify.md)).

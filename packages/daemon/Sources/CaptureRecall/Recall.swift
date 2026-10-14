@@ -28,7 +28,7 @@ public final class Recall {
         memory.exec("""
             CREATE TABLE doc (
               capture_id TEXT PRIMARY KEY, sequence INTEGER NOT NULL, captured_at TEXT NOT NULL,
-              capture_type TEXT NOT NULL, source_app TEXT, content TEXT
+              capture_type TEXT NOT NULL, source TEXT, source_app TEXT, content TEXT
             );
             CREATE INDEX doc_time ON doc (captured_at);
             CREATE VIRTUAL TABLE words USING fts5(capture_id UNINDEXED, content);
@@ -56,15 +56,18 @@ public final class Recall {
         while afterSequence < latest {
             let page = try store.read(grantId: grantId, ReadRequest(tool: "index", query: "index", afterSequence: afterSequence))
             if page.isEmpty { break }
+            // Where each came from (the envelope doesn't say): dictation is the microphone too, though
+            // its source_app is the app it was typed into.
+            let sources = try store.sources(of: page.map { Self.parts($0).provenance["capture_id"] as? String ?? "" })
             for envelope in page {
                 let (provenance, content) = Self.parts(envelope)
                 let id = provenance["capture_id"] as? String ?? ""
                 let sequence = (provenance["sequence"] as? NSNumber)?.intValue ?? 0
                 memory.run("""
-                    INSERT INTO doc (capture_id, sequence, captured_at, capture_type, source_app, content) VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO doc (capture_id, sequence, captured_at, capture_type, source, source_app, content) VALUES (?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT (capture_id) DO NOTHING
                     """, id, sequence, provenance["captured_at"] as? String ?? "", provenance["capture_type"] as? String ?? "",
-                    provenance["source_app"] as? String, content)
+                    sources[id], provenance["source_app"] as? String, content)
                 if let content { memory.run("INSERT INTO words (capture_id, content) VALUES (?, ?)", id, content) }
                 afterSequence = max(afterSequence, sequence)
             }
@@ -120,11 +123,12 @@ public final class Recall {
         guard device == nil || ["input", "output"].contains(device as? String ?? "") else { throw ToolError.invalid("device must be input or output") }
         let (start, end) = try span(args)
         let which = device as? String
+        // The microphone is ambient speech from it and dictation; this Mac is what it played.
+        let filter = ["input": "AND (source_app = 'input' OR source = 'dictation')", "output": "AND source_app = 'output'"][which ?? ""] ?? ""
         let ids = memory.ids("""
-            SELECT capture_id FROM doc WHERE capture_type = 'audio_transcript' AND captured_at >= ? AND captured_at <= ?
-              AND (? IS NULL OR source_app = ?)
+            SELECT capture_id FROM doc WHERE capture_type = 'audio_transcript' AND captured_at >= ? AND captured_at <= ? \(filter)
             ORDER BY captured_at, sequence LIMIT ?
-            """, start, end, which, which, try limit(args, 100))
+            """, start, end, try limit(args, 100))
         return try serve("transcript", "\(start)/\(end)/\(which ?? "")", ids)
     }
 
