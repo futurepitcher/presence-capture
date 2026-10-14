@@ -346,6 +346,17 @@ final class ConnectTests: XCTestCase {
         XCTAssertFalse(running(marker), "claude, or what it started, was left running")
     }
 
+    func testAWorkerThatIgnoresBeingAskedIsStoppedWhenClaudeTimesOut() throws {
+        let marker = "pcap-test-\(UUID().uuidString.prefix(8))"
+        // claude exits when asked; what it started ignores being asked, and would go on.
+        let (claude, _) = try claudeRunning("sh -c 'trap \"\" TERM; sleep 30 # \(marker)' &\ntrap 'exit 0' TERM\nsleep 30 & wait")
+        var connector = connector(claude: claude)
+        connector.claudeWait = 1
+        let plan = try connector.plan(.claudeCode, entry: entry("grn_new"))
+        XCTAssertThrowsError(try connector.apply(plan))
+        XCTAssertFalse(running(marker), "a worker that ignores SIGTERM outlived the connection")
+    }
+
     func testWhatClaudeLeavesHoldingItsOutputIsStoppedNotWaitedFor() throws {
         let marker = "pcap-test-\(UUID().uuidString.prefix(8))"
         let (claude, _) = try claudeRunning("sh -c 'sleep 30 # \(marker)' &\nexit 0")
