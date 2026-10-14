@@ -81,9 +81,11 @@ FTS5 table on disk. That breaks the project's central guarantee:
    own accounting.**
    - The native MCP server is a separate process in the app bundle, launched
      by an MCP client over stdio. It gets the master key from the Keychain,
-     whose item lists both the app and `pcap-mcp` as trusted.
+     whose item lists both the app and `pcap-mcp` as trusted. (Amended
+     2026-10-14: and `pcap`, the admin CLI that issues grants and Forgets.)
    - It holds the indexes, and serves `search`, `timeline`, `now`, `session`
-     and `transcript` through grants and the envelope.
+     and `transcript` through grants and the envelope. (Amended 2026-10-14:
+     and `recent`, the newest captures.)
    - ADR 0001 requires every served row to be recorded in the egress log, so
      `pcap-mcp` opens the store writable, under an **SQLite authorizer that
      refuses every write except an insert into `egress_record`**. The log's

@@ -50,11 +50,59 @@ So 0.1 searches by keyword
 ([ADR 0008, amended](adr/0008-recall-indexes-in-memory.md)). A stronger model
 has to beat 40/50 on this eval before it ships.
 
+## The live forget check
+
+Forget, on a real Mac with the app capturing, checked the way someone holding
+a copy of the store would check it: by looking for the exact sealed bytes of
+what was forgotten in every file under the store's folder.
+[`scripts/live-forget-check.mjs`](../scripts/live-forget-check.mjs) walks you
+through it, with the app running and capturing for 20 minutes or more, and Hear
+the Microphone on:
+
+```sh
+node scripts/live-forget-check.mjs \
+  --store "$HOME/Library/Application Support/Presence Capture/store.sqlite" \
+  --mcp "/Applications/Presence Capture.app/Contents/MacOS/pcap-mcp"
+```
+
+1. It gives itself a one-day grant, notes a control capture from before the
+   window, and asks you to put two words on screen and say them aloud. It
+   waits until both are captured and readable through `pcap-mcp`: from the
+   screen, and heard by the microphone.
+2. It asks you to Pause, and waits until nothing new is captured for two of
+   the app's ticks. Then it snapshots, capture by capture, the sealed bytes of
+   everything from the last 20 minutes (wider than the 15 Forget will take):
+   wrapped keys, sealed text and payloads, projection outputs. These are raw
+   bytes, so no key is needed. Every capture Forget then revokes must have been
+   snapshotted.
+3. It holds a read transaction of its own on the store, so the write-ahead log
+   can't be checkpointed. Then it asks you to choose Forget the Last 15
+   Minutes… in the menu.
+4. While it holds that, it checks:
+   - the words can no longer be found;
+   - the revocation names exactly, no more and no less, every capture stamped
+     in its range and what was derived from them, less what earlier
+     revocations had taken, worked out from the store's metadata;
+   - the erasure receipt and per-projection receipts exist, with the erasure
+     pending.
+5. It lets go, and within 10 seconds (two of the app's 5-second ticks) checks:
+   - the erasure completed;
+   - none of the snapshotted bytes of the captures it revoked is left in any
+     file under the store's folder;
+   - nothing stamped inside the window is stored unrevoked;
+   - the control capture is still readable.
+
+It exits 0 on PASS, 1 on any failed check, 2 if it can't run, and 3 if it's
+incomplete: the words were seen but never heard. It revokes its own grant
+however it ends, Ctrl-C included, and checks that it did. The artifact scan is
+the conformance suite's
+([`inspect.js`](../packages/schema/conformance/store/inspect.js)).
+
 ## Still to measure
 
 The release plan's live checks are run on the maintainer's Mac and recorded
 here before 0.1.0:
-- the live forget check;
+- the live forget check (above);
 - the seven-day soak (CPU, memory, store growth);
 - the screenpipe parity trial;
 - dictation latency.

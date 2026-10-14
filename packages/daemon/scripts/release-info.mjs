@@ -123,18 +123,25 @@ const info = {
 writeFileSync(join(args.out, 'build-info.json'), `${JSON.stringify(info, null, 2)}\n`);
 
 const dmg = basename(args.dmg);
+const commit = info.source.commit ?? 'this tag';
+// What the build is, said as it is: only a signed build in GitHub Actions has an attestation to check.
+const how = args.unsigned
+  ? `An unsigned build of \`${commit}\`: signed ad hoc and not notarized. It checks the packaging; it is not a release, and has no attestation.\n`
+  : env.GITHUB_ACTIONS
+    ? `Built in GitHub Actions on a GitHub-hosted runner from \`${commit}\`, signed with Developer ID and notarized by Apple. To check that this DMG is that build, before you open it:
+
+\`\`\`sh
+gh attestation verify ${dmg} -R ${REPO} --signer-workflow ${REPO}/.github/workflows/release.yml --source-ref refs/tags/v${args.version} --source-digest ${info.source.commit ?? '<the commit>'} --deny-self-hosted-runners
+shasum -a 256 -c SHA256SUMS
+\`\`\`
+`
+    : `Built outside GitHub Actions from \`${commit}\`, signed with Developer ID and notarized by Apple. It has no attestation: \`shasum -a 256 -c SHA256SUMS\` checks its files.\n`;
 writeFileSync(join(args.out, 'notes.md'), `Presence Capture ${args.version}, for Macs with Apple silicon and macOS 14 or later (hearing and dictation need macOS 26).
 
 | File | SHA-256 |
 |------|---------|
 | \`${dmg}\` | \`${sha256(args.dmg)}\` |
 
-Built in GitHub Actions on a GitHub-hosted runner from \`${info.source.commit ?? 'this tag'}\`, signed with Developer ID and notarized by Apple. To check that this DMG is that build, before you open it:
-
-\`\`\`sh
-gh attestation verify ${dmg} -R ${REPO} --signer-workflow ${REPO}/.github/workflows/release.yml --source-ref refs/tags/v${args.version} --source-digest ${info.source.commit ?? '<the commit>'} --deny-self-hosted-runners
-shasum -a 256 -c SHA256SUMS
-\`\`\`
-
+${how}
 The SBOM, what it was built with, and the full checks are attached; see [docs/verify.md](https://github.com/${REPO}/blob/main/docs/verify.md).
 `);

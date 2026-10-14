@@ -33,7 +33,7 @@ It passes only for a DMG that:
 - was built on a GitHub-hosted runner (`--deny-self-hosted-runners`).
 
 These checks **must fail**. Trying them is how you know the policy is real:
-- a DMG from a dry run, which is dispatched on another tag (`v0.0.0`);
+- a DMG from a dry run, which the workflow runs only on a `v0.0.*` tag;
 - the command above with `--source-ref refs/tags/v0.0.0`;
 - the command above with `--source-digest` set to any other commit;
 - the command above with

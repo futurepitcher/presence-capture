@@ -52,6 +52,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var sensors: SensorPlugins?
     /// Whether capture is held, for sensor plugins, whose output arrives off the main thread.
     private let heldNow = Flag()
+    /// Since when the exclusion list has been readable: what's heard is kept only if said since (R8).
+    private let exclusionsReadable = ReadableSince()
     private var timers: [Timer] = []
     private var problem: String?
 
@@ -87,10 +89,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Tells a capture under way to stop at its next window, and the listener whether it may listen,
     /// as soon as either changes. `going`: the system just said the screens are sleeping, another
     /// user is taking the Mac or it's locking, which may not read so yet.
+    /// The exclusion list, read now: nil when it exists but can't be read, and then nothing is
+    /// captured, what's heard included, until it can be (R8). Every read is told to hearing.
+    private func loadExclusions() -> [String]? {
+        let fragments = Exclusion.load(exclusionPath)
+        exclusionsReadable.observe(fragments != nil)
+        return fragments
+    }
+
     private func holdCapture(going: Bool = false) {
         let held = going || heldFor != nil
         heldNow.value = held
-        audio?.tick(listening: !held && CGPreflightScreenCaptureAccess())
+        audio?.tick(listening: !held && CGPreflightScreenCaptureAccess() && loadExclusions() != nil)
         if held {
             activity?.reset()
             dictation?.cancel(paused ? .paused : .locked)
@@ -114,9 +124,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             activity = ActivityCapturer(store: store, log: log.write)
             if #available(macOS 26, *) {
                 let defaults = self.defaults
+                let exclusionsReadable = self.exclusionsReadable
                 audio = AudioCapturer(store: store, devices: {
                     (defaults.object(forKey: "hearMicrophone") as? Bool ?? false, defaults.object(forKey: "hearSystemAudio") as? Bool ?? true)
-                }, spans: dictationSpans, log: log.write)
+                }, spans: dictationSpans, mayKeep: { exclusionsReadable.admits($0) }, log: log.write)
                 let exclusions = self.exclusionPath
                 dictation = Dictation(store: store, spans: dictationSpans, defaults: defaults,
                                       held: { [weak self] in self?.heldFor != nil }, paused: { [weak self] in self?.paused ?? true },
@@ -151,11 +162,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let held = self.heldFor != nil
             self.heldNow.value = held
             let seesScreen = CGPreflightScreenCaptureAccess()
-            self.audio?.tick(listening: !held && seesScreen)
+            // A list that exists but can't be read: nothing is captured until it can be (R8), what's
+            // heard included. Hearing stops, and what it was still transcribing isn't kept.
+            let fragments = self.loadExclusions()
+            self.audio?.tick(listening: !held && seesScreen && fragments != nil)
             // An erasure a reader held up is finished as soon as the reader lets go (ADR 0002).
             self.admin.async { if store.isErasurePending { _ = try? store.finishErasure() } }
-            // A list that exists but can't be read: nothing is captured until it can be (R8).
-            let fragments = Exclusion.load(self.exclusionPath)
             // Activity is noted while capturing, and the lock itself is noted while locked (it
             // carries no app or window). Paused, asleep or another user's: nothing at all.
             if let fragments, !held || (screenLocked() && !self.paused) {
