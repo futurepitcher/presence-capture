@@ -3,6 +3,7 @@
 import CoreMedia
 import CryptoKit
 import Foundation
+import ScreenCaptureKit
 @testable import PresenceCapture
 import XCTest
 
@@ -94,6 +95,28 @@ final class DictationAppTests: XCTestCase {
         XCTAssertEqual(Inserter.insert(" world", into: moved, proceed: { false }), .stopped)
         XCTAssertEqual(moved.changed, 0, "the field was changed after it was told not to")
         XCTAssertEqual(moved.text, "Hello")
+    }
+
+    func testNothingHeardIsKeptWhileTheExclusionListCantBeRead() throws {
+        guard #available(macOS 26, *) else { throw XCTSkip("needs macOS 26") }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try CaptureStore(path: dir.appendingPathComponent("store.sqlite").path, masterKey: SymmetricKey(size: .bits256))
+        let readable = ReadableSince()
+        let audio = AudioCapturer(store: store, devices: { (true, true) }, mayKeep: { readable.admits($0) }, log: { _ in })
+        let t0 = Date()
+        let rows = { try store.rows("SELECT COUNT(*) FROM capture_event").first?.int(0) }
+        // Said while the list couldn't be read: not kept, even once it can be again.
+        readable.observe(false, at: t0)
+        let duringOutage = Spoken(at: t0.addingTimeInterval(2), seconds: 2, device: "Mic (input)", deviceType: "input", text: "the plan for friday")
+        audio.keep(duringOutage, from: .microphone)
+        XCTAssertEqual(try rows(), 0, "heard and kept while the exclusion list couldn't be read")
+        readable.observe(true, at: t0.addingTimeInterval(10))
+        audio.keep(duringOutage, from: .microphone)
+        XCTAssertEqual(try rows(), 0, "speech from while the list couldn't be read got in once it could")
+        // Said since it can be read: kept.
+        audio.keep(Spoken(at: t0.addingTimeInterval(11), seconds: 2, device: "Mic (input)", deviceType: "input", text: "after"), from: .microphone)
+        XCTAssertEqual(try rows(), 2, "the segment and its transcript")
     }
 
     func testAmbientAudioDropsWhatWasDictatedFromTheMicrophoneOnly() throws {

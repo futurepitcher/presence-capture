@@ -2,11 +2,12 @@ name: Release
 
 # A signed, notarized DMG of Presence Capture, built from a v* tag (R3). A pushed tag makes a
 # draft GitHub Release, which the maintainer publishes as a separate step. A dispatched run is a
-# dry run: it builds, signs, notarizes and attests, and publishes nothing. It too must be
-# dispatched on a v* tag, since only those can reach the release environment.
+# dry run: it builds, signs, notarizes and attests, and publishes nothing. It's dispatched on a
+# v0.0.* tag, and only those: verifying a release (docs/verify.md) can't tell a dispatched run's
+# attestation from a pushed one's, so the tag must. Pushing a v0.0.* tag builds nothing.
 on:
   push:
-    tags: ['v*']
+    tags: ['v*', '!v0.0.*']
   workflow_dispatch:
 
 permissions:
@@ -34,11 +35,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # All of history: the build number (CFBundleVersion) is the count of commits.
+          fetch-depth: 0
 
       - name: From a v* tag
         run: |
           if [[ "${GITHUB_REF}" != refs/tags/v* ]]; then
             echo "A release, or its dry run, runs on a v* tag (dispatch the dry run on one)." >&2
+            exit 1
+          fi
+          dry=false
+          [[ "${GITHUB_REF}" == refs/tags/v0.0.* ]] && dry=true
+          if [[ "${GITHUB_EVENT_NAME}" == workflow_dispatch && "${dry}" == false ]] || [[ "${GITHUB_EVENT_NAME}" == push && "${dry}" == true ]]; then
+            echo "A dry run is dispatched on a v0.0.* tag (as v0.0.0); a release is a pushed tag of any other version." >&2
             exit 1
           fi
           echo "VERSION=${GITHUB_REF_NAME#v}" >> "${GITHUB_ENV}"

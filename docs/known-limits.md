@@ -4,6 +4,22 @@ What Presence Capture 0.1 doesn't do, or does only partly, and why. Each is
 here because a review found it and it was judged acceptable for this release,
 or because it can't be fixed from inside the app.
 
+## Capture
+
+- **Exclusions don't reach ambient audio.** The exclusion list matches app
+  names and window titles, so it governs what's read from the screen, activity
+  and dictation. What the Mac plays, and what the microphone hears, isn't tied
+  to a window: a call in an excluded app is still heard. Pause, or turn hearing
+  off in the menu, to keep it out. If the list can't be read, nothing is
+  captured at all, hearing included, until it can be.
+- **OCR reads what's drawn.** Accessibility text skips secure text fields.
+  When a window's text has to be read by OCR instead, whatever is drawn is
+  read: a password field normally shows dots, but one shown in clear (a "show
+  password" option) can be captured. Exclude the app or window to keep it out.
+- **Every capture is `standard`.** The privacy level doesn't yet tell secrets
+  from ordinary text. Exclusion, redaction and a grant's types, sources and
+  time window do that work (ADR 0001 §6.3).
+
 ## Dictation
 
 Dictation is experimental in 0.1.
@@ -44,3 +60,19 @@ Dictation is experimental in 0.1.
   Cursor, Claude Code) doesn't take that lock: a change it makes in the
   moment between the check and the write can be lost. The config is copied
   aside first.
+
+## Agents and the log
+
+- **A denied read isn't logged.** A call with no grant, or an expired or
+  revoked one, gets an explicit denial, never an empty answer, but 0.1 doesn't
+  write the denial to the egress log, as ADR 0001 says it should: each record
+  in the log names a grant, and a denial has none to name. Agents Read… and
+  `pcap egress` show what was served, not what was refused.
+- **The log counts what `pcap-mcp` loaded, too.** Its search index is built in
+  memory from the rows its grant admits, recorded as tool `index`, so the log
+  lists more rows than an agent was shown. What it was shown is in the records
+  for the tools it called.
+- **The log is evidence, not a lock.** It's hash-chained, and its triggers
+  refuse changes, but it lives in your store's file: a program running as you
+  that can write that file can rewrite it, and recompute the chain. `pcap
+  check` finds a change made without doing that.

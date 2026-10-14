@@ -57,14 +57,18 @@ final class AudioCapturer: NSObject, Listener, SCStreamOutput, SCStreamDelegate,
     /// Dictations (R2b): ambient audio doesn't keep what was dictated, nor what arrives too late to
     /// be checked against them.
     private let spans: DictationSpans
-    private var dropped = (dictated: 0, tooLate: 0)
+    private var dropped = (dictated: 0, tooLate: 0, unexcludable: 0)
+    /// Whether what was said at a moment may be kept: not if the exclusion list couldn't be read
+    /// then, or at any time since (R8).
+    private let mayKeep: @Sendable (Date) -> Bool
     /// Quitting: from then nothing makes it listen again, whatever a tick says.
     private var ending = false
 
     init(store: CaptureStore, devices: @escaping @Sendable () -> (microphone: Bool, systemAudio: Bool), spans: DictationSpans = DictationSpans(),
-         log: @escaping @Sendable (String) -> Void) {
+         mayKeep: @escaping @Sendable (Date) -> Bool = { _ in true }, log: @escaping @Sendable (String) -> Void) {
         self.store = store
         self.spans = spans
+        self.mayKeep = mayKeep
         self.devices = devices
         self.log = log
     }
@@ -108,11 +112,13 @@ final class AudioCapturer: NSObject, Listener, SCStreamOutput, SCStreamDelegate,
     }
 
     func takeCounts() -> (input: Int, output: Int) {
-        let (kept, drops) = lock.withLock { () -> ((input: Int, output: Int), (dictated: Int, tooLate: Int)) in
-            defer { (counts, dropped) = ((0, 0), (0, 0)) }
+        let (kept, drops) = lock.withLock { () -> ((input: Int, output: Int), (dictated: Int, tooLate: Int, unexcludable: Int)) in
+            defer { (counts, dropped) = ((0, 0), (0, 0, 0)) }
             return (counts, dropped)
         }
-        if drops.dictated + drops.tooLate > 0 { log("audio.dropped dictated=\(drops.dictated) too_late=\(drops.tooLate)") }
+        if drops.dictated + drops.tooLate + drops.unexcludable > 0 {
+            log("audio.dropped dictated=\(drops.dictated) too_late=\(drops.tooLate) exclusions_unreadable=\(drops.unexcludable)")
+        }
         return kept
     }
 
@@ -286,8 +292,10 @@ final class AudioCapturer: NSObject, Listener, SCStreamOutput, SCStreamDelegate,
     }
 
     /// A segment and its transcript, written together or not at all, stamped when the words were
-    /// said: speech from a range forgotten while it was being transcribed is refused.
-    fileprivate func keep(_ spoken: Spoken, from type: SCStreamOutputType) {
+    /// said: speech from a range forgotten while it was being transcribed is refused, and none said
+    /// while the exclusion list couldn't be read is kept, however late it arrives.
+    func keep(_ spoken: Spoken, from type: SCStreamOutputType) {
+        guard mayKeep(spoken.at) else { return lock.withLock { dropped.unexcludable += 1 } }
         switch Self.admits(spoken, spans: spans, now: Date()) {
         case .keep: break
         case .dictated: return lock.withLock { dropped.dictated += 1 }

@@ -167,6 +167,9 @@ Defaults, which are the part that actually matters:
 
 - **A client with no grant receives nothing.** Not an empty result that looks
   like a successful query — an explicit authorisation failure, logged.
+  (Amended 2026-10-14: 0.1 returns the failure but doesn't yet log it; the
+  egress log's records each name a grant, and a denial has none to name. See
+  `docs/known-limits.md`.)
 - `sensitive` and `excluded` are **not grantable by default**. Granting either
   requires an explicit user action per level, per client.
 - **`sacred_mode` is not grantable at all.** It is absent from the enum above
