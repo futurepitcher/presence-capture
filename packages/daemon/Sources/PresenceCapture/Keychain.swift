@@ -29,9 +29,14 @@ enum Keychain {
     /// readers to share the key with.
     private static var bundled: Bool { Bundle.main.bundleURL.pathExtension == "app" }
 
+    /// A store is there, but no key for it is in this Mac's Keychain (a new Mac, a Keychain reset):
+    /// a new key would never open it, and would stand in the way of the old one coming back.
+    struct StoreWithoutKey: Error {}
+
     /// The key, made or upgraded as needed. In a bundle, a key readers can't be given is an error,
-    /// not a quiet fallback: the app would capture while every agent's server failed to open.
-    static func masterKey(log: (String) -> Void = { _ in }) throws -> SymmetricKey {
+    /// not a quiet fallback: the app would capture while every agent's server failed to open. No key
+    /// is made for a store that's already there (`storeExists`).
+    static func masterKey(storeExists: Bool = false, log: (String) -> Void = { _ in }) throws -> SymmetricKey {
         if let key = try MasterKeyItem.read(service: service, account: MasterKeyItem.current) { return SymmetricKey(data: key) }
         var found: (account: String, key: Data)?
         for account in MasterKeyItem.older {
@@ -40,6 +45,7 @@ enum Keychain {
                 break
             }
         }
+        if found == nil && storeExists { throw StoreWithoutKey() }
         // One key, whichever launch makes it: added as the app's own item, or, when another launch
         // added it a moment before, read back from there.
         let key = try found?.key ?? addOrRead("store", SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }, access: nil)

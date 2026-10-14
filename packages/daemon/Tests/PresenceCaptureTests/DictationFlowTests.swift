@@ -55,7 +55,7 @@ final class DictationFlowTests: XCTestCase {
         func working() {}
         func hold(_ text: String) { held = text }
         func say(_ message: String) { said = message }
-        func hide() {}
+        func hide() { held = nil }
     }
 
     /// Holds a proposal until released.
@@ -263,6 +263,17 @@ final class DictationFlowTests: XCTestCase {
         dictation.press(keyCode: 63, flags: 0, at: 2)
         await until { !typed.isEmpty }
         XCTAssertEqual(typed, ["Send the deck on friday."])
+    }
+
+    func testWordsLeftInThePanelGoWhenItsPausedOrLocked() async throws {
+        let dictation = try dictation()
+        dictation.press(keyCode: 63, flags: fn, at: 0)
+        await settle()
+        place.sample.focus = DictationFocus(app: "com.apple.Safari", element: 2, security: .open)
+        dictation.press(keyCode: 63, flags: 0, at: 2)
+        await until { panel.held != nil }
+        dictation.cancel(.locked)
+        XCTAssertNil(panel.held, "the panel kept showing what was said after the screen locked")
     }
 
     func testAFocusThatMovedTypesNothingButKeepsWhatWasSaid() async throws {

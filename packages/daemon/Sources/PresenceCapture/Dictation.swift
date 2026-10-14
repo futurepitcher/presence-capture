@@ -366,6 +366,9 @@ final class Dictation: Dictating, @unchecked Sendable {
     private func cancelAll(_ why: DictationCancel) {
         act(hold.cancel(why))
         for token in Array(live.keys) { drop(token, why) }
+        // Words a finished dictation left in the panel to copy go too: a Pause or the lock shows
+        // nothing of what was said.
+        if shown == nil { panel.hide() }
     }
 
     private func startPolling() {

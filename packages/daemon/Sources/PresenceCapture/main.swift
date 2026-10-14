@@ -121,7 +121,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         log = Logger(path: home + "/logs/capture.log")
         let log = self.log!
         do {
-            let store = try CaptureStore(path: home + "/store.sqlite", masterKey: try Keychain.masterKey(log: log.write))
+            let storeExists = FileManager.default.fileExists(atPath: home + "/store.sqlite")
+            let store = try CaptureStore(path: home + "/store.sqlite", masterKey: try Keychain.masterKey(storeExists: storeExists, log: log.write))
             let capturer = ScreenCapturer(store: store, holding: screenHold, log: log.write)
             (self.store, self.capturer) = (store, capturer)
             activity = ActivityCapturer(store: store, log: log.write)
@@ -148,7 +149,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             log.write("start.ready")
         } catch {
             log.write("start.failed \(String(describing: type(of: error)))")
-            problem = error is MasterKeyError ? "The store's key couldn't be read from or kept in the Keychain" : "The capture store couldn't be opened"
+            problem = error is Keychain.StoreWithoutKey
+                ? "The store is here, but its key isn't in this Mac's Keychain. Restore the Keychain from the same backup as the store, or move the store aside to start a new one"
+                : error is MasterKeyError ? "The store's key couldn't be read from or kept in the Keychain" : "The capture store couldn't be opened"
         }
         watchSleep()
         // Permissions are asked for when the person chooses to, from the menu or the first-run

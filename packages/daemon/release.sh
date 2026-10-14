@@ -50,8 +50,11 @@ fi
 mkdir -p "${OUT_DIR}"
 rm -f "${OUT_DIR}/${DMG_NAME}" "${OUT_DIR}/SHA256SUMS"
 
+# The Apple credentials, kept from every step that doesn't need them (the build, the SBOM).
+APPLE_VARIABLES=(-u APPLE_CERTIFICATE -u APPLE_CERTIFICATE_PASSWORD -u APPLE_SIGNING_IDENTITY -u APPLE_ID -u APPLE_PASSWORD -u APPLE_TEAM_ID)
+
 # 1. Build: the bundle as build.sh makes it, signed ad hoc for now.
-PRESENCE_CAPTURE_VERSION="${VERSION}" PRESENCE_CAPTURE_SIGN_IDENTITY=- "${SCRIPT_DIR}/build.sh" "${WORK}/app" >/dev/null
+env "${APPLE_VARIABLES[@]}" PRESENCE_CAPTURE_VERSION="${VERSION}" PRESENCE_CAPTURE_SIGN_IDENTITY=- "${SCRIPT_DIR}/build.sh" "${WORK}/app" >/dev/null
 APP="${WORK}/app/Presence Capture.app"
 
 if [[ "${UNSIGNED}" == false ]]; then
@@ -108,7 +111,7 @@ if [[ "${UNSIGNED}" == false ]]; then
 fi
 
 # 6. What it was built with, the SBOM, the sums and the notes.
-node "${SCRIPT_DIR}/scripts/release-info.mjs" --version "${VERSION}" --app "${APP}" --dmg "${OUT_DIR}/${DMG_NAME}" --out "${OUT_DIR}" \
+env "${APPLE_VARIABLES[@]}" node "${SCRIPT_DIR}/scripts/release-info.mjs" --version "${VERSION}" --app "${APP}" --dmg "${OUT_DIR}/${DMG_NAME}" --out "${OUT_DIR}" \
   $([[ "${UNSIGNED}" == true ]] && echo --unsigned)
 (cd "${OUT_DIR}" && shasum -a 256 "${DMG_NAME}" "Presence-Capture-${VERSION}.cdx.json" build-info.json > SHA256SUMS)
 echo "release.sh: ${OUT_DIR}/${DMG_NAME}$([[ "${UNSIGNED}" == true ]] && echo " (unsigned: not a release)")"
