@@ -64,10 +64,33 @@ final class ActivityCapturerTests: XCTestCase {
         capturer.tick(fragments: [], seesScreen: true)
         let gone = expectation(description: "the app goes")
         let started = Date()
-        AppDelegate.finishWriting(activity: capturer, audio: nil) { gone.fulfill() }
+        AppDelegate.finishWriting(activity: capturer, audio: nil, admin: DispatchQueue(label: "admin"), connecting: DispatchGroup()) { gone.fulfill() }
         XCTAssertLessThan(Date().timeIntervalSince(started), 0.1, "quitting waited on the main thread")
         wait(for: [gone], timeout: 5)
         XCTAssertEqual(try store.rows("SELECT COUNT(*) FROM capture_event").first?.int(0), 1, "the app went before what was noted was written")
+    }
+
+    /// Work confirmed before Quit (a Forget queued for the store, a connection under way) is
+    /// finished before the app goes.
+    func testQuittingWaitsForConfirmedWork() {
+        let admin = DispatchQueue(label: "admin"), connecting = DispatchGroup()
+        let finished = Flag(), connected = Flag()
+        admin.async {
+            Thread.sleep(forTimeInterval: 0.4)
+            finished.value = true
+        }
+        connecting.enter()
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) {
+            connected.value = true
+            connecting.leave()
+        }
+        let gone = expectation(description: "the app goes")
+        AppDelegate.finishWriting(activity: nil, audio: nil, admin: admin, connecting: connecting) {
+            XCTAssertTrue(finished.value, "the app went before a confirmed Forget was done")
+            XCTAssertTrue(connected.value, "the app went during a connection")
+            gone.fulfill()
+        }
+        wait(for: [gone], timeout: 5)
     }
 
     /// The store held for seconds (another writer, or a revocation waiting on SQLite) never holds
