@@ -750,6 +750,8 @@ private extension Int {
     var nonZero: Int? { self == 0 ? nil : self }
 }
 
+// Everything the app makes (the store, its log, the exclusion list, sensors.json) is the person's alone.
+umask(0o077)
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate

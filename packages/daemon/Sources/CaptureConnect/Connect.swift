@@ -241,10 +241,19 @@ public struct Connector: Sendable {
             let backup = try copyAside(plan.file)
             switch plan.write {
             case .file(let text):
-                let manager = FileManager.default
-                let permissions = (try? manager.attributesOfItem(atPath: plan.file.path))?[.posixPermissions]
-                try Data(text.utf8).write(to: plan.file, options: .atomic)
-                if let permissions { try manager.setAttributes([.posixPermissions: permissions], ofItemAtPath: plan.file.path) }
+                // Through a link to the file it names (a dotfiles repo, say), which keeps its own
+                // permissions: the new text is written beside it, with them from the start, and moved
+                // into its place. A config that's new is the person's alone.
+                let target = plan.file.resolvingSymlinksInPath()
+                let mode = ((try? FileManager.default.attributesOfItem(atPath: target.path))?[.posixPermissions] as? NSNumber)
+                    .map { mode_t($0.uint16Value) } ?? 0o600
+                let temp = target.deletingLastPathComponent().appendingPathComponent(".\(target.lastPathComponent).presence-capture-\(UUID().uuidString)")
+                try Self.writeNew(Data(text.utf8), to: temp.path, mode: mode)
+                guard rename(temp.path, target.path) == 0 else {
+                    let error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                    unlink(temp.path)
+                    throw error
+                }
             case .claude(let claude, let add):
                 let remove = ["mcp", "remove", serverName, "--scope", "user"]
                 do {
@@ -294,9 +303,12 @@ public struct Connector: Sendable {
         return claudeEntry(file) == wanted
     }
 
+    /// What the config holds, copied aside as bytes into a file of the person's alone (never a copy of
+    /// a link, and never more readable than the config may be: it can hold an agent's secrets).
     private func copyAside(_ file: URL) throws -> URL? {
         let manager = FileManager.default
         guard manager.fileExists(atPath: file.path) else { return nil }
+        let contents = try Data(contentsOf: file.resolvingSymlinksInPath())
         let stamp = ISO8601DateFormatter.string(from: now(), timeZone: .current, formatOptions: [.withYear, .withMonth, .withDay, .withTime])
         let base = "\(file.lastPathComponent).presence-capture-backup-\(stamp)"
         var copy = file.deletingLastPathComponent().appendingPathComponent(base)
@@ -305,8 +317,30 @@ public struct Connector: Sendable {
             n += 1
             copy = file.deletingLastPathComponent().appendingPathComponent("\(base)-\(n)")
         }
-        try manager.copyItem(at: file, to: copy)
+        try Self.writeNew(contents, to: copy.path, mode: 0o600)
         return copy
+    }
+
+    /// A new file at `path` (refused if anything is there, a link included) holding `data`, with
+    /// `mode` from the moment it exists.
+    static func writeNew(_ data: Data, to path: String, mode: mode_t) throws {
+        let fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, mode)
+        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        var failed: Int32 = 0
+        if fchmod(fd, mode) != 0 { failed = errno }
+        data.withUnsafeBytes { buffer in
+            var offset = 0
+            while failed == 0, offset < buffer.count {
+                let n = write(fd, buffer.baseAddress! + offset, buffer.count - offset)
+                if n < 0 { failed = errno } else { offset += n }
+            }
+        }
+        if failed == 0, fsync(fd) != 0 { failed = errno }
+        close(fd)
+        if failed != 0 {
+            unlink(path)
+            throw POSIXError(POSIXErrorCode(rawValue: failed) ?? .EIO)
+        }
     }
 
     /// Runs `body` holding an advisory lock on `folder`, which connections take and the clients

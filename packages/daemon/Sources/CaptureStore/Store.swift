@@ -102,7 +102,9 @@ public final class CaptureStore: @unchecked Sendable {
         guard masterKey.bitCount == 256 else { throw StoreError.sqlite("masterKey must be 32 bytes") }
         self.masterKey = masterKey
         dedupeSecret = HKDF<SHA256>.deriveKey(inputKeyMaterial: masterKey, info: Data("presence-capture dedupe".utf8), outputByteCount: 32)
-        try FileManager.default.createDirectory(at: URL(fileURLWithPath: path).deletingLastPathComponent(), withIntermediateDirectories: true)
+        // A folder it makes is the person's alone (the default under Application Support already is).
+        try FileManager.default.createDirectory(at: URL(fileURLWithPath: path).deletingLastPathComponent(), withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
         guard sqlite3_open(path, &db) == SQLITE_OK else { throw StoreError.sqlite("can't open the store") }
         // Another process (a reader, another writer) may hold the write lock for a moment: wait for it.
         sqlite3_busy_timeout(db, 5000)

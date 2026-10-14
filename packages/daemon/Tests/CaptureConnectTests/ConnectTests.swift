@@ -89,6 +89,30 @@ final class ConnectTests: XCTestCase {
                        "the config's permissions were loosened")
     }
 
+    func testAConfigThatIsALinkIsWrittenThroughItAndKeepsItsPermissions() throws {
+        // The config is a link to a file kept elsewhere (a dotfiles folder), readable by its owner alone.
+        let dotfiles = home.appendingPathComponent("dotfiles", isDirectory: true)
+        try FileManager.default.createDirectory(at: dotfiles, withIntermediateDirectories: true)
+        let real = dotfiles.appendingPathComponent("mcp.json")
+        let original = #"{"mcpServers": {"other": {"command": "/usr/bin/other", "env": {"TOKEN": "s3cret"}}}}"#
+        try Data(original.utf8).write(to: real)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: real.path)
+        let link = connector().file(for: .cursor)
+        try FileManager.default.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+
+        let plan = try connector().plan(.cursor, entry: ServerEntry(pcapMCP: server, grantId: "grn_new", store: storePath))
+        let backup = try XCTUnwrap(try connector().apply(plan))
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: link.path), real.path, "the link was replaced by a file")
+        XCTAssertNotNil(((try json(real))["mcpServers"] as? [String: Any])?["presence-capture"], "the file the link names wasn't written")
+        XCTAssertEqual((try FileManager.default.attributesOfItem(atPath: real.path))[.posixPermissions] as? Int, 0o600,
+                       "the config's permissions were loosened")
+        let kind = (try FileManager.default.attributesOfItem(atPath: backup.path))[.type] as? FileAttributeType
+        XCTAssertEqual(kind, .typeRegular, "the backup is a link to the config, not a copy of it")
+        XCTAssertEqual((try FileManager.default.attributesOfItem(atPath: backup.path))[.posixPermissions] as? Int, 0o600)
+        XCTAssertEqual(try String(contentsOf: backup, encoding: .utf8), original)
+    }
+
     func testCursorWithNoConfigYetGetsOneAndNoBackup() throws {
         let plan = try connector().plan(.cursor, entry: ServerEntry(pcapMCP: server, grantId: "grn_new", store: storePath))
         XCTAssertNil(try connector().apply(plan))

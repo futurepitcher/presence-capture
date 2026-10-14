@@ -3,6 +3,9 @@ import CaptureStore
 import CryptoKit
 import Foundation
 
+// Anything it makes (a store's temporary files) is the person's alone.
+umask(0o077)
+
 // pcap-mcp: the native MCP server (ADR 0008). Local only: newline-delimited JSON-RPC 2.0 on stdin
 // and stdout, no socket of any kind. Read-only to the store by construction: its connection is
 // restricted by SQLite to reads and egress records (restrictToReading). Grants, the envelope and
