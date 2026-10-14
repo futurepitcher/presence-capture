@@ -149,6 +149,11 @@ func entry(_ arguments: Arguments, server: String) -> (String) -> ServerEntry {
     return { ServerEntry(pcapMCP: server, grantId: $0, store: store, keyFile: keyFile) }
 }
 
+/// This program's absolute path, followed through a link, for commands it shows.
+func thisProgram() -> String {
+    (Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])).resolvingSymlinksInPath().path
+}
+
 func ask(_ question: String) -> Bool {
     print(question, terminator: " ")
     return ["y", "yes"].contains(readLine()?.trimmingCharacters(in: .whitespaces).lowercased() ?? "")
@@ -161,7 +166,7 @@ func connect(_ arguments: Arguments) throws {
     guard let name = arguments.words.dropFirst().first, let client = Client(rawValue: name) else {
         throw Failure("connect which? \(Client.allCases.map(\.rawValue).joined(separator: ", "))")
     }
-    let connector = Connector()
+    let connector = Connector(pcap: thisProgram())
     let server = try pcapMCP(arguments)
     let entry = entry(arguments, server: server)
     let grant = try grant(for: client.rawValue, arguments)
@@ -211,7 +216,7 @@ func grantCommand(_ arguments: Arguments) throws {
         defer { store.close() }
         let grantId = try store.issueGrant(grant)
         let server = entry(arguments, server: (try? pcapMCP(arguments)) ?? "pcap-mcp")(grantId)
-        let quoted = ([server.command] + server.args).map { $0.contains(" ") ? "\"\($0)\"" : $0 }.joined(separator: " ")
+        let quoted = ([server.command] + server.args).map(Connector.shellQuoted).joined(separator: " ")
         print("\(grantId)\n  \(clientId): \(describe(grant)).\n  Its server: \(quoted)")
     case "list":
         try arguments.check("grant list", words: 2, flags: ["all"])
