@@ -142,3 +142,13 @@ test('T11: readers cannot mutate capture state', () => {
   }
   store.close();
 });
+
+test('ADR 0001: a reader kept and reused is refused once its grant is revoked', () => {
+  const { store, grantId } = readableStore();
+  const reader = store.createReader(grantId);
+  assert.equal(reader.read({ tool: 'recent' }).length, 1);
+
+  store.revokeGrant(grantId);
+  assert.throws(() => reader.read({ tool: 'recent' }), { name: 'AuthorizationError' });
+  store.close();
+});
