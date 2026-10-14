@@ -87,6 +87,12 @@ final class AdminTests: XCTestCase {
         let signed = dir.appendingPathComponent("signed.key")
         try Data(("+f" + String(repeating: "0", count: 62)).utf8).write(to: signed)
         XCTAssertThrowsError(try MasterKeyItem.load(keyFile: signed.path, bundleIdentifier: nil), "a sign was read as a hex digit")
+        let fullwidth = dir.appendingPathComponent("fullwidth.key")
+        try Data(String(repeating: "Ａ", count: 64).utf8).write(to: fullwidth)
+        XCTAssertThrowsError(try MasterKeyItem.load(keyFile: fullwidth.path, bundleIdentifier: nil), "fullwidth digits were read, or crashed")
+        let upper = dir.appendingPathComponent("upper.key")
+        try Data(bytes.map { String(format: "%02X", $0) }.joined().utf8).write(to: upper)
+        XCTAssertEqual(try MasterKeyItem.load(keyFile: upper.path, bundleIdentifier: nil), bytes)
         XCTAssertThrowsError(try MasterKeyItem.load(keyFile: dir.appendingPathComponent("none").path, bundleIdentifier: nil))
     }
 }

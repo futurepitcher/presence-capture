@@ -20,6 +20,10 @@ final class ActivityCapturer {
     private let store: CaptureStore
     private let log: @Sendable (String) -> Void
     private let sense: () -> Sensed
+    /// What was last written, and the writing itself, kept on a queue of their own: the store can
+    /// wait seconds for SQLite's lock, and the tick runs on the main thread, where locking, sleep and
+    /// Pause are heard.
+    private let queue = DispatchQueue(label: "presence.capture.activity")
     private var last: String?
 
     /// Without input for this long, the person is idle.
@@ -41,7 +45,7 @@ final class ActivityCapturer {
         let observedAt = Date()
         let sensed = sense()
         if !seesScreen && !sensed.locked {
-            last = nil
+            queue.async { self.last = nil }
             return
         }
         let state = sensed.locked ? "locked" : sensed.idle >= Self.idleAfter ? "idle" : "active"
@@ -53,24 +57,31 @@ final class ActivityCapturer {
         let content: [String: Any] = excluded
             ? ["state": state, "excluded": true]
             : ["app": app?.name ?? "", "window": Redact.redact(window), "state": state]
-        guard let text = try? String(decoding: JSONSerialization.data(withJSONObject: content, options: [.sortedKeys]), as: UTF8.self),
-              text != last else { return }
-
-        do {
-            try store.append(NewCapture(
-                capturedAt: observedAt, captureType: "activity", source: "activity", sourceApp: excluded ? nil : app?.bundle ?? app?.name,
-                contentText: text, extraction: "none"))
-            last = text
-        } catch StoreError.revoked {
-            log("append.refused_revoked kind=activity")
-        } catch {
-            log("activity.store_failed")
+        guard let text = try? String(decoding: JSONSerialization.data(withJSONObject: content, options: [.sortedKeys]), as: UTF8.self) else { return }
+        let capture = NewCapture(capturedAt: observedAt, captureType: "activity", source: "activity",
+                                 sourceApp: excluded ? nil : app?.bundle ?? app?.name, contentText: text, extraction: "none")
+        queue.async { [self] in
+            guard text != last else { return }
+            do {
+                try store.append(capture)
+                last = text
+            } catch StoreError.revoked {
+                log("append.refused_revoked kind=activity")
+            } catch {
+                log("activity.store_failed")
+            }
         }
     }
 
-    /// Capture was held (paused, asleep, another user): the next tick records afresh.
+    /// Capture was held (paused, asleep, another user): the next tick records afresh. Queued behind
+    /// any write still under way, so it's never undone by one.
     func reset() {
-        last = nil
+        queue.async { self.last = nil }
+    }
+
+    /// Returns once every write queued so far is done (tests; quitting).
+    func flush() {
+        queue.sync {}
     }
 
     /// What this Mac says now. The app and window are read only while unlocked.
