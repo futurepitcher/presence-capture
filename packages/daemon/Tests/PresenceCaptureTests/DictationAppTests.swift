@@ -51,6 +51,17 @@ final class DictationAppTests: XCTestCase {
         }
     }
 
+    func testAFieldIsOpenOnlyWhenItsRoleAndSubroleWereReadAndNeitherIsSecure() {
+        let field = Focus.Read.text("AXTextField")
+        XCTAssertEqual(Focus.security(role: field, subrole: .absent), .open)
+        XCTAssertEqual(Focus.security(role: field, subrole: .text("AXSearchField")), .open)
+        XCTAssertEqual(Focus.security(role: field, subrole: .text("AXSecureTextField")), .secure)
+        XCTAssertEqual(Focus.security(role: .text("AXSecureTextField"), subrole: .failed), .secure, "a secure role is enough")
+        XCTAssertEqual(Focus.security(role: field, subrole: .failed), .unknown, "a subrole that couldn't be read was taken as open")
+        XCTAssertEqual(Focus.security(role: .failed, subrole: .absent), .unknown)
+        XCTAssertEqual(Focus.security(role: .absent, subrole: .absent), .unknown, "an element with no role")
+    }
+
     func testAccessibilityInsertionIsCheckedAndNeverPastedTwice() throws {
         let field = Field("Hello world", selected: CFRange(location: 6, length: 5))
         XCTAssertEqual(Inserter.insert("there", into: field), .inserted)

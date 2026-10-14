@@ -40,6 +40,11 @@ public final class DictationSpans: @unchecked Sendable {
         }
     }
 
+    /// The key-down under way wasn't a dictation (a tap of the key): nothing was said into it.
+    public func discard() {
+        lock.withLock { open = nil }
+    }
+
     /// What to do with an ambient utterance from the microphone, said at `at` for `seconds`, being
     /// delivered at `now`.
     public func verdict(at: Date, seconds: Double, now: Date) -> Verdict {
@@ -99,6 +104,62 @@ public final class DictationFeed<Buffer>: @unchecked Sendable {
             closed = true
             pending = []
             sink = nil
+        }
+    }
+}
+
+/// One thing made ahead of when it's wanted (dictation's transcriber), so it's ready then. One that
+/// couldn't be made isn't kept: the next ask makes another. A download asked for while one made
+/// without leave to download is still being made is made next, if that one fails.
+public final class MadeAhead<Value: Sendable>: @unchecked Sendable {
+    private let make: @Sendable (_ download: Bool) async -> Value?
+    private let lock = NSLock()
+    private var spare: (id: Int, download: Bool, task: Task<Value?, Never>)?
+    private var made = 0
+    private var downloadNext = false
+
+    public init(make: @escaping @Sendable (_ download: Bool) async -> Value?) {
+        self.make = make
+    }
+
+    /// Makes the next, if there isn't one waiting; `download` lets it fetch what it needs.
+    public func prepare(download: Bool) {
+        lock.withLock { start(download) }
+    }
+
+    /// The one made ahead (begun now if there isn't one), taken: the next is made by `prepare`.
+    public func take() -> Task<Value?, Never> {
+        lock.withLock {
+            start(false)
+            defer { spare = nil }
+            return spare!.task
+        }
+    }
+
+    /// Whether one is waiting (made, or being made).
+    var waiting: Bool { lock.withLock { spare != nil } }
+
+    /// Under the lock.
+    private func start(_ download: Bool) {
+        if let spare {
+            if download && !spare.download { downloadNext = true }
+            return
+        }
+        made += 1
+        let (id, make) = (made, self.make)
+        downloadNext = false
+        spare = (id, download, Task { [weak self] in
+            let value = await make(download)
+            if value == nil { self?.failed(id) }
+            return value
+        })
+    }
+
+    private func failed(_ id: Int) {
+        lock.withLock {
+            guard spare?.id == id else { return }
+            spare = nil
+            if downloadNext { start(true) }
         }
     }
 }

@@ -60,12 +60,16 @@ enum Focus {
         return DictationSample(focus: DictationFocus(app: app.bundle, element: AXElement(element: focused), security: security), app: app, window: title)
     }
 
-    /// Whether `element` still has the app's focus, read now (off the main thread).
+    /// Whether `element`, in `app`, has the focus now: the system's, whichever app is in front, not
+    /// just that app's own (which it keeps when another app comes to the front). Read off the main
+    /// thread.
     static func stillFocused(_ element: AXUIElement, in app: FrontApp?) -> Bool {
         guard let app else { return false }
-        let owner = AXUIElementCreateApplication(app.pid)
-        AXUIElementSetMessagingTimeout(owner, timeout)
-        return self.element(owner, kAXFocusedUIElementAttribute).map { CFEqual($0, element) } ?? false
+        let system = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(system, timeout)
+        guard let focused = self.element(system, kAXFocusedUIElementAttribute) else { return false }
+        var pid: pid_t = 0
+        return AXUIElementGetPid(focused, &pid) == .success && pid == app.pid && CFEqual(focused, element)
     }
 
     static func element(_ parent: AXUIElement, _ attribute: String) -> AXUIElement? {
@@ -77,11 +81,35 @@ enum Focus {
         return element
     }
 
-    /// Secure by its role, open, or unknown when Accessibility doesn't say.
+    /// An attribute as Accessibility answered: text, not there (the element has none), or not read
+    /// (an error, a timeout, or not text).
+    enum Read: Equatable {
+        case text(String)
+        case absent
+        case failed
+    }
+
+    static func read(_ element: AXUIElement, _ attribute: String) -> Read {
+        var value: CFTypeRef?
+        switch AXUIElementCopyAttributeValue(element, attribute as CFString, &value) {
+        case .success: return (value as? String).map(Read.text) ?? .failed
+        case .noValue, .attributeUnsupported: return .absent
+        default: return .failed
+        }
+    }
+
     static func security(of element: AXUIElement) -> DictationFocus.Security {
-        let role = string(element, kAXRoleAttribute), subrole = string(element, kAXSubroleAttribute)
-        if role == nil && subrole == nil { return .unknown }
-        return subrole == kAXSecureTextFieldSubrole || role == "AXSecureTextField" ? .secure : .open
+        security(role: read(element, kAXRoleAttribute), subrole: read(element, kAXSubroleAttribute))
+    }
+
+    /// Secure when its role or subrole says so; unknown when either couldn't be read, or it has no
+    /// role; open only when both were read (a subrole may be absent) and neither is secure.
+    static func security(role: Read, subrole: Read) -> DictationFocus.Security {
+        for answer in [role, subrole] {
+            if case .text(let name) = answer, name == kAXSecureTextFieldSubrole || name == "AXSecureTextField" { return .secure }
+        }
+        if role == .failed || subrole == .failed || role == .absent { return .unknown }
+        return .open
     }
 
     static func string(_ element: AXUIElement, _ attribute: String) -> String? {

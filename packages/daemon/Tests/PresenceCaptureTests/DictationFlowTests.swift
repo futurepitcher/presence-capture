@@ -14,7 +14,8 @@ import XCTest
 final class DictationFlowTests: XCTestCase {
     /// Holds its words until released, so a test can act while the dictation is finishing.
     final class Session: DictationHearing {
-        var words = "send the deck on friday"
+        /// nil: there was no transcriber to hear it.
+        var words: String? = "send the deck on friday"
         var holding = false
         private var gate: CheckedContinuation<Void, Never>?
         private(set) var cancelled = false
@@ -37,7 +38,8 @@ final class DictationFlowTests: XCTestCase {
         var session = Session()
         private(set) var listening = false
         private(set) var begun = 0
-        func prepare(download: Bool) {}
+        private(set) var downloads = 0
+        func prepare(download: Bool) { if download { downloads += 1 } }
         func begin(level: @escaping @Sendable (Float) -> Void) throws -> DictationHearing {
             begun += 1
             listening = true
@@ -48,10 +50,11 @@ final class DictationFlowTests: XCTestCase {
 
     final class Panel: DictationShowing {
         var held: String?
+        var said: String?
         func listening(_ level: Float) {}
         func working() {}
         func hold(_ text: String) { held = text }
-        func say(_ message: String) {}
+        func say(_ message: String) { said = message }
         func hide() {}
     }
 
@@ -75,11 +78,51 @@ final class DictationFlowTests: XCTestCase {
         private let lock = NSLock()
         private var now = DictationSample(focus: DictationFocus(app: "com.apple.TextEdit", element: 1, security: .open),
                                           app: FrontApp(name: "TextEdit", bundle: "com.apple.TextEdit", pid: 1), window: "Notes")
+        private var front: FrontApp?
+        private var switchTo: FrontApp?
+        private var lost = false
         var sample: DictationSample {
             get { lock.withLock { now } }
             set { lock.withLock { now = newValue } }
         }
+        /// The app in front: the sample's, unless another came to the front.
+        var app: FrontApp? {
+            get { lock.withLock { front ?? now.app } }
+            set { lock.withLock { front = newValue } }
+        }
+        /// Another app comes to the front as the next sample is taken (while it waits on the app).
+        func switchWhileSampling(to app: FrontApp) { lock.withLock { switchTo = app } }
+        func sampled() -> DictationSample {
+            lock.withLock {
+                if let to = switchTo { (front, switchTo) = (to, nil) }
+                return now
+            }
+        }
+        /// The field has lost the focus just before typing, though samples still show it.
+        var focusLost: Bool {
+            get { lock.withLock { lost } }
+            set { lock.withLock { lost = newValue } }
+        }
     }
+
+    /// Holds the read of the focus just before typing, until the test lets it answer.
+    final class FocusRead: @unchecked Sendable {
+        let entered = DispatchSemaphore(value: 0)
+        let go = DispatchSemaphore(value: 0)
+        private let lock = NSLock()
+        private var on = false
+        var holding: Bool {
+            get { lock.withLock { on } }
+            set { lock.withLock { on = newValue } }
+        }
+        func pass() {
+            guard holding else { return }
+            entered.signal()
+            go.wait()
+        }
+    }
+
+    static let safari = FrontApp(name: "Safari", bundle: "com.apple.Safari", pid: 3)
 
     private var dir: URL!
     private var store: CaptureStore!
@@ -92,6 +135,10 @@ final class DictationFlowTests: XCTestCase {
     /// The microphone and Input Monitoring, as the test has them.
     private var allowed = true
     private var holdPastes = false
+    /// Typing asks `proceed` off the main thread, as Accessibility does.
+    private var proceedOffMain = false
+    private var focusRead = FocusRead()
+    private var spans = DictationSpans()
     private var place = Where()
     private var fragments: [String]? = []
     private var isHeld = false
@@ -103,6 +150,7 @@ final class DictationFlowTests: XCTestCase {
         store = try CaptureStore(path: dir.appendingPathComponent("store.sqlite").path, masterKey: SymmetricKey(size: .bits256))
         defaults = UserDefaults(suiteName: "dictation-flow-\(UUID().uuidString)")
         (listener, panel, tidy, typed, place, fragments, isHeld, holdPastes, waitingPaste, allowed) = (Listener(), Panel(), Tidy(), [], Where(), [], false, false, nil, true)
+        (proceedOffMain, focusRead, spans) = (false, FocusRead(), DictationSpans())
     }
 
     override func tearDown() async throws {
@@ -110,21 +158,35 @@ final class DictationFlowTests: XCTestCase {
     }
 
     private func dictation() throws -> Dictation {
-        let (tidy, place) = (self.tidy, self.place)
-        let parts = DictationParts(listener: listener, panel: panel, front: { place.sample.app }, sample: { _ in place.sample },
+        let (tidy, place, focusRead) = (self.tidy, self.place, self.focusRead)
+        let parts = DictationParts(listener: listener, panel: panel, front: { place.app }, sample: { _ in place.sampled() },
                                    tidy: { await tidy.propose($0) },
                                    type: { [unowned self] text, _, check, proceed, done in
                                        check { allowed in
                                            guard allowed else { return done(nil) }
-                                           if holdPastes { return waitingPaste = (text, check, done) }
+                                           if self.holdPastes { return self.waitingPaste = (text, check, done) }
+                                           if self.proceedOffMain {
+                                               return DispatchQueue.global().async {
+                                                   let go = proceed()
+                                                   Task { @MainActor in
+                                                       guard go else { return done(nil) }
+                                                       self.typed.append(text)
+                                                       done("test")
+                                                   }
+                                               }
+                                           }
                                            guard proceed() else { return done(nil) }
-                                           typed.append(text)
+                                           self.typed.append(text)
                                            done("test")
                                        }
                                    },
                                    canType: { true }, allowed: { [unowned self] in allowed }, secureInput: { false },
-                                   stillFocused: { focus, _ in place.sample.focus == focus }, finishTyping: {}, keyDown: { _ in true })
-        return Dictation(store: store, spans: DictationSpans(), defaults: defaults, held: { [unowned self] in isHeld },
+                                   stillFocused: { focus, _ in
+                                       focusRead.pass()
+                                       return !place.focusLost && place.sample.focus == focus
+                                   },
+                                   finishTyping: {}, keyDown: { _ in true })
+        return Dictation(store: store, spans: spans, defaults: defaults, held: { [unowned self] in isHeld },
                          paused: { [unowned self] in isHeld }, fragments: { [unowned self] in fragments }, log: { _ in }, parts: parts)
     }
 
@@ -345,5 +407,87 @@ final class DictationFlowTests: XCTestCase {
         XCTAssertFalse(listener.listening)
         await settle()
         XCTAssertEqual(typed, [])
+        XCTAssertEqual(spans.verdict(at: Date().addingTimeInterval(-0.3), seconds: 0.3, now: Date()), .keep,
+                       "speech around a tap of the key was dropped as dictated")
+    }
+
+    func testAnotherAppComingToTheFrontWhileTheFieldIsCheckedTypesNothing() async throws {
+        // The app that was in front keeps its own focus on the field: only the app in front tells.
+        for during in [false, true] {
+            try await setUp()
+            holdPastes = true
+            let dictation = try dictation()
+            dictation.press(keyCode: 63, flags: fn, at: 0)
+            dictation.press(keyCode: 63, flags: 0, at: 2)
+            await until { waitingPaste != nil }
+            if during { place.switchWhileSampling(to: Self.safari) } else { place.app = Self.safari }
+            await takeTurn()
+            await settle()
+            dictation.flush()
+            XCTAssertEqual(typed, [], "typed into the app behind (switched \(during ? "while sampling" : "before"))")
+            XCTAssertEqual(panel.held, "Send the deck on friday.", "an ordinary move holds the words")
+            XCTAssertEqual(try kept(), 1)
+        }
+    }
+
+    func testACancelWhileTheFocusIsReadLeavesTheFieldAlone() async throws {
+        proceedOffMain = true
+        focusRead.holding = true
+        let dictation = try dictation()
+        dictation.press(keyCode: 63, flags: fn, at: 0)
+        dictation.press(keyCode: 63, flags: 0, at: 2)
+        await until { focusRead.entered.wait(timeout: .now()) == .success }
+        // Paused while Accessibility waits on the app, which then answers that the field has the focus.
+        isHeld = true
+        dictation.cancel(.paused)
+        focusRead.go.signal()
+        await settle()
+        dictation.flush()
+        XCTAssertEqual(typed, [], "the field was changed after the dictation was cancelled")
+        XCTAssertEqual(try kept(), 0)
+    }
+
+    func testMovedToAPasswordFieldWhileAPasteWaitedNothingIsShownOrKept() async throws {
+        for security in [DictationFocus.Security.secure, .unknown] {
+            try await setUp()
+            holdPastes = true
+            let dictation = try dictation()
+            dictation.press(keyCode: 63, flags: fn, at: 0)
+            dictation.press(keyCode: 63, flags: 0, at: 2)
+            await until { waitingPaste != nil }
+            place.sample.focus = DictationFocus(app: "com.apple.TextEdit", element: 7, security: security)
+            await takeTurn()
+            await settle()
+            dictation.flush()
+            XCTAssertEqual(typed, [], "\(security)")
+            XCTAssertNil(panel.held, "\(security): the words were shown")
+            XCTAssertEqual(panel.said, "Nothing is typed into a password field.", "\(security)")
+            XCTAssertEqual(try kept(), 0, "\(security): kept")
+        }
+    }
+
+    func testAFocusThatCantBeConfirmedJustBeforeTypingIsTakenAsAPasswordField() async throws {
+        place.focusLost = true
+        let dictation = try dictation()
+        dictation.press(keyCode: 63, flags: fn, at: 0)
+        dictation.press(keyCode: 63, flags: 0, at: 2)
+        await until { panel.said != nil }
+        dictation.flush()
+        XCTAssertEqual(typed, [])
+        XCTAssertNil(panel.held)
+        XCTAssertEqual(try kept(), 0)
+    }
+
+    func testNoTranscriberSaysSoAndFetchesTheModel() async throws {
+        listener.session.words = nil
+        let dictation = try dictation()
+        dictation.press(keyCode: 63, flags: fn, at: 0)
+        dictation.press(keyCode: 63, flags: 0, at: 2)
+        await until { panel.said != nil }
+        dictation.flush()
+        XCTAssertTrue(panel.said?.contains("speech model") == true)
+        XCTAssertEqual(listener.downloads, 1, "the model wasn't asked for")
+        XCTAssertEqual(typed, [])
+        XCTAssertEqual(try kept(), 0)
     }
 }

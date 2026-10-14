@@ -128,6 +128,9 @@ final class Dictation: Dictating, @unchecked Sendable {
     private var shown: Int?
     /// The live tokens, readable off the main thread (Accessibility asks just before changing a field).
     private let stillLive = LockedSet()
+    /// Dictations not typed because, just before, the field was, or might have been, a password field:
+    /// nothing is shown or kept for them. Written on either thread.
+    private let refusedSecure = LockedSet()
 
     private final class Live {
         let began: Date
@@ -318,13 +321,15 @@ final class Dictation: Dictating, @unchecked Sendable {
     /// Stops `token` with nothing typed or kept: the microphone off at once, its words let go.
     private func drop(_ token: Int, _ why: DictationCancel) {
         stopPolling()
-        spans.ended(at: Date())
+        // A tap of the key isn't a dictation: nothing was said into it, so nothing it overlaps is dropped.
+        if why == .tooShort { spans.discard() } else { spans.ended(at: Date()) }
         if listening == token {
             listener.stop()
             listening = nil
         }
         guard let dictation = live.removeValue(forKey: token) else { return }
         stillLive.remove(token)
+        refusedSecure.remove(token)
         dictation.session.cancel()
         // The panel is this dictation's, or no one's: never hidden from under a newer one.
         if shown == token || shown == nil {
@@ -382,7 +387,15 @@ final class Dictation: Dictating, @unchecked Sendable {
     /// dictation is still live; it stays live until it's typed in, so a paste waiting its turn is
     /// cancelled with it.
     @MainActor private func finish(_ token: Int, _ dictation: Live) async {
-        let heard = await dictation.session.finish() ?? ""
+        guard let heard = await dictation.session.finish() else {
+            // No transcriber to hear it: the speech model isn't on this Mac, or couldn't be made. It's
+            // fetched now (dictation is on, so it may be), and the next dictation tries again.
+            guard going(token) else { return }
+            listener.prepare(download: true)
+            panel.say("Dictation needs Apple's speech model, which isn't ready yet. It's being fetched: try again shortly.")
+            log("dictation.no_transcriber")
+            return done(token, hidePanel: false)
+        }
         let origin = await dictation.origin.value
         let released = await (dictation.released?.value ?? origin)
         guard going(token) else { return }
@@ -415,21 +428,41 @@ final class Dictation: Dictating, @unchecked Sendable {
             keep()
         case .type:
             let expected = now.focus
-            let (stillLive, stillFocused, app) = (self.stillLive, parts.stillFocused, now.app)
+            let (stillLive, refusedSecure, stillFocused, app) = (self.stillLive, self.refusedSecure, parts.stillFocused, now.app)
+            let (allowed, canType) = (parts.allowed, parts.canType)
             parts.type(text, expected, { [weak self] answer in
-                // Before anything is typed or pasted: still this dictation, still allowed, and still this
-                // field (asked off the main thread), answered on the main thread.
-                guard let self, self.going(token), !self.held(), self.parts.canType() else { return answer(false) }
+                // Before anything is typed or pasted: still this dictation, still allowed, still the app
+                // in front, and still this field, read off the main thread; then the app in front read
+                // again, as the answer is given on the main thread. A field that is, or might be, a
+                // password field is remembered as that.
+                guard let self, self.going(token), !self.held(), self.parts.canType(), self.parts.front()?.pid == app?.pid else {
+                    return answer(false)
+                }
                 let (front, sample) = (self.parts.front(), self.parts.sample)
                 Task.detached {
                     let now = sample(front)
-                    await MainActor.run { [weak self] in answer(self?.live[token] != nil && now.focus == expected && !now.focus.secure) }
+                    await MainActor.run { [weak self] in
+                        guard let self, self.live[token] != nil, self.parts.front()?.pid == app?.pid else { return answer(false) }
+                        switch DictationOutcome.typing(began: expected, released: expected, now: now.focus) {
+                        case .type: answer(true)
+                        case .secure:
+                            refusedSecure.insert(token)
+                            answer(false)
+                        case .focusMoved: answer(false)
+                        }
+                    }
                 }
             }, {
-                // Off the main thread, just before Accessibility changes the field.
-                stillLive.contains(token) && stillFocused(expected, app)
+                // Off the main thread, just before Accessibility changes the field. The focus is read
+                // first (it can wait on an app); then whether it's still this dictation and still
+                // allowed, so a cancel that came while the read waited is seen.
+                let focused = stillFocused(expected, app)
+                guard stillLive.contains(token), allowed(), canType() else { return false }
+                // Not the field now, and where the focus went isn't known: as if a password field.
+                if !focused { refusedSecure.insert(token) }
+                return focused
             }, { [weak self] way in
-                guard let self, self.live[token] != nil else { return }
+                guard let self, self.going(token) else { return }
                 if let way {
                     self.done(token)
                     self.log("dictation.typed way=\(way)")
@@ -438,6 +471,11 @@ final class Dictation: Dictating, @unchecked Sendable {
                     // Paused or locked while it waited: like a cancel, nothing is typed or kept.
                     self.done(token)
                     self.log("dictation.cancelled why=paused")
+                } else if refusedSecure.contains(token) {
+                    // Moved to a field that is, or might be, a password field: nothing shown or kept.
+                    self.panel.say("Nothing is typed into a password field.")
+                    self.log("dictation.secure_field")
+                    self.done(token, hidePanel: false)
                 } else {
                     self.panel.hold(text)
                     self.done(token, hidePanel: false)
@@ -461,6 +499,7 @@ final class Dictation: Dictating, @unchecked Sendable {
     private func done(_ token: Int, hidePanel: Bool = true) {
         live.removeValue(forKey: token)
         stillLive.remove(token)
+        refusedSecure.remove(token)
         let mine = shown == token || shown == nil
         if shown == token { shown = nil }
         if hidePanel && mine { panel.hide() }

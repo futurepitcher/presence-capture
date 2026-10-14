@@ -250,4 +250,76 @@ final class DictationTests: XCTestCase {
         XCTAssertEqual(DictationOutcome.skip(remember: true, excluded: false, secure: false, cancelled: true, paused: false), .cancelled)
         XCTAssertEqual(DictationOutcome.skip(remember: true, excluded: false, secure: false, cancelled: false, paused: true), .paused)
     }
+
+    // MARK: The transcriber, made ahead
+
+    /// What was asked of `make`, and whether a download works now.
+    private final class Made: @unchecked Sendable {
+        private let lock = NSLock()
+        private var asked: [Bool] = []
+        private var online = false
+        private var gate: CheckedContinuation<Void, Never>?
+        private var holding = false
+        var downloads: [Bool] { lock.withLock { asked } }
+        var reachable: Bool {
+            get { lock.withLock { online } }
+            set { lock.withLock { online = newValue } }
+        }
+        func hold() { lock.withLock { holding = true } }
+        var waiting: Bool { lock.withLock { gate != nil } }
+        func release() {
+            lock.withLock {
+                holding = false
+                gate?.resume()
+                gate = nil
+            }
+        }
+        /// No model on this Mac: only a download, while reachable, makes one.
+        func make(_ download: Bool) async -> Int? {
+            let held = lock.withLock { () -> Bool in
+                asked.append(download)
+                return holding
+            }
+            if held { await withCheckedContinuation { c in lock.withLock { gate = c } } }
+            return download && reachable ? 1 : nil
+        }
+    }
+
+    private func until(_ done: () -> Bool) async {
+        for _ in 0..<200 where !done() { try? await Task.sleep(nanoseconds: 5_000_000) }
+    }
+
+    func testOneThatFailedIsntKeptSoTurningDictationOnAgainDownloads() async {
+        let made = Made()
+        let ahead = MadeAhead<Int> { await made.make($0) }
+        ahead.prepare(download: true)
+        await until { !ahead.waiting }
+        XCTAssertEqual(made.downloads, [true])
+        // Used, with nothing to hear it; and made again after, without leave to download.
+        let used = await ahead.take().value
+        XCTAssertNil(used)
+        ahead.prepare(download: false)
+        await until { !ahead.waiting }
+        // Turned on again, now online: a download, not the failure kept from before.
+        made.reachable = true
+        ahead.prepare(download: true)
+        let ready = await ahead.take().value
+        XCTAssertEqual(ready, 1)
+        XCTAssertEqual(made.downloads, [true, false, false, true])
+    }
+
+    func testADownloadAskedForWhileOneWithoutIsBeingMadeComesNextIfThatFails() async {
+        let made = Made()
+        made.reachable = true
+        made.hold()
+        let ahead = MadeAhead<Int> { await made.make($0) }
+        ahead.prepare(download: false)
+        await until { made.waiting }
+        ahead.prepare(download: true)
+        made.release()
+        await until { made.downloads.count == 2 && ahead.waiting }
+        let ready = await ahead.take().value
+        XCTAssertEqual(ready, 1)
+        XCTAssertEqual(made.downloads, [false, true])
+    }
 }

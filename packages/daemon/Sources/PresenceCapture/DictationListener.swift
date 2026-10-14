@@ -27,46 +27,36 @@ final class DictationListener: DictationListening, @unchecked Sendable {
     }
 
     private let engine = AVAudioEngine()
-    private let log: @Sendable (String) -> Void
     private let lock = NSLock()
-    private var spare: Task<Ready?, Never>?
+    private let ahead: MadeAhead<Ready>
     private var tapped = false
 
     init(log: @escaping @Sendable (String) -> Void) {
-        self.log = log
-    }
-
-    /// Makes the next transcriber, if there isn't one waiting. The model is used if it's on this
-    /// Mac; it's fetched (from Apple) only when dictation is turned on (`download`).
-    func prepare(download: Bool = false) {
-        lock.withLock {
-            guard spare == nil else { return }
-            let log = self.log
-            spare = Task {
-                do {
-                    guard let locale = try await Transcriber.prepare(locale: Locale.current, download: download) else {
-                        log("dictation.no_model")
-                        return nil
-                    }
-                    let words = Words()
-                    return Ready(transcriber: try await Transcriber(locale: locale) { text, _, _ in words.add(text) }, words: words)
-                } catch {
-                    log("dictation.transcriber_failed")
+        ahead = MadeAhead { download in
+            do {
+                guard let locale = try await Transcriber.prepare(locale: Locale.current, download: download) else {
+                    log("dictation.no_model")
                     return nil
                 }
+                let words = Words()
+                return Ready(transcriber: try await Transcriber(locale: locale) { text, _, _ in words.add(text) }, words: words)
+            } catch {
+                log("dictation.transcriber_failed")
+                return nil
             }
         }
+    }
+
+    /// Makes the next transcriber, if there isn't one waiting (one that failed isn't kept). The model
+    /// is used if it's on this Mac; it's fetched (from Apple) only while dictation is on (`download`).
+    func prepare(download: Bool = false) {
+        ahead.prepare(download: download)
     }
 
     /// Key-down: the microphone on, its audio given to the waiting transcriber (held until it's
     /// ready). `level` hears how loud, 0–1, for the panel's meter.
     func begin(level: @escaping @Sendable (Float) -> Void) throws -> DictationHearing {
-        prepare()
-        let ready = lock.withLock { () -> Task<Ready?, Never> in
-            defer { spare = nil }
-            return spare!
-        }
-        let session = DictationSession(ready: ready)
+        let session = DictationSession(ready: ahead.take())
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, when in
