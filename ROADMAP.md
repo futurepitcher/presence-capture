@@ -131,6 +131,9 @@ surface sits behind the same grants, envelope and egress log as MCP.
   Cursor.
 - ✅ The menu's set-up window, Connect an Agent…, Agents Read…, Keep Captures
   For and Check for Updates.
+- ✅ The release pipeline: built, signed, notarized and attested in GitHub
+  Actions from a `v*` tag, with checksums, an SBOM and how to verify it
+  ([docs/verify.md](docs/verify.md)).
 
 See [RELEASING.md](RELEASING.md).
 
