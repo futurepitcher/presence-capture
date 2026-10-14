@@ -111,6 +111,9 @@ public final class CaptureStore: @unchecked Sendable {
         try exec("PRAGMA foreign_keys = ON")
         // Deleted content is overwritten, not left on a free page (R11).
         try exec("PRAGMA secure_delete = ON")
+        // A REPLACE deletes the row it replaces; with this, that delete meets the triggers that
+        // refuse one, so an append-only record can't be rewritten in place.
+        try exec("PRAGMA recursive_triggers = ON")
         // What a revocation reaches is worked out in a temp table: kept in memory, never in a file
         // outside the store's directory.
         try exec("PRAGMA temp_store = MEMORY")

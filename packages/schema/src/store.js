@@ -116,6 +116,9 @@ export function openStore(path = ':memory:', { masterKey, onTruncated } = {}) {
   db.exec('PRAGMA busy_timeout = 5000');
   // Deleted content is overwritten, not left on a free page (R11).
   db.exec('PRAGMA secure_delete = ON');
+  // A REPLACE deletes the row it replaces; with this, that delete meets the triggers that refuse
+  // one, so an append-only record can't be rewritten in place.
+  db.exec('PRAGMA recursive_triggers = ON');
   // What a revocation reaches is worked out in a temp table: kept in memory, never in a file outside the store's directory.
   db.exec('PRAGMA temp_store = MEMORY');
   // A new store is switched to WAL by whichever writer gets there first, and
