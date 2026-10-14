@@ -220,7 +220,9 @@ as an absolute path:
 [{ "name": "git-activity", "command": ["/opt/homebrew/bin/node", "/path/to/packages/plugins/git-activity/sensor.mjs", "/Users/you/code/repo"] }]
 ```
 
-A new sensor waits. **Approve 1 Sensor…** appears in the menu. It shows the exact
+The app reads `sensors.json` when it starts, so quit Presence Capture and open
+it again after adding or changing a sensor. A new sensor waits. **Approve 1
+Sensor…** appears in the menu. It shows the exact
 command, why the sensor is waiting, and that it runs with your permissions. Approve
 it, and the app writes each file's SHA-256 into `sensors.json` and starts it.
 

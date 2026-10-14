@@ -54,8 +54,10 @@ keeps the record, so you can still say "an agent read a capture from Notes at
   on this Mac, never synced. The store never writes it. A store refuses to open
   with another key, even when every capture in it has been revoked
   (`key_check`, migration 009).
-- **No plaintext on disk.** Exclusion comes first, then redaction, then
-  sealing, then the write ([CONTRACT.md](https://github.com/futurepitcher/presence-capture/blob/main/packages/daemon/CONTRACT.md)). The
+- **No captured text in plaintext on disk.** Exclusion comes first, then
+  redaction, then sealing, then the write. The metadata in `capture_event`
+  isn't sealed: a page's full URL, for one, is kept as it was, and stays after
+  Forget ([CONTRACT.md](https://github.com/futurepitcher/presence-capture/blob/main/packages/daemon/CONTRACT.md)). The
   forensic check below looks for plaintext as well as for revoked bytes.
 - **Identical content is stored twice.** Two captures with the same bytes are
   sealed under two keys, so either can be erased alone.
@@ -290,8 +292,11 @@ and when.
   doesn't fill the log with empty revocations.
 - **It reaches derived data.** A transcript goes with its audio, even when the
   transcript is newer. A capture at exactly the cutoff is included.
-- **Late captures are refused.** After retention runs, a capture older than its
-  cutoff is refused like any capture in a revoked range.
+- **Late captures are refused, within what it recorded.** A capture stamped in
+  a range a retention revocation recorded is refused like any capture in a
+  revoked range. A sweep with nothing to revoke records no range, so a capture
+  stamped older than the cutoff that arrives after it (from a sensor, say) is
+  kept until the next sweep that revokes something.
 - **It can't be undone**, any more than a Forget can.
 
 ## How it's checked

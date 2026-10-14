@@ -48,9 +48,13 @@ On macOS, the default for each job is the Apple framework:
 ## Consequences
 
 - No model download, account or network call in the default install.
+  (Amended 2026-10-14: on macOS 26 the speech model for the person's language
+  is downloaded by macOS, once, from Apple, the first time hearing or dictation
+  needs it. No account is involved, and recognition stays on the device.)
 - **Features degrade with the OS rather than failing.** Without macOS 26 or
   Apple Intelligence, transcription uses the older on-device recogniser, and
-  digests use templates.
+  digests use templates. (Amended 2026-10-14: not in 0.1, where hearing needs
+  macOS 26; screen and activity capture work from macOS 14.)
 - Embedding quality is whatever Apple's model gives. The M3 eval decides
   whether that's good enough, against a published recall@5 target. The
   fallback is a small Core ML model, still on device.

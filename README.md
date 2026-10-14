@@ -33,11 +33,14 @@ Cursor in one step ([connecting an agent](docs/connect.md)).
   on macOS 26, transcripts of what the Mac plays and, if you turn it on, what
   the microphone hears. No screenshots or audio are kept.
 - **Skips what you exclude, and redacts.** Apps and windows on your exclusion
-  list, password fields and the system's own screens are never read. Keys,
-  tokens, emails, card numbers and the like are redacted before anything is
-  written.
-- **Seals everything at rest.** Each capture under its own key; the master key
-  in your Keychain.
+  list and the system's own screens are never read from the screen, and
+  Accessibility never reads a password field. Exclusions don't reach ambient
+  audio: Pause, or turn hearing off, to keep a call out. Keys, tokens, emails,
+  card numbers and the like are redacted from captured text before it's
+  written ([known limits](docs/known-limits.md#capture)).
+- **Seals what it captured.** Each capture's content under its own key; the
+  master key in your Keychain. The record that a capture happened (its time,
+  app, and the page's full URL) stays in plain text, and stays after Forget.
 - **Serves agents through grants.** `pcap-mcp` has six read-only tools:
   `search`, `recent`, `timeline`, `transcript`, `now` and `session`
   ([reference](docs/tools.md)). A grant limits what an agent may read and for

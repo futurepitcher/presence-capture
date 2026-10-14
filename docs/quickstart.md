@@ -67,8 +67,8 @@ A password field is never read.
 
 On macOS 26, press **Turn On Dictation…**. Then hold a key and speak, in any
 app: what you say is typed where the cursor is, transcribed on this Mac. It asks
-for the microphone, Input Monitoring (for the key alone: no other key is ever
-seen) and Accessibility (to type).
+for the microphone, Input Monitoring (it watches the modifier keys alone, so
+it never sees what you type) and Accessibility (to type).
 
 - **The key:** Fn (Globe) by default, or Right Option or Right Command. If macOS
   does something of its own with the Globe key, the step says so and offers the
@@ -105,9 +105,15 @@ or another user has it:
 
 It keeps text, never screenshots or audio. Before anything is written, apps and
 windows you've excluded are skipped, secrets and personal identifiers are
-redacted, and the text is sealed under a key of its own. The system's own
-screens (the lock screen, password prompts, notifications) and Presence Capture's
-own windows are never read.
+redacted from the text, and the text is sealed under a key of its own. The
+system's own screens (the lock screen, password prompts, notifications) and
+Presence Capture's own windows are never read. The record of each capture (its
+time, app and the page's URL) isn't sealed, and isn't redacted.
+
+Exclusions cover what's read from the screen, activity and dictation. They don't
+reach ambient audio: a call in an excluded app is still heard. Pause, or turn
+off **Hear the Microphone** and **Hear System Audio**, to keep it out
+([known limits](known-limits.md#capture)).
 
 - **Where it lives:** `~/Library/Application Support/Presence Capture/`
   (`store.sqlite`, and `logs/` with counts only). Set `PRESENCE_CAPTURE_HOME` to

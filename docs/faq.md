@@ -67,14 +67,20 @@ allow it. What the Mac plays is on by default, on macOS 26. Detail:
 - **System screens.** The lock screen, password and Touch ID prompts, and
   notifications.
 - **Presence Capture's own windows.**
-- **Password fields.** A secure text field's value is never fetched. Text from the
-  Accessibility API is read from the focused window only, and only what's visible.
+- **Password fields, through Accessibility.** A secure text field's value is
+  never fetched. But when a window has to be read by OCR, what's drawn is read:
+  a password field shows dots, but one shown in clear can be captured.
+- **Not ambient audio's exception.** Exclusions match apps and windows, so they
+  don't reach what the Mac plays or the microphone hears. Pause, or turn hearing
+  off, to keep a call out.
 - **Anything while it's paused,** or while the list can't be read.
 
 Before anything is written, secrets (private keys, tokens, API keys,
 `password=…`) and personal identifiers (emails, card and phone numbers, IP
-addresses) are replaced with labels such as `[API_KEY]`. Redaction matches known
-patterns, so a secret in a shape it doesn't know isn't caught. The order of
+addresses) in captured text are replaced with labels such as `[API_KEY]`.
+Redaction matches known patterns, so a secret in a shape it doesn't know isn't
+caught. It covers the text, not the record: a page's full URL is kept as it
+was, in plain text, and stays after Forget. The order of
 steps is in [CONTRACT.md](https://github.com/futurepitcher/presence-capture/blob/main/packages/daemon/CONTRACT.md#write-path).
 
 ### What about other people on a call or in the room?

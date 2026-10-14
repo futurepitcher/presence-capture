@@ -190,9 +190,11 @@ Everything captured between two times, oldest first.
 - `to` (time, default now).
 - `limit` (integer, default 100).
 
-If the span holds more than `limit` captures, you get the **earliest** ones. To
-read on, call again with `from` set to the last `captured_at` you received.
-`from` is inclusive, so that capture comes again.
+If the span holds more than `limit` captures, you get the **earliest** ones.
+There's no cursor in 0.1. Calling again with `from` set to the last `captured_at`
+you received returns that capture again (`from` is inclusive), and it can't get
+past captures that share one timestamp (a transcript and its audio do). So ask
+for a narrower span, or a larger `limit`, rather than paging.
 
 ```json
 { "name": "timeline", "arguments": { "from": "2026-10-14T09:00:00Z", "to": "2026-10-14T09:10:00Z" } }
