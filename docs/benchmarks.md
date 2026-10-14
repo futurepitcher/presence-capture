@@ -50,11 +50,51 @@ So 0.1 searches by keyword
 ([ADR 0008, amended](adr/0008-recall-indexes-in-memory.md)). A stronger model
 has to beat 40/50 on this eval before it ships.
 
+## The live forget check
+
+Forget, on a real Mac with the app capturing, checked the way someone holding
+a copy of the store would check it: by looking for the exact sealed bytes of
+what was forgotten in every file under the store's folder.
+[`scripts/live-forget-check.mjs`](../scripts/live-forget-check.mjs) walks you
+through it, with the app running and capturing for 20 minutes or more:
+
+```sh
+node scripts/live-forget-check.mjs \
+  --store "$HOME/Library/Application Support/Presence Capture/store.sqlite" \
+  --mcp "/Applications/Presence Capture.app/Contents/MacOS/pcap-mcp"
+```
+
+1. It gives itself a one-day grant, notes a control capture from before the
+   window, and asks you to put a marker on screen. It waits until the marker
+   is captured and readable through `pcap-mcp`.
+2. It snapshots the sealed bytes of every capture in the last 15 minutes:
+   wrapped keys, sealed text and payloads, projection outputs. These are raw
+   bytes, so no key is needed.
+3. It holds a read transaction of its own on the store, so the write-ahead log
+   can't be checkpointed. Then it asks you to choose Forget the Last 15
+   Minutes… in the menu.
+4. While it holds that, it checks:
+   - the marker can no longer be found;
+   - the revocation names exactly every capture stamped in the range, and
+     what was derived from them, worked out from the store's metadata;
+   - the erasure receipt and per-projection receipts exist, with the erasure
+     pending.
+5. It lets go, and within 30 seconds checks:
+   - the erasure completed;
+   - none of the snapshotted bytes is left in any file under the store's
+     folder;
+   - nothing stamped inside the window is stored unrevoked;
+   - the control capture is still readable.
+
+It exits 1 on any failure, and revokes its own grant at the end. The artifact
+scan is the conformance suite's
+([`inspect.js`](../packages/schema/conformance/store/inspect.js)).
+
 ## Still to measure
 
 The release plan's live checks are run on the maintainer's Mac and recorded
 here before 0.1.0:
-- the live forget check;
+- the live forget check (above);
 - the seven-day soak (CPU, memory, store growth);
 - the screenpipe parity trial;
 - dictation latency.
