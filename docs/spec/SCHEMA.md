@@ -112,7 +112,9 @@ MUST be overwritten (`secure_delete`) and any write-ahead log holding the
 earlier frames MUST be checkpointed and truncated. A reader in another process
 can hold the log, and SQLite reports that only in the checkpoint's result row.
 While it does, the implementation MUST NOT report the erasure done, and MUST
-complete it once the log can be truncated.
+complete it once the log can be truncated. Once the revocation is committed,
+nothing that fails after can undo it: a failure finishing the erasure is
+reported as an erasure pending, never as a revocation that didn't happen.
 
 Completion is kept in the store, not in the memory of the process that
 revoked, which may exit first (a command-line Forget while an MCP server
@@ -137,6 +139,11 @@ A revocation names a scope: a single capture, a time range (`from/to`), a source
 or a privacy level. Resolving the scope yields a set of captures, which MUST be
 extended transitively through `derived_from` — revoking audio revokes its
 transcript, and the alignment derived from that transcript (R10).
+
+A capture already revoked isn't revoked again: it was erased then, and its
+receipts were written then. Resolution and erasure MUST NOT depend on how many
+captures a scope takes in: retention's scope, from the epoch, takes in every
+capture ever revoked.
 
 The scope MUST be resolved in the transaction that records the revocation,
 under the write lock taken before anything is read (`BEGIN IMMEDIATE`), so a
@@ -286,7 +293,7 @@ PRESENCE_CAPTURE_DRIVER="/path/to/your-driver" npm run conformance:store
 
 The reference implementation also passes an API layer covering its read path
 (grants, envelope and egress, ADR 0001 T1–T12) and replay (R4). The store
-layer has 55 tests and the API layer 77, among them the five that distinguish
+layer has 57 tests and the API layer 79, among them the five that distinguish
 this schema:
 
 - **revocation propagation** — derived views and vector entries do not survive

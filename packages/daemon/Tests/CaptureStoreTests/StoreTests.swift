@@ -45,6 +45,26 @@ final class StoreTests: XCTestCase {
         XCTAssertNil(try store.contentText(recent))
         XCTAssertEqual(try store.contentText(earlier), "an hour ago")
     }
+
+    /// A failure finishing the erasure after the revocation committed is reported with the
+    /// revocation, which stands, and the erasure is finished later: never "nothing was forgotten".
+    func testAFailureAfterTheRevocationCommittedLeavesItStandingAndPending() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try CaptureStore(path: dir.appendingPathComponent("store.sqlite").path, masterKey: Seal.newKey())
+        let id = try store.append(NewCapture(capturedAt: Date(), captureType: "screen_text", source: "screen", contentText: "forgotten"))
+        store.afterTruncation = { throw StoreError.sqlite("disk full") }
+
+        let result = try store.revoke(scopeKind: "capture", scopeValue: id)
+        XCTAssertEqual(result.revokedCaptureIds, [id])
+        XCTAssertFalse(result.erasedOnDisk)
+        XCTAssertEqual(result.erasureError, "capture store: disk full")
+        XCTAssertNil(try store.contentText(id), "the revocation did not stand")
+        XCTAssertTrue(store.isErasurePending)
+
+        store.afterTruncation = nil
+        XCTAssertTrue(try store.finishErasure())
+    }
 }
 
 import SQLite3

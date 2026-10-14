@@ -66,6 +66,13 @@ public struct Revocation: Sendable, Equatable {
     /// False when a reader in another process held the write-ahead log, so the revoked bytes may
     /// still be in it: the erasure isn't done until `finishErasure()` says so.
     public let erasedOnDisk: Bool
+    /// Why finishing the erasure failed after the revocation was committed, when it did. The
+    /// revocation stands; the erasure is pending and is finished later.
+    public var erasureError: String?
+
+    public init(revocationId: String, revokedCaptureIds: [String], erasedOnDisk: Bool, erasureError: String? = nil) {
+        (self.revocationId, self.revokedCaptureIds, self.erasedOnDisk, self.erasureError) = (revocationId, revokedCaptureIds, erasedOnDisk, erasureError)
+    }
 }
 
 /// The capture store SCHEMA.md defines, in one SQLite file. The event log records that something
@@ -94,6 +101,9 @@ public final class CaptureStore: @unchecked Sendable {
         try exec("PRAGMA foreign_keys = ON")
         // Deleted content is overwritten, not left on a free page (R11).
         try exec("PRAGMA secure_delete = ON")
+        // What a revocation reaches is worked out in a temp table: kept in memory, never in a file
+        // outside the store's directory.
+        try exec("PRAGMA temp_store = MEMORY")
         try switchToWAL()
         try migrate()
         do {
@@ -302,7 +312,10 @@ public final class CaptureStore: @unchecked Sendable {
                     }
                     sealed = try Seal.seal(output.json, key: try dataKey(captureId, wrapped: wrapped), aad: "projection:\(projection):\(captureId):\(entryRef)")
                 }
-                try run("INSERT INTO projection_entry (projection_name, capture_id, entry_ref, created_at, output_kind, output_sealed) VALUES (?, ?, ?, ?, ?, ?)",
+                // Recording again that an entry exists changes nothing, so an index that failed after
+                // recording can retry. An entry with an output is kept once.
+                let again = output == nil ? " ON CONFLICT (projection_name, capture_id, entry_ref) DO NOTHING" : ""
+                try run("INSERT INTO projection_entry (projection_name, capture_id, entry_ref, created_at, output_kind, output_sealed) VALUES (?, ?, ?, ?, ?, ?)" + again,
                         projection, captureId, entryRef, Self.iso(Date()), output?.kind, sealed)
             }
         }
@@ -366,36 +379,39 @@ public final class CaptureStore: @unchecked Sendable {
             // another writer appends meanwhile is either in the set, or appended after this commits and
             // refused (refuseForgotten).
             try transaction(immediate: true) {
-                let affected = try resolve(scopeKind: scopeKind, scopeValue: value)
-                ids = affected.map(\.id)
-                let list = Array(repeating: "?", count: ids.count).joined(separator: ",")
+                try resolve(scopeKind: scopeKind, scopeValue: value)
+                let reaching = "SELECT capture_id FROM temp.revoking"
                 try run("INSERT INTO revocation (revocation_id, sequence, revoked_at, scope_kind, scope_value, reason) VALUES (?, ?, ?, ?, ?, ?)",
                         revocationId, try nextSequence(), revokedAt, scopeKind, value, reason)
-                for (id, cascaded) in affected {
-                    try run("INSERT INTO revoked_capture (capture_id, revocation_id, revoked_at, cascaded) VALUES (?, ?, ?, ?) ON CONFLICT (capture_id) DO NOTHING",
-                            id, revocationId, revokedAt, cascaded ? 1 : 0)
-                }
+                try run("INSERT INTO revoked_capture (capture_id, revocation_id, revoked_at, cascaded) SELECT capture_id, ?, ?, depth > 0 FROM temp.revoking",
+                        revocationId, revokedAt)
                 for projection in try rows("SELECT projection_name FROM projection").map({ $0.text(0) }) {
-                    var removed = 0
-                    if !ids.isEmpty {
-                        removed = try runCounting("DELETE FROM projection_entry WHERE projection_name = ? AND capture_id IN (\(list))", [projection] + ids)
-                    }
+                    let removed = try runCounting("DELETE FROM projection_entry WHERE projection_name = ? AND capture_id IN (\(reaching))", [projection])
                     try run("INSERT INTO projection_revocation (projection_name, revocation_id, applied_at, entries_removed) VALUES (?, ?, ?, ?)",
                             projection, revocationId, Self.iso(Date()), removed)
                 }
-                var (keys, contents, payloads) = (0, 0, 0)
-                if !ids.isEmpty {
-                    payloads = try runCounting("""
-                        DELETE FROM payload_blob WHERE payload_hash IN (
-                          SELECT payload_hash FROM capture_event WHERE capture_id IN (\(list)) AND payload_hash IS NOT NULL)
-                        """, ids)
-                    contents = try runCounting("DELETE FROM capture_content WHERE capture_id IN (\(list))", ids)
-                    keys = try runCounting("DELETE FROM capture_key WHERE capture_id IN (\(list))", ids)
-                }
+                let payloads = try runCounting("""
+                    DELETE FROM payload_blob WHERE payload_hash IN (
+                      SELECT payload_hash FROM capture_event WHERE capture_id IN (\(reaching)) AND payload_hash IS NOT NULL)
+                    """, [])
+                let contents = try runCounting("DELETE FROM capture_content WHERE capture_id IN (\(reaching))", [])
+                let keys = try runCounting("DELETE FROM capture_key WHERE capture_id IN (\(reaching))", [])
                 try run("INSERT INTO erasure_receipt (revocation_id, applied_at, keys_destroyed, contents_erased, payloads_erased) VALUES (?, ?, ?, ?, ?)",
                         revocationId, Self.iso(Date()), keys, contents, payloads)
+                ids = try rows("SELECT r.capture_id FROM temp.revoking r JOIN capture_event e USING (capture_id) ORDER BY r.depth, e.sequence")
+                    .map { $0.text(0) }
             }
-            return Revocation(revocationId: revocationId, revokedCaptureIds: ids, erasedOnDisk: try truncateLog())
+            // The revocation is committed: from here on, nothing that fails can make it not have
+            // happened. A failure finishing the erasure leaves it pending (its receipt has no
+            // completed_at), to be finished by the next writer, and says so, rather than reading as
+            // nothing forgotten.
+            do {
+                let erased = try truncateLog()
+                let pending = try rows("SELECT completed_at FROM erasure_receipt WHERE revocation_id = ?", revocationId).first?.optionalText(0) == nil
+                return Revocation(revocationId: revocationId, revokedCaptureIds: ids, erasedOnDisk: erased && !pending)
+            } catch {
+                return Revocation(revocationId: revocationId, revokedCaptureIds: ids, erasedOnDisk: false, erasureError: "\(error)")
+            }
         }
     }
 
@@ -438,7 +454,7 @@ public final class CaptureStore: @unchecked Sendable {
             }
         }
         if truncated {
-            afterTruncation?()
+            try afterTruncation?()
             try stampErasures(through: through)
         }
         return truncated
@@ -446,7 +462,7 @@ public final class CaptureStore: @unchecked Sendable {
 
     /// For tests: runs after the log is truncated and before the erasures that proves are stamped,
     /// so a test can commit another writer's revocation in between.
-    var afterTruncation: (() -> Void)?
+    var afterTruncation: (() throws -> Void)?
 
     /// Every erasure pending through revocation `through` is done: the log holding its frames was
     /// just truncated. Recorded in the store, so it survives this process. If the stamp can't be
@@ -475,35 +491,38 @@ public final class CaptureStore: @unchecked Sendable {
         return try revoke(scopeKind: "time_range", scopeValue: "\(Self.epoch)/\(cutoff)", reason: "retention")
     }
 
-    /// The captures a scope names, then everything derived from them, transitively (R10): each
-    /// with whether it was reached through the chain.
-    private func resolve(scopeKind: String, scopeValue: String) throws -> [(id: String, cascaded: Bool)] {
-        let seeds: [String]
+    /// Fills temp.revoking with what a revocation reaches: the captures its scope names that aren't
+    /// revoked yet (those were erased when they were), and everything derived from them (R10), each
+    /// with how far down the chain it was reached. All in SQL, so a scope of any size (retention's,
+    /// from the epoch, takes in every capture ever revoked) never becomes a list of parameters. Kept
+    /// in memory (temp_store), never in a file.
+    private func resolve(scopeKind: String, scopeValue: String) throws {
+        let (clause, values): (String, [Any?])
         switch scopeKind {
-        case "capture":
-            seeds = try rows("SELECT capture_id FROM capture_event WHERE capture_id = ?", scopeValue).map { $0.text(0) }
-        case "source":
-            seeds = try rows("SELECT capture_id FROM capture_event WHERE source = ? OR source_app = ?", scopeValue, scopeValue).map { $0.text(0) }
-        case "privacy_level":
-            seeds = try rows("SELECT capture_id FROM capture_event WHERE privacy_level = ?", scopeValue).map { $0.text(0) }
+        case "capture": (clause, values) = ("capture_id = ?", [scopeValue])
+        case "source": (clause, values) = ("(source = ? OR source_app = ?)", [scopeValue, scopeValue])
+        case "privacy_level": (clause, values) = ("privacy_level = ?", [scopeValue])
         case "time_range":
             // In the form captured_at is kept in, so "...05Z" can't sort after "...05.999Z".
             let bounds = try Self.canonicalRange(scopeValue).split(separator: "/").map(String.init)
-            seeds = try rows("SELECT capture_id FROM capture_event WHERE captured_at >= ? AND captured_at <= ?", bounds[0], bounds[1]).map { $0.text(0) }
+            (clause, values) = ("captured_at >= ? AND captured_at <= ?", bounds)
         default:
             throw StoreError.sqlite("unknown scope kind: \(scopeKind)")
         }
-        var all = seeds.map { (id: $0, cascaded: false) }
-        var seen = Set(seeds)
-        var frontier = seeds
-        while !frontier.isEmpty {
-            let list = Array(repeating: "?", count: frontier.count).joined(separator: ",")
-            let children = try rows("SELECT capture_id FROM capture_event WHERE derived_from IN (\(list))", values: frontier).map { $0.text(0) }
-                .filter { seen.insert($0).inserted }
-            all += children.map { (id: $0, cascaded: true) }
-            frontier = children
-        }
-        return all
+        try exec("CREATE TEMP TABLE IF NOT EXISTS revoking (capture_id TEXT PRIMARY KEY, depth INTEGER NOT NULL)")
+        try exec("DELETE FROM temp.revoking")
+        _ = try runCounting("""
+            WITH RECURSIVE reached (capture_id, depth) AS (
+              SELECT capture_id, 0 FROM capture_event
+              WHERE \(clause) AND capture_id NOT IN (SELECT capture_id FROM revoked_capture)
+              UNION
+              SELECT e.capture_id, r.depth + 1 FROM capture_event e JOIN reached r ON e.derived_from = r.capture_id
+            )
+            INSERT INTO temp.revoking (capture_id, depth)
+            SELECT capture_id, MIN(depth) FROM reached
+            WHERE capture_id NOT IN (SELECT capture_id FROM revoked_capture)
+            GROUP BY capture_id
+            """, values)
     }
 
     // MARK: SQLite

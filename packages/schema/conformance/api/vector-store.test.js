@@ -69,3 +69,16 @@ test('R3/R13: a vector for a revoked capture is refused before it reaches the ba
   assert.throws(() => bound.index({ captureId: id, entryRef: 'vec:late', vector: [0.5, 0.6] }), { name: 'RevokedError' });
   assert.equal(vectors.size(), 0, 'the backend kept a vector the store refused to record');
 });
+
+test('R3: an index whose backend failed can be retried', () => {
+  const store = openStore();
+  const backend = makeVectorStore();
+  let failures = 1;
+  const flaky = { ...backend, upsert: (entry) => (failures-- > 0 ? (() => { throw new Error('backend unavailable'); })() : backend.upsert(entry)) };
+  const bound = bindVectorStore(store, flaky);
+  const id = store.appendCapture({ captureType: 'screen_text', source: 'screen', privacyLevel: 'standard', contentText: 'retried' });
+
+  assert.throws(() => bound.index({ captureId: id, entryRef: 'vec:1', vector: [0.1] }), /backend unavailable/);
+  bound.index({ captureId: id, entryRef: 'vec:1', vector: [0.1] });
+  assert.equal(backend.size(), 1);
+});

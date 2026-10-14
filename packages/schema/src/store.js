@@ -115,6 +115,8 @@ export function openStore(path = ':memory:', { masterKey, onTruncated } = {}) {
   db.exec('PRAGMA busy_timeout = 5000');
   // Deleted content is overwritten, not left on a free page (R11).
   db.exec('PRAGMA secure_delete = ON');
+  // What a revocation reaches is worked out in a temp table: kept in memory, never in a file outside the store's directory.
+  db.exec('PRAGMA temp_store = MEMORY');
   // A new store is switched to WAL by whichever writer gets there first, and
   // SQLite tells the other it's locked at once rather than after its busy
   // timeout: so that one waits here, as long as the timeout would have.
@@ -347,9 +349,11 @@ export function openStore(path = ':memory:', { masterKey, onTruncated } = {}) {
       kind = output.kind;
       sealed = seal(dataKey, Buffer.from(JSON.stringify(output.value)), `projection:${projection}:${captureId}:${entryRef}`);
     }
+    // Recording again that an entry exists changes nothing, so an index that
+    // failed after recording can retry. An entry with an output is kept once.
     db.prepare(`
       INSERT INTO projection_entry (projection_name, capture_id, entry_ref, created_at, output_kind, output_sealed)
-      VALUES (?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?) ${output ? '' : 'ON CONFLICT (projection_name, capture_id, entry_ref) DO NOTHING'}
     `).run(projection, captureId, entryRef, now(), kind, sealed);
   }
 
@@ -396,42 +400,36 @@ export function openStore(path = ':memory:', { masterKey, onTruncated } = {}) {
 
   // ------------------------------------------------------------ revocation
 
-  /** Captures matching a revocation scope, plus everything derived from them (R10). */
+  /**
+   * Fills temp.revoking with what a revocation reaches: the captures its scope
+   * names that aren't revoked yet (those were erased when they were), and
+   * everything derived from them (R10). All in SQL, so a scope of any size
+   * (retention's, from the epoch, takes in every capture ever revoked) never
+   * becomes a list of parameters. Kept in memory (temp_store), never in a file.
+   */
   function resolveScope({ scopeKind, scopeValue }) {
-    const direct = {
-      capture: () =>
-        db.prepare('SELECT capture_id FROM capture_event WHERE capture_id = ?').all(scopeValue),
-      source: () =>
-        db.prepare('SELECT capture_id FROM capture_event WHERE source = ? OR source_app = ?')
-          .all(scopeValue, scopeValue),
-      privacy_level: () =>
-        db.prepare('SELECT capture_id FROM capture_event WHERE privacy_level = ?').all(scopeValue),
-      time_range: () => {
-        const [from, to] = canonicalRange(scopeValue).split('/');
-        return db
-          .prepare('SELECT capture_id FROM capture_event WHERE captured_at >= ? AND captured_at <= ?')
-          .all(from, to);
-      },
-    }[scopeKind];
+    const [where, params] = {
+      capture: () => ['capture_id = ?', [scopeValue]],
+      source: () => ['(source = ? OR source_app = ?)', [scopeValue, scopeValue]],
+      privacy_level: () => ['privacy_level = ?', [scopeValue]],
+      time_range: () => ['captured_at >= ? AND captured_at <= ?', canonicalRange(scopeValue).split('/')],
+    }[scopeKind]?.() ?? [];
+    if (!where) throw new Error(`unknown scope kind: ${scopeKind}`);
 
-    if (!direct) throw new Error(`unknown scope kind: ${scopeKind}`);
-
-    const seeds = direct().map((r) => r.capture_id);
-    const all = new Map(seeds.map((id) => [id, false])); // id -> cascaded?
-    let frontier = seeds;
-
-    while (frontier.length > 0) {
-      const placeholders = frontier.map(() => '?').join(',');
-      const children = db
-        .prepare(`SELECT capture_id FROM capture_event WHERE derived_from IN (${placeholders})`)
-        .all(...frontier)
-        .map((r) => r.capture_id)
-        .filter((id) => !all.has(id));
-      for (const id of children) all.set(id, true);
-      frontier = children;
-    }
-
-    return all;
+    db.exec('CREATE TEMP TABLE IF NOT EXISTS revoking (capture_id TEXT PRIMARY KEY, depth INTEGER NOT NULL)');
+    db.exec('DELETE FROM temp.revoking');
+    db.prepare(`
+      WITH RECURSIVE reached (capture_id, depth) AS (
+        SELECT capture_id, 0 FROM capture_event
+        WHERE ${where} AND capture_id NOT IN (SELECT capture_id FROM revoked_capture)
+        UNION
+        SELECT e.capture_id, r.depth + 1 FROM capture_event e JOIN reached r ON e.derived_from = r.capture_id
+      )
+      INSERT INTO temp.revoking (capture_id, depth)
+      SELECT capture_id, MIN(depth) FROM reached
+      WHERE capture_id NOT IN (SELECT capture_id FROM revoked_capture)
+      GROUP BY capture_id
+    `).run(...params);
   }
 
   /**
@@ -449,38 +447,26 @@ export function openStore(path = ':memory:', { masterKey, onTruncated } = {}) {
     // The scope is resolved under the write lock, in the transaction that
     // records it: a capture another writer appends meanwhile is either in the
     // set, or appended after this commits and refused (refuseForgotten).
-    const affected = immediate(() => {
-      const affected = resolveScope({ scopeKind, scopeValue: value });
+    const revokedIds = immediate(() => {
+      resolveScope({ scopeKind, scopeValue: value });
       db.prepare(`
         INSERT INTO revocation (revocation_id, sequence, revoked_at, scope_kind, scope_value, reason)
         VALUES (?, ?, ?, ?, ?, ?)
       `).run(revocationId, nextSequence(), revokedAt, scopeKind, value, reason ?? null);
 
-      const markRevoked = db.prepare(`
+      db.prepare(`
         INSERT INTO revoked_capture (capture_id, revocation_id, revoked_at, cascaded)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT (capture_id) DO NOTHING
-      `);
-      for (const [captureId, cascaded] of affected) {
-        markRevoked.run(captureId, revocationId, revokedAt, cascaded ? 1 : 0);
-      }
+        SELECT capture_id, ?, ?, depth > 0 FROM temp.revoking
+      `).run(revocationId, revokedAt);
 
       // Propagate into every projection. This is the property no competitor
       // has, so it gets a receipt rather than a best effort.
       const projections = db.prepare('SELECT projection_name FROM projection').all();
-      const ids = [...affected.keys()];
       for (const { projection_name: projectionName } of projections) {
-        let removed = 0;
-        if (ids.length > 0) {
-          const placeholders = ids.map(() => '?').join(',');
-          const result = db
-            .prepare(`
-              DELETE FROM projection_entry
-              WHERE projection_name = ? AND capture_id IN (${placeholders})
-            `)
-            .run(projectionName, ...ids);
-          removed = Number(result.changes);
-        }
+        const removed = Number(db.prepare(`
+          DELETE FROM projection_entry
+          WHERE projection_name = ? AND capture_id IN (SELECT capture_id FROM temp.revoking)
+        `).run(projectionName).changes);
         db.prepare(`
           INSERT INTO projection_revocation
             (projection_name, revocation_id, applied_at, entries_removed)
@@ -491,33 +477,43 @@ export function openStore(path = ':memory:', { masterKey, onTruncated } = {}) {
       // Erase the content. The key goes in the same transaction as the record
       // of the revocation, so there is no moment at which a revocation is
       // recorded and its content still readable (R11).
-      let keys = 0;
-      let contents = 0;
-      let payloads = 0;
-      if (ids.length > 0) {
-        const placeholders = ids.map(() => '?').join(',');
-        payloads = Number(db.prepare(`
-          DELETE FROM payload_blob WHERE payload_hash IN (
-            SELECT payload_hash FROM capture_event
-            WHERE capture_id IN (${placeholders}) AND payload_hash IS NOT NULL
-          )
-        `).run(...ids).changes);
-        contents = Number(db.prepare(`DELETE FROM capture_content WHERE capture_id IN (${placeholders})`)
-          .run(...ids).changes);
-        keys = Number(db.prepare(`DELETE FROM capture_key WHERE capture_id IN (${placeholders})`)
-          .run(...ids).changes);
-      }
+      const payloads = Number(db.prepare(`
+        DELETE FROM payload_blob WHERE payload_hash IN (
+          SELECT payload_hash FROM capture_event
+          WHERE capture_id IN (SELECT capture_id FROM temp.revoking) AND payload_hash IS NOT NULL
+        )
+      `).run().changes);
+      const contents = Number(db.prepare('DELETE FROM capture_content WHERE capture_id IN (SELECT capture_id FROM temp.revoking)')
+        .run().changes);
+      const keys = Number(db.prepare('DELETE FROM capture_key WHERE capture_id IN (SELECT capture_id FROM temp.revoking)')
+        .run().changes);
       db.prepare(`
         INSERT INTO erasure_receipt
           (revocation_id, applied_at, keys_destroyed, contents_erased, payloads_erased)
         VALUES (?, ?, ?, ?, ?)
       `).run(revocationId, now(), keys, contents, payloads);
-      return affected;
+      return db.prepare(`
+        SELECT r.capture_id FROM temp.revoking r JOIN capture_event e USING (capture_id) ORDER BY r.depth, e.sequence
+      `).all().map((r) => r.capture_id);
     });
 
-    const erasedOnDisk = truncateLog();
-    return { revocationId, revokedCaptureIds: [...affected.keys()], erasedOnDisk };
+    // The revocation is committed: from here on, nothing that fails can make
+    // it not have happened. A failure finishing the erasure leaves it pending
+    // (its receipt has no completed_at), to be finished by the next writer,
+    // and says so, rather than reading as nothing forgotten.
+    let erasedOnDisk = false;
+    let erasureError;
+    try {
+      erasedOnDisk = truncateLog() && !pendingThrough(revocationId);
+    } catch (err) {
+      erasureError = err.message;
+    }
+    return { revocationId, revokedCaptureIds: revokedIds, erasedOnDisk, ...(erasureError && { erasureError }) };
   }
+
+  /** Whether this revocation's erasure is still waiting to be recorded done. */
+  const pendingThrough = (revocationId) =>
+    db.prepare('SELECT completed_at FROM erasure_receipt WHERE revocation_id = ?').get(revocationId)?.completed_at == null;
 
   /** Whether an erasure is still waiting for the log to be truncated, by this process or another. */
   const erasurePending = () =>

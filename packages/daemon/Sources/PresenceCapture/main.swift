@@ -241,12 +241,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                           scopeValue: "\(CaptureStore.iso(now.addingTimeInterval(-minutes * 60)))/\(CaptureStore.iso(now))",
                                           reason: "forget \(Int(minutes))m")
             activity?.reset()
-            log.write("forget.done minutes=\(Int(minutes)) revoked=\(result.revokedCaptureIds.count) on_disk=\(result.erasedOnDisk)")
+            log.write("forget.done minutes=\(Int(minutes)) revoked=\(result.revokedCaptureIds.count) on_disk=\(result.erasedOnDisk)" + (result.erasureError == nil ? "" : " erasure_failed"))
             let done = NSAlert()
             done.messageText = "Forgotten"
             done.informativeText = result.erasedOnDisk
                 ? "\(result.revokedCaptureIds.count) captures from \(label) were erased."
-                : "\(result.revokedCaptureIds.count) captures from \(label) were revoked and can't be read. An agent was reading the store, so their last traces will be erased from disk as soon as it lets go."
+                : "\(result.revokedCaptureIds.count) captures from \(label) were revoked and can't be read. Their last traces will be erased from disk as soon as the store can finish: an agent may be reading it."
             done.runModal()
         } catch {
             log.write("forget.failed")

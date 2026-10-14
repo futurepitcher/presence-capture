@@ -54,3 +54,26 @@ test('R11: a writer stamps only the erasures its truncation proved, never one an
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('R11: a failure finishing the erasure after the revocation committed says so, and the revocation stands', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pc-after-'));
+  const path = join(dir, 'store.sqlite');
+  try {
+    let fail = true;
+    const store = openStore(path, { masterKey: randomBytes(32), onTruncated: () => { if (fail) throw new Error('disk full'); } });
+    const id = store.appendCapture({ captureType: 'screen_text', source: 'screen', privacyLevel: 'standard', contentText: 'forgotten' });
+
+    const result = store.revoke({ scopeKind: 'capture', scopeValue: id });
+    assert.deepEqual(result.revokedCaptureIds, [id]);
+    assert.equal(result.erasedOnDisk, false);
+    assert.match(result.erasureError, /disk full/);
+    assert.equal(store.contentText(id), null, 'the revocation did not stand');
+    assert.equal(store.erasurePending, true);
+
+    fail = false;
+    assert.equal(store.finishErasure(), true);
+    store.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

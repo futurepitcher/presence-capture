@@ -223,3 +223,29 @@ test('store ADR 0001: a read through a long history does not hold the write lock
   assert.ok(tries >= 3, `the search finished too quickly to tell (${tries} tries)`);
   assert.ok(locked <= tries / 2, `the write lock was held for ${locked} of ${tries} tries while the search read`);
 }));
+
+test('store R2/R12: a scope past any parameter limit revokes whole, and retention runs over a long revoked history', () => withStore(async ({ call, path }) => {
+  // More captures than SQLite's default limit on parameters in one statement (32,766).
+  const many = 33_000;
+  const captures = Array.from({ length: many }, (_, i) => screenText(`old ${i}`, {
+    captured_at: new Date(Date.parse('2026-09-01T00:00:00.000Z') + i * 1000).toISOString(),
+  }));
+  for (let i = 0; i < many; i += 5_500) await call('append_all', { captures: captures.slice(i, i + 5_500) });
+
+  const { revoked_capture_ids: revoked } = await call('revoke', { scope_kind: 'time_range', scope_value: '2026-09-01T00:00:00.000Z/2026-09-02T00:00:00.000Z' });
+  assert.equal(revoked.length, many);
+  assert.equal(query(path, 'SELECT COUNT(*) AS n FROM capture_key')[0].n, 0);
+
+  // Retention's scope runs from the epoch, through every capture revoked above: only the new one is revoked again.
+  const { capture_id: later } = await call('append', screenText('three weeks ago', { captured_at: '2026-09-29T12:00:00.000Z' }));
+  const retained = await call('retain', { days: 14, now: '2026-10-20T12:00:00.000Z' });
+  assert.deepEqual(retained.revoked_capture_ids, [later]);
+}));
+
+test('store R3: recording again that a projection entry exists changes nothing, so an index can retry', () => withStore(async ({ call, path }) => {
+  const { capture_id: id } = await call('append', screenText('indexed twice'));
+  await call('register_projection', { name: 'vectors', kind: 'vector' });
+  await call('add_projection_entry', { projection: 'vectors', capture_id: id, entry_ref: 'vec:1' });
+  await call('add_projection_entry', { projection: 'vectors', capture_id: id, entry_ref: 'vec:1' });
+  assert.equal(query(path, 'SELECT COUNT(*) AS n FROM projection_entry')[0].n, 1);
+}));
