@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import AVFoundation
+import CaptureConnect
 import CaptureStore
 
 /// Presence Capture: a menu-bar app that reads the screen, hears this Mac and notes what's in front,
@@ -23,6 +24,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hearMicrophoneItem: NSMenuItem!
     private var hearSystemAudioItem: NSMenuItem!
     private var approveSensorsItem: NSMenuItem!
+    private var retentionMenu: NSMenu!
+    private let windows = Windows()
     private var audio: Listener?
     private var store: CaptureStore?
     private var capturer: ScreenCapturer?
@@ -106,8 +109,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             problem = error is MasterKeyError ? "The store's key couldn't be read from or kept in the Keychain" : "The capture store couldn't be opened"
         }
         watchSleep()
-        // Permissions are asked for from the menu, when the person chooses to: never at launch.
+        // Permissions are asked for when the person chooses to, from the menu or the first-run
+        // window's buttons: never at launch.
         refresh()
+        if !defaults.bool(forKey: "onboarded") { showOnboarding() }
     }
 
     private func schedule(capturer: ScreenCapturer, store: CaptureStore) {
@@ -189,13 +194,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let screenItem = NSMenuItem(title: "Allow Screen Recording…", action: #selector(allowScreen), keyEquivalent: "")
         microphoneItem = NSMenuItem(title: "Allow Microphone…", action: #selector(allowMicrophone), keyEquivalent: "")
         accessibilityItem = NSMenuItem(title: "Allow Accessibility (page addresses)…", action: #selector(allowAccessibility), keyEquivalent: "")
-        for item in [stateItem!, audioItem!, .separator(), pauseItem!, forgetQuarter, forgetHour, .separator(),
-                     hearMicrophoneItem!, hearSystemAudioItem!, exclusions, approveSensorsItem!, .separator(), screenItem, microphoneItem!, accessibilityItem!, .separator()] {
+        let connect = NSMenuItem(title: "Connect an Agent", action: nil, keyEquivalent: "")
+        connect.submenu = NSMenu()
+        for client in Client.allCases {
+            let item = NSMenuItem(title: "\(client.name)…", action: #selector(connectAgent(_:)), keyEquivalent: "")
+            item.representedObject = client.rawValue
+            item.target = self
+            connect.submenu?.addItem(item)
+        }
+        let agents = NSMenuItem(title: "Agents Read…", action: #selector(showAgentsRead), keyEquivalent: "")
+        let retention = NSMenuItem(title: "Keep Captures For", action: nil, keyEquivalent: "")
+        retentionMenu = NSMenu()
+        for days in Self.retentionChoices {
+            let item = NSMenuItem(title: Self.span(days).capitalized, action: #selector(setRetention(_:)), keyEquivalent: "")
+            item.tag = days
+            item.target = self
+            retentionMenu.addItem(item)
+        }
+        retention.submenu = retentionMenu
+        let setUp = NSMenuItem(title: "Set Up Presence Capture…", action: #selector(showOnboarding), keyEquivalent: "")
+        let updates = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
+        for item in [stateItem!, audioItem!, .separator(), pauseItem!, forgetQuarter, forgetHour, .separator(), connect, agents, .separator(),
+                     hearMicrophoneItem!, hearSystemAudioItem!, retention, exclusions, approveSensorsItem!, .separator(),
+                     screenItem, microphoneItem!, accessibilityItem!, setUp, updates, .separator()] {
             menu.addItem(item)
         }
         menu.addItem(NSMenuItem(title: "Quit Presence Capture", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         for item in menu.items where item.action != nil && item.action != #selector(NSApplication.terminate(_:)) { item.target = self }
         statusItem.menu = menu
+    }
+
+    /// The periods the menu offers for Keep Captures For, in days.
+    static let retentionChoices = [1, 7, 14, 30, 90, 365]
+
+    static func span(_ days: Int) -> String {
+        days == 365 ? "1 year" : days == 1 ? "1 day" : "\(days) days"
     }
 
     private func refresh() {
@@ -207,6 +240,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         audioItem.title = audio?.state ?? "Not listening (needs macOS 26)"
         microphoneItem.isHidden = audio == nil || AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         hearMicrophoneItem.state = hearMicrophone ? .on : .off
+        for item in retentionMenu.items { item.state = item.tag == retentionDays ? .on : .off }
         hearSystemAudioItem.state = hearSystemAudio ? .on : .off
         let waiting = sensors?.unapproved.count ?? 0
         approveSensorsItem.isHidden = waiting == 0
@@ -320,17 +354,91 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refresh()
     }
 
-    @objc private func allowMicrophone() {
-        if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
+    @objc private func allowMicrophone() { askForMicrophone(thenHear: false) }
+
+    /// Asks once; after that, System Settings is where it's allowed. From the first-run window,
+    /// allowing it is also choosing to be heard, so Hear the Microphone is turned on with it.
+    private func askForMicrophone(thenHear: Bool) {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .notDetermined:
             AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
                 DispatchQueue.main.async {
+                    if granted && thenHear { self?.defaults.set(true, forKey: "hearMicrophone") }
                     if granted { self?.holdCapture() }
                     self?.refresh()
                 }
             }
-        } else if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
-            NSWorkspace.shared.open(url)
+        case .authorized:
+            if thenHear { defaults.set(true, forKey: "hearMicrophone") }
+            holdCapture()
+            refresh()
+        default:
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") { NSWorkspace.shared.open(url) }
         }
+    }
+
+    // MARK: Agents, retention, set-up and updates (R2)
+
+    /// The first-run window: each permission explained, and connecting an agent. Shown at the
+    /// first launch, and from the menu. Closing it, by Done or otherwise, means it isn't shown again.
+    @objc private func showOnboarding() {
+        windows.show("onboarding", title: "Welcome to Presence Capture", closed: { [weak self] in self?.defaults.set(true, forKey: "onboarded") }) {
+            OnboardingView(permissions: { Permissions.now }, canHear: audio != nil,
+                           allowScreen: { [weak self] in self?.allowScreen() },
+                           allowMicrophone: { [weak self] in self?.askForMicrophone(thenHear: true) },
+                           allowAccessibility: { [weak self] in self?.allowAccessibility() },
+                           connect: { [weak self] client in self?.connect(client) },
+                           done: { [weak self] in self?.windows.close("onboarding") })
+        }
+    }
+
+    @objc private func connectAgent(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let client = Client(rawValue: raw) else { return }
+        connect(client)
+    }
+
+    private func connect(_ client: Client) {
+        guard let store else { return storeIsClosed() }
+        ConnectAgent.run(client, store: store, storePath: home + "/store.sqlite", log: log.write)
+    }
+
+    /// Every grant, and what each agent was given: counts from the egress log, never content.
+    @objc private func showAgentsRead() {
+        guard let store else { return storeIsClosed() }
+        let log = self.log!
+        windows.show("agents", title: "Agents Read") {
+            AgentsReadView(load: { AgentsReadView.Snapshot(grants: try store.grants(), egress: try store.egress(since: Date().addingTimeInterval(-7 * 86_400))) },
+                           revoke: { grantId in if try store.revokeGrant(grantId) { log.write("grant.revoked") } })
+        }
+    }
+
+    /// A shorter period erases what's older now, so it's asked first; a longer one erases nothing yet.
+    @objc private func setRetention(_ sender: NSMenuItem) {
+        let days = sender.tag
+        guard days != retentionDays else { return }
+        if days < retentionDays {
+            let alert = NSAlert()
+            alert.messageText = "Keep captures for \(Self.span(days))?"
+            alert.informativeText = "Everything captured more than \(Self.span(days)) ago is erased from this Mac now, and from then on as it ages. This can't be undone."
+            alert.addButton(withTitle: "Erase Older Captures")
+            alert.addButton(withTitle: "Cancel")
+            NSApp.activate(ignoringOtherApps: true)
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        defaults.set(days, forKey: "retentionDays")
+        log.write("retention.set days=\(days)")
+        if let store { retain(store) }
+        refresh()
+    }
+
+    @objc private func checkForUpdates() { Updates.check() }
+
+    private func storeIsClosed() {
+        let alert = NSAlert()
+        alert.messageText = "The store isn't open"
+        alert.informativeText = problem ?? "Presence Capture couldn't open its store."
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
     }
 
     @objc private func allowAccessibility() {

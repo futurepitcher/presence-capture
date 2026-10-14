@@ -129,6 +129,8 @@ surface sits behind the same grants, envelope and egress log as MCP.
 - ✅ `pcap`, the command line: grants, what agents were given (`pcap egress`),
   forget, `pcap check`, and `pcap connect` for Claude Code, Claude Desktop and
   Cursor.
+- ✅ The menu's set-up window, Connect an Agent…, Agents Read…, Keep Captures
+  For and Check for Updates.
 
 See [RELEASING.md](RELEASING.md).
 
