@@ -124,10 +124,11 @@ is in [ADR 0001](adr/0001-serving-trust-boundary.md).
 Each example shows the `params` of a `tools/call` request, then the decoded
 result, abbreviated.
 
-**Times** (`from`, `to`) are ISO 8601 strings with a time zone, such as
-`2026-10-14T09:00:00Z` or `2026-10-14T02:00:00-07:00`. Fractions of a second are
-fine. A date alone, a time with no zone, or words such as `yesterday` are
-refused. Both ends are inclusive. Where a tool defaults to "the last hour", `to`
+**Times** (`from`, `to`) are ISO 8601 strings: a date, `T`, a time to the
+second, and a zone, `Z` or an offset in hours and minutes, such as
+`2026-10-14T09:00:00Z` or `2026-10-14T02:00:00-07:00` (`-0700` works too).
+Fractions of a second are fine. A date alone, a time with no zone or no
+seconds, an offset of hours alone, or words such as `yesterday` are refused. Both ends are inclusive. Where a tool defaults to "the last hour", `to`
 is now and `from` is an hour before `to`.
 
 **`limit`** is a whole number, 1 or more, and sets the most captures a call
