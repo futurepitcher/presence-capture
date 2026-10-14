@@ -52,6 +52,20 @@ final class MenuTests: XCTestCase {
         XCTAssertNil(ConnectAgent.warning(.failure(ConnectError.claudeNotFound), client: .claudeCode))
     }
 
+    func testWarningsAreKeptUntilSeenAndNoConfirmationIsShownWhileQuitting() {
+        let defaults = UserDefaults(suiteName: "unseen-\(UUID().uuidString)")!
+        Unseen.keep("grant A", in: defaults)
+        Unseen.keep("grant B", in: defaults)
+        Unseen.seen("grant A", in: defaults)
+        XCTAssertEqual(Unseen.all(in: defaults), ["grant B"], "a warning was lost, or kept after it was seen")
+
+        var shown = false
+        ConnectAgent.quitting = true
+        defer { ConnectAgent.quitting = false }
+        XCTAssertFalse(ConnectAgent.ask { shown = true; return true })
+        XCTAssertFalse(shown, "a confirmation was shown after Quit")
+    }
+
     // MARK: Keep Captures For
 
     func testAShorterPeriodWithNothingOlderToEraseStillStands() {

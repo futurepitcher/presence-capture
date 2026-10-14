@@ -141,15 +141,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // window's buttons: never at launch.
         refresh()
         if !defaults.bool(forKey: "onboarded") { showOnboarding() }
-        // A grant a connection left able to read, while the app was quitting: said now.
-        if let warning = defaults.string(forKey: ConnectAgent.pendingWarningKey) {
-            defaults.removeObject(forKey: ConnectAgent.pendingWarningKey)
-            let alert = NSAlert()
-            alert.messageText = "A grant is still able to read"
-            alert.informativeText = warning
-            NSApp.activate(ignoringOtherApps: true)
-            alert.runModal()
-        }
+        // Grants left able to read that weren't said before the app last went: said now.
+        for warning in Unseen.all() { say(warning) }
     }
 
     private func schedule(capturer: ScreenCapturer, store: CaptureStore) {
@@ -510,7 +503,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                            },
                            revoke: { [weak self] grantId in
                                guard let self else { return }
-                               if try await self.onAdmin({ try store.revokeGrant(grantId) }) { log.write("grant.revoked") }
+                               let pcap = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("pcap").path ?? "pcap"
+                               let command = [pcap, "grant", "revoke", grantId, "--store", self.home + "/store.sqlite"].map(Connector.shellQuoted).joined(separator: " ")
+                               let warning = "Grant \(grantId) couldn't be withdrawn, and can still read. Withdraw it again in Agents Read…, or in Terminal:\n\(command)"
+                               do {
+                                   // Kept the moment it fails, before anything is shown: the window may close, or the app quit.
+                                   if try await self.onAdmin({ do { return try store.revokeGrant(grantId) } catch { Unseen.keep(warning); throw error } }) {
+                                       log.write("grant.revoked")
+                                   }
+                               } catch {
+                                   log.write("grant.revoke_failed")
+                                   self.say(warning)
+                                   throw error
+                               }
                            })
         }
     }
@@ -635,6 +640,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refresh()
     }
 
+    /// A warning the person hasn't seen, shown, then let go. While quitting it waits for the next launch.
+    private func say(_ warning: String) {
+        guard !quitting else { return }
+        let alert = NSAlert()
+        alert.messageText = "A grant is still able to read"
+        alert.informativeText = warning
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+        Unseen.seen(warning)
+    }
+
     private func storeIsClosed() {
         let alert = NSAlert()
         alert.messageText = "The store isn't open"
@@ -654,6 +670,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // thread (the store may be waiting on SQLite), and the app goes once it is.
         quitting = true
         ConnectAgent.quitting = true
+        // A confirmation on screen is answered no.
+        if ConnectAgent.confirming { NSApp.abortModal() }
         sensors?.stop()
         timers.forEach { $0.invalidate() }
         timers = []
