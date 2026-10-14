@@ -53,10 +53,32 @@ enum ConnectAgent {
         }
     }
 
+    /// Where a warning that couldn't be shown (the app was quitting) waits for the next launch.
+    static let pendingWarningKey = "unshownConnectWarning"
+
+    /// A grant left able to read, said in words with the command that revokes it: never only logged.
+    static func warning(_ result: Result<Connection?, Error>, client: Client) -> String? {
+        switch result {
+        case .success(let connection?):
+            guard let left = connection.stillActive else { return nil }
+            return "Connecting \(client.name) left the grant of the connection it replaced, \(left.grantId), able to read (\(left.why)). Revoke it in Terminal:\n\(left.revoke)"
+        case .failure(let error as ConnectError):
+            guard case .grantLeft = error else { return nil }
+            return "Connecting \(client.name) failed, and left a grant able to read. \(error)"
+        default:
+            return nil
+        }
+    }
+
     private static func show(_ result: Result<Connection?, Error>, client: Client, leftHere: Bool, log: (String) -> Void) {
         if quitting {
             log((try? result.get()).map { $0 == nil ? "connect.declined client=\(client.rawValue)" : "connect.done client=\(client.rawValue)" }
                 ?? "connect.failed client=\(client.rawValue)")
+            // Not shown now, as the app is going; kept to be shown at the next launch.
+            if let warning = warning(result, client: client) {
+                log("connect.warning_kept client=\(client.rawValue)")
+                UserDefaults.standard.set(warning, forKey: pendingWarningKey)
+            }
             return
         }
         NSApp.activate(ignoringOtherApps: true)

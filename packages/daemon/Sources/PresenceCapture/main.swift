@@ -141,6 +141,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // window's buttons: never at launch.
         refresh()
         if !defaults.bool(forKey: "onboarded") { showOnboarding() }
+        // A grant a connection left able to read, while the app was quitting: said now.
+        if let warning = defaults.string(forKey: ConnectAgent.pendingWarningKey) {
+            defaults.removeObject(forKey: ConnectAgent.pendingWarningKey)
+            let alert = NSAlert()
+            alert.messageText = "A grant is still able to read"
+            alert.informativeText = warning
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
+        }
     }
 
     private func schedule(capturer: ScreenCapturer, store: CaptureStore) {
@@ -184,14 +193,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Retention is a revocation (ADR 0003): what's older than the period is erased, with receipts.
-    /// The period is read when the sweep runs, not when it's queued: one waiting behind other store
-    /// work never erases by a period the person has since lengthened.
+    /// The period is read once the store is held for writing, not when the sweep is queued or starts:
+    /// one waiting behind other store work never erases by a period the person has since lengthened.
     private func retain(_ store: CaptureStore) {
         let (defaults, log) = (self.defaults, self.log!)
         admin.async {
             do {
-                let days = Double(defaults.integer(forKey: "retentionDays").nonZero ?? 14)
-                let result = try store.retain(days: days)
+                let result = try store.retain(policy: { Double(defaults.integer(forKey: "retentionDays").nonZero ?? 14) })
                 log.write("retention.done revoked=\(result?.revokedCaptureIds.count ?? 0)")
             } catch {
                 log.write("retention.failed")

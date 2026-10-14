@@ -75,6 +75,36 @@ final class AdminTests: XCTestCase {
         XCTAssertEqual(try store.quickCheck(), "ok")
     }
 
+    func testRetentionUsesThePeriodAsItIsOnceTheStoreIsHeld() throws {
+        let store = try store()
+        let old = try store.append(NewCapture(capturedAt: Date().addingTimeInterval(-20 * 86_400), captureType: "screen_text", source: "screen", contentText: "old"))
+        // Another writer holds the store; meanwhile the person lengthens retention from 14 days to 365.
+        let period = Flag14()
+        let held = DispatchSemaphore(value: 0), done = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            store.lock.withLock {
+                held.signal()
+                Thread.sleep(forTimeInterval: 0.3)
+                period.days = 365
+            }
+        }
+        held.wait()
+        var result: Revocation?? = .none
+        DispatchQueue.global().async {
+            result = .some(try? store.retain(policy: { period.days }))
+            done.signal()
+        }
+        done.wait()
+        XCTAssertEqual(result, .some(nil), "retention erased by the period it started with")
+        XCTAssertEqual(try store.contentText(old), "old")
+        XCTAssertNil(try store.retain(days: 365))
+        XCTAssertEqual(try store.retain(days: 14)?.revokedCaptureIds, [old])
+    }
+
+    private final class Flag14: @unchecked Sendable {
+        var days: Double = 14
+    }
+
     func testAKeyFileIsRawBytesOrHexAndNothingElse() throws {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let bytes = Data((0..<32).map { UInt8($0) })

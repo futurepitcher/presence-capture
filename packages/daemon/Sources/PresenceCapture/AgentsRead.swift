@@ -17,6 +17,8 @@ struct AgentsReadView: View {
     let revoke: (String) async throws -> Void
 
     @State private var snapshot = Snapshot()
+    /// Nothing is said about grants or reads until they've been read.
+    @State private var loaded = false
     @State private var problem: String?
     /// A withdrawal that failed: kept through a reload, since the grant can still read.
     @State private var failure: String?
@@ -63,7 +65,9 @@ struct AgentsReadView: View {
         let (active, history) = Self.split(snapshot.grants)
         return VStack(alignment: .leading, spacing: 8) {
             Text("Grants").font(.subheadline).bold()
-            if active.isEmpty {
+            if !loaded {
+                Text(problem == nil ? "Loading…" : "The grants couldn't be read.").foregroundStyle(.secondary)
+            } else if active.isEmpty {
                 Text("No agent can read now. Choose Connect an Agent in the menu to give one a grant.").foregroundStyle(.secondary)
             } else {
                 ScrollView { GrantsList(grants: active, withdraw: { withdrawing = $0 }) }.frame(maxHeight: 200)
@@ -105,7 +109,7 @@ struct AgentsReadView: View {
     private var readsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("What they read, the last 7 days").font(.subheadline).bold()
-            if snapshot.egress.isEmpty { Text("Nothing yet.").foregroundStyle(.secondary) }
+            if loaded, snapshot.egress.isEmpty { Text("Nothing yet.").foregroundStyle(.secondary) }
             ScrollView { ReadsList(egress: snapshot.egress).frame(maxWidth: .infinity, alignment: .leading) }
         }
     }
@@ -114,6 +118,7 @@ struct AgentsReadView: View {
         Task {
             do {
                 snapshot = try await load()
+                loaded = true
                 problem = nil
             } catch {
                 problem = "The store couldn't be read."

@@ -1,4 +1,5 @@
 import AppKit
+@testable import CaptureConnect
 @testable import CaptureStore
 import SwiftUI
 import XCTest
@@ -34,6 +35,21 @@ final class MenuTests: XCTestCase {
                      "https://github.com/someone/else/releases/tag/v1"] {
             XCTAssertNil(Updates.release(from: answer(tag: "v1.0.0", page: page)), page)
         }
+    }
+
+    // MARK: Connect an Agent
+
+    func testAGrantLeftActiveIsAlwaysSaidWithItsCommand() {
+        let left = Connection(grantId: "grn_new", expiresAt: now, backup: nil, revoked: nil,
+                              stillActive: ("grn_old", "it's in another store, /other/store.sqlite", "pcap grant revoke grn_old --store /other/store.sqlite"))
+        let said = ConnectAgent.warning(.success(left), client: .claudeCode)
+        XCTAssertTrue(said?.contains("grn_old") ?? false)
+        XCTAssertTrue(said?.contains("pcap grant revoke grn_old --store /other/store.sqlite") ?? false)
+        let failed = ConnectAgent.warning(.failure(ConnectError.grantLeft(grantId: "grn_x", after: "declined", why: "busy", revoke: "pcap grant revoke grn_x")),
+                                          client: .cursor)
+        XCTAssertTrue(failed?.contains("pcap grant revoke grn_x") ?? false)
+        XCTAssertNil(ConnectAgent.warning(.success(nil), client: .cursor))
+        XCTAssertNil(ConnectAgent.warning(.failure(ConnectError.claudeNotFound), client: .claudeCode))
     }
 
     // MARK: Keep Captures For
