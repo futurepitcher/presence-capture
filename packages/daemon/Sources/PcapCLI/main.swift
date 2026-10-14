@@ -108,9 +108,9 @@ func day(_ date: Date) -> String {
 /// A path as given, made absolute against where pcap was run.
 func absolute(_ path: String) -> String { URL(fileURLWithPath: path).standardizedFileURL.path }
 
-/// The app's store, or the one --store names, absolute.
+/// The app's store, or the one --store names: absolute, whichever it is.
 func storePath(_ arguments: Arguments) -> String {
-    arguments.options["store"].map(absolute) ?? CaptureStore.home + "/store.sqlite"
+    absolute(arguments.options["store"] ?? CaptureStore.home + "/store.sqlite")
 }
 
 /// The app's store, or the one --store names, opened as a writer. A store that isn't there isn't
@@ -141,13 +141,12 @@ func pcapMCP(_ arguments: Arguments) throws -> String {
     return path
 }
 
-/// The server entry for a grant: the store and key file named too, when they aren't the app's own,
-/// since pcap-mcp, started by the agent, opens the app's store with the Keychain's key otherwise.
+/// The server entry for a grant: the store by its absolute path, and the key file when one was
+/// given, since pcap-mcp, started by the agent in its own environment, can't work either out.
 func entry(_ arguments: Arguments, server: String) -> (String) -> ServerEntry {
     let store = storePath(arguments)
-    let other = store == CaptureStore.defaultHome + "/store.sqlite" ? nil : store
     let keyFile = arguments.options["master-key-file"].map(absolute)
-    return { ServerEntry(pcapMCP: server, grantId: $0, store: other, keyFile: keyFile) }
+    return { ServerEntry(pcapMCP: server, grantId: $0, store: store, keyFile: keyFile) }
 }
 
 func ask(_ question: String) -> Bool {
@@ -198,7 +197,7 @@ func connect(_ arguments: Arguments) throws {
     if let revoked = connection.revoked { print("The grant it replaced, \(revoked), is revoked.") }
     print(client.afterward)
     if let left = connection.stillActive {
-        throw Failure("but the grant it replaced, \(left.grantId), couldn't be revoked (\(left.why)), and can still read. Revoke it: pcap grant revoke \(left.grantId)", status: 1)
+        throw Failure("but the grant it replaced, \(left.grantId), couldn't be revoked (\(left.why)), and can still read. Revoke it:\n  \(left.revoke)", status: 1)
     }
 }
 
