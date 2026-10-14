@@ -47,7 +47,7 @@ conformance suite, plus a reference implementation that proves the spec works.
 |---------|-----------|
 | [`packages/schema`](packages/schema) | The specification, migrations, and conformance suite. **The actual standard.** v0.1.0-draft, zero dependencies. The store layer checks any implementation through a [driver](docs/spec/DRIVER.md) |
 | [`packages/daemon`](packages/daemon) | macOS reference implementation, in progress (M2): a menu-bar app capturing screen text, on-device speech and activity into a store that passes the conformance suite |
-| [`packages/mcp`](packages/mcp) | Local-only MCP server with read scopes and an egress log. Implemented; 11 passing assertions |
+| [`packages/mcp`](packages/mcp) | Local-only MCP server: six recall tools over an in-memory index, through grants, with an egress log. The reference for `pcap-mcp`; both pass the same MCP conformance |
 
 ## Design positions
 

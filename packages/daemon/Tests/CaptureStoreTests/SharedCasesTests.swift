@@ -10,6 +10,20 @@ final class SharedCasesTests: XCTestCase {
         return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
     }
 
+    func testComputesSessionsAsTheCasesSay() throws {
+        for c in try XCTUnwrap(cases("sessions")["cases"] as? [[String: Any]]) {
+            let activity = try XCTUnwrap(c["activity"] as? [[String: Any]]).map {
+                Sessions.Activity(id: $0["id"] as! String, at: $0["at"] as! String, state: $0["state"] as! String,
+                                  app: $0["app"] as? String, window: $0["window"] as? String, excluded: $0["excluded"] as? Bool ?? false)
+            }
+            let expected = try XCTUnwrap(c["sessions"] as? [[String: Any]]).map {
+                Sessions.Session(id: $0["id"] as! String, startedAt: $0["started_at"] as! String,
+                                 endedAt: $0["ended_at"] as? String, captureIds: $0["capture_ids"] as! [String])
+            }
+            XCTAssertEqual(Sessions.of(activity, now: c["now"] as! String), expected, c["why"] as? String ?? "")
+        }
+    }
+
     func testHoldsTheSharedBuiltInLists() throws {
         let file = try cases("exclusion")
         XCTAssertEqual((file["system_apps"] as? [String: [String]])?["macos"], Exclusion.systemApps)

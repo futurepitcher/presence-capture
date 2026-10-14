@@ -35,7 +35,7 @@ public indirect enum CanonicalJSON: Equatable, Sendable {
         }
     }
 
-    static func optional(_ s: String?) -> CanonicalJSON { s.map(CanonicalJSON.string) ?? .null }
+    public static func optional(_ s: String?) -> CanonicalJSON { s.map(CanonicalJSON.string) ?? .null }
 
     private static func quote(_ s: String) -> String {
         var out = "\""
@@ -117,6 +117,23 @@ extension CaptureStore {
         try lock.withLock {
             (try rows("SELECT COUNT(*) FROM capture_event").first?.int(0) ?? 0,
              try rows("SELECT COUNT(*) FROM revoked_capture").first?.int(0) ?? 0)
+        }
+    }
+
+    /// The highest capture sequence: a number, never content, so a reader can tell whether there's
+    /// anything new to read before reading (and recording) it.
+    public func latestSequence() throws -> Int {
+        try lock.withLock { try rows("SELECT COALESCE(MAX(sequence), 0) FROM capture_event").first?.int(0) ?? 0 }
+    }
+
+    /// The captures revoked by revocations after `sequence`, each with its revocation's sequence, in
+    /// order: ids and numbers only, so a reader can evict them from what it holds in memory.
+    public func revoked(after sequence: Int) throws -> [(captureId: String, sequence: Int)] {
+        try lock.withLock {
+            try rows("""
+                SELECT rc.capture_id, r.sequence FROM revoked_capture rc JOIN revocation r ON r.revocation_id = rc.revocation_id
+                WHERE r.sequence > ? ORDER BY r.sequence
+                """, sequence).map { ($0.text(0), $0.int(1)) }
         }
     }
 

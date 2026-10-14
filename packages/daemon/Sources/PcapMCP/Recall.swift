@@ -1,0 +1,253 @@
+import CaptureStore
+import Foundation
+import SQLite3
+
+/// What this reader recalls from (ADR 0008): every capture its grant admits, unsealed into memory
+/// and nowhere else. Keyword search is SQLite FTS5 in `:memory:`; sessions are computed from activity
+/// when asked for. The same tools, arguments and answers as the reference's src/recall.js, held to
+/// the same MCP conformance.
+///
+/// It's built by reading through the grant, so the store enforces the grant and records every row
+/// this reader unsealed in the egress log (tool `index`). It's kept current on each call: captures
+/// after the last one read, and revocations after the last one seen, which are evicted. Whatever it
+/// ranks is then served by id through the grant again, so nothing it holds is served without the
+/// store's say: a capture revoked or a grant withdrawn since serves nothing.
+final class Recall {
+    private let store: CaptureStore
+    private let grantId: String
+    private let memory = MemoryIndex()
+    private var afterSequence = 0
+    private var afterRevocation = 0
+
+    init(store: CaptureStore, grantId: String) {
+        self.store = store
+        self.grantId = grantId
+        memory.exec("""
+            CREATE TABLE doc (
+              capture_id TEXT PRIMARY KEY, sequence INTEGER NOT NULL, captured_at TEXT NOT NULL,
+              capture_type TEXT NOT NULL, source_app TEXT, content TEXT
+            );
+            CREATE INDEX doc_time ON doc (captured_at);
+            CREATE VIRTUAL TABLE words USING fts5(capture_id UNINDEXED, content);
+            """)
+    }
+
+    /// Runs a tool, after bringing memory up to date with the store.
+    func call(_ name: String, _ args: [String: Any]) throws -> CanonicalJSON {
+        guard ["search", "recent", "timeline", "transcript", "now", "session"].contains(name) else { throw ToolError.unknown(name) }
+        try refresh()
+        switch name {
+        case "search": return .array(try search(args))
+        case "recent": return .array(try serve("recent", "recent", memory.ids("SELECT capture_id FROM doc ORDER BY sequence DESC LIMIT ?", try limit(args, 10))))
+        case "timeline": return .array(try timeline(args))
+        case "transcript": return .array(try transcript(args))
+        case "now": return try now()
+        default: return try session(args)
+        }
+    }
+
+    // MARK: Keeping memory current
+
+    private func refresh() throws {
+        let latest = try store.latestSequence()
+        while afterSequence < latest {
+            let page = try store.read(grantId: grantId, ReadRequest(tool: "index", query: "index", afterSequence: afterSequence))
+            if page.isEmpty { break }
+            for envelope in page {
+                let (provenance, content) = Self.parts(envelope)
+                let id = provenance["capture_id"] as? String ?? ""
+                let sequence = (provenance["sequence"] as? NSNumber)?.intValue ?? 0
+                memory.run("""
+                    INSERT INTO doc (capture_id, sequence, captured_at, capture_type, source_app, content) VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (capture_id) DO NOTHING
+                    """, id, sequence, provenance["captured_at"] as? String ?? "", provenance["capture_type"] as? String ?? "",
+                    provenance["source_app"] as? String, content)
+                if let content { memory.run("INSERT INTO words (capture_id, content) VALUES (?, ?)", id, content) }
+                afterSequence = max(afterSequence, sequence)
+            }
+        }
+        for (id, sequence) in try store.revoked(after: afterRevocation) {
+            memory.run("DELETE FROM doc WHERE capture_id = ?", id)
+            memory.run("DELETE FROM words WHERE capture_id = ?", id)
+            afterRevocation = max(afterRevocation, sequence)
+        }
+    }
+
+    private static func parts(_ envelope: CanonicalJSON) -> (provenance: [String: Any], content: String?) {
+        let inner = (envelope.foundation as? [String: Any])?["presence_capture_untrusted"] as? [String: Any] ?? [:]
+        return (inner["provenance"] as? [String: Any] ?? [:], inner["content"] as? String)
+    }
+
+    /// Served by id, through the grant, in the order ranked.
+    private func serve(_ tool: String, _ query: String, _ ids: [String]) throws -> [CanonicalJSON] {
+        try store.readCaptures(grantId: grantId, tool: tool, query: query, captureIds: ids)
+    }
+
+    // MARK: Tools
+
+    /// Keyword search, ranked by BM25: any word of the query.
+    private func search(_ args: [String: Any]) throws -> [CanonicalJSON] {
+        guard let query = args["query"] as? String else { throw ToolError.invalid("query must be text") }
+        let words = Self.words(query)
+        guard !words.isEmpty else { return try serve("search", query, []) }
+        let match = words.map { "\"\($0)\"" }.joined(separator: " OR ")
+        let ids = memory.ids("""
+            SELECT words.capture_id FROM words JOIN doc ON doc.capture_id = words.capture_id
+            WHERE words MATCH ? AND doc.captured_at >= ? AND doc.captured_at <= ?
+            ORDER BY bm25(words), doc.sequence DESC LIMIT ?
+            """, match, try time(args, "from") ?? "0000-01-01T00:00:00.000Z", try time(args, "to") ?? "9999-12-31T23:59:59.999Z", try limit(args, 10))
+        return try serve("search", query, ids)
+    }
+
+    /// Everything captured between two times (by default the last hour), in the order captured.
+    private func timeline(_ args: [String: Any]) throws -> [CanonicalJSON] {
+        let (start, end) = try span(args)
+        let ids = memory.ids("SELECT capture_id FROM doc WHERE captured_at >= ? AND captured_at <= ? ORDER BY captured_at, sequence LIMIT ?",
+                             start, end, try limit(args, 100))
+        return try serve("timeline", "\(start)/\(end)", ids)
+    }
+
+    /// What was said between two times, in order: from the microphone (input), this Mac (output), or both.
+    private func transcript(_ args: [String: Any]) throws -> [CanonicalJSON] {
+        let device = args["device"].flatMap { $0 is NSNull ? nil : $0 }
+        guard device == nil || ["input", "output"].contains(device as? String ?? "") else { throw ToolError.invalid("device must be input or output") }
+        let (start, end) = try span(args)
+        let which = device as? String
+        let ids = memory.ids("""
+            SELECT capture_id FROM doc WHERE capture_type = 'audio_transcript' AND captured_at >= ? AND captured_at <= ?
+              AND (? IS NULL OR source_app = ?)
+            ORDER BY captured_at, sequence LIMIT ?
+            """, start, end, which, which, try limit(args, 100))
+        return try serve("transcript", "\(start)/\(end)/\(which ?? "")", ids)
+    }
+
+    /// What the person is doing now: the latest session, and from it the activity, the screen text
+    /// and anything said in the last five minutes.
+    private func now() throws -> CanonicalJSON {
+        guard let session = sessions().last else { return Self.result(nil, []) }
+        let since = session.endedAt.flatMap(CaptureStore.date) ?? Date()
+        let screen = memory.ids("SELECT capture_id FROM doc WHERE capture_type = 'screen_text' AND captured_at >= ? ORDER BY sequence DESC LIMIT 1",
+                                session.startedAt)
+        let said = memory.ids("SELECT capture_id FROM doc WHERE capture_type = 'audio_transcript' AND captured_at >= ? ORDER BY sequence DESC LIMIT 1",
+                              CaptureStore.iso(since.addingTimeInterval(-5 * 60)))
+        let wanted = [session.captureIds.last].compactMap { $0 } + screen + said
+        return Self.result(session, try serve("now", "now", wanted))
+    }
+
+    /// One session, by id, and everything captured during it, in order.
+    private func session(_ args: [String: Any]) throws -> CanonicalJSON {
+        guard let id = args["id"] as? String else { throw ToolError.invalid("id must be a session id") }
+        guard let session = sessions().first(where: { $0.id == id }) else { return Self.result(nil, []) }
+        let ids = memory.ids("SELECT capture_id FROM doc WHERE captured_at >= ? AND captured_at <= ? ORDER BY captured_at, sequence LIMIT ?",
+                             session.startedAt, session.endedAt ?? CaptureStore.iso(Date()), try limit(args, 100))
+        return Self.result(session, try serve("session", id, ids))
+    }
+
+    private func sessions() -> [Sessions.Session] {
+        let activity = memory.rows("SELECT capture_id, captured_at, content FROM doc WHERE capture_type = 'activity' ORDER BY captured_at, sequence").map { row in
+            let seen = (row[2] as? String).flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] } ?? [:]
+            return Sessions.Activity(id: row[0] as? String ?? "", at: row[1] as? String ?? "", state: seen["state"] as? String ?? "active",
+                                     app: seen["app"] as? String, window: seen["window"] as? String, excluded: seen["excluded"] as? Bool ?? false)
+        }
+        return Sessions.of(activity, now: CaptureStore.iso(Date()))
+    }
+
+    /// A session tool's answer: the session (ids and times only), and its captures' envelopes.
+    private static func result(_ session: Sessions.Session?, _ envelopes: [CanonicalJSON]) -> CanonicalJSON {
+        let described: CanonicalJSON = session.map {
+            .object([("id", .string($0.id)), ("started_at", .string($0.startedAt)), ("ended_at", .optional($0.endedAt)),
+                     ("capture_ids", .array($0.captureIds.map(CanonicalJSON.string)))])
+        } ?? .null
+        return .object([("session", described), ("envelopes", .array(envelopes))])
+    }
+
+    // MARK: Arguments
+
+    private static let wordPattern = try! NSRegularExpression(pattern: #"[\p{L}\p{N}]+"#)
+
+    static func words(_ text: String) -> [String] {
+        wordPattern.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { Range($0.range, in: text).map { String(text[$0]) } }
+    }
+
+    /// A time argument, as the store writes times; nil when it's not given.
+    private func time(_ args: [String: Any], _ name: String) throws -> String? {
+        guard let value = args[name], !(value is NSNull) else { return nil }
+        guard let text = value as? String, let date = CaptureStore.date(text) else { throw ToolError.invalid("\(name) must be an ISO 8601 time") }
+        return CaptureStore.iso(date)
+    }
+
+    /// `from` and `to`, by default the hour up to now.
+    private func span(_ args: [String: Any]) throws -> (String, String) {
+        let end = try time(args, "to") ?? CaptureStore.iso(Date())
+        let start = try time(args, "from") ?? CaptureStore.iso((CaptureStore.date(end) ?? Date()).addingTimeInterval(-3600))
+        return (start, end)
+    }
+
+    private func limit(_ args: [String: Any], _ fallback: Int) throws -> Int {
+        guard let value = args["limit"], !(value is NSNull) else { return fallback }
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+              let whole = Int(exactly: number.doubleValue), whole >= 1 else { throw ToolError.invalid("limit must be a whole number, 1 or more") }
+        return whole
+    }
+}
+
+enum ToolError: Error {
+    case unknown(String)
+    /// A malformed argument: the caller's error, answered as invalid params, and nothing is served.
+    case invalid(String)
+}
+
+/// An SQLite database in memory, nowhere else: what a reader recalls from. Never a file.
+final class MemoryIndex {
+    private var db: OpaquePointer?
+    private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+    init() {
+        guard sqlite3_open(":memory:", &db) == SQLITE_OK else { fatalError("can't open an in-memory index") }
+    }
+
+    deinit { sqlite3_close(db) }
+
+    func exec(_ sql: String) {
+        guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else { fatalError("in-memory index: \(String(cString: sqlite3_errmsg(db)))") }
+    }
+
+    func run(_ sql: String, _ values: Any?...) {
+        _ = query(sql, values)
+    }
+
+    func ids(_ sql: String, _ values: Any?...) -> [String] {
+        query(sql, values).compactMap { $0.first as? String }
+    }
+
+    func rows(_ sql: String, _ values: Any?...) -> [[Any?]] {
+        query(sql, values)
+    }
+
+    /// Named apart from the variadic ones: an array passed there would bind as a single value.
+    private func query(_ sql: String, _ values: [Any?]) -> [[Any?]] {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { fatalError("in-memory index: \(String(cString: sqlite3_errmsg(db)))") }
+        defer { sqlite3_finalize(statement) }
+        for (index, value) in values.enumerated() {
+            let position = Int32(index + 1)
+            switch value {
+            case nil: sqlite3_bind_null(statement, position)
+            case let text as String: sqlite3_bind_text(statement, position, text, -1, Self.transient)
+            case let number as Int: sqlite3_bind_int64(statement, position, Int64(number))
+            default: sqlite3_bind_text(statement, position, "\(value!)", -1, Self.transient)
+            }
+        }
+        var out: [[Any?]] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            out.append((0..<sqlite3_column_count(statement)).map { column in
+                switch sqlite3_column_type(statement, column) {
+                case SQLITE_INTEGER: return Int(sqlite3_column_int64(statement, column))
+                case SQLITE_TEXT: return String(cString: sqlite3_column_text(statement, column))
+                default: return nil
+                }
+            })
+        }
+        return out
+    }
+}
