@@ -32,3 +32,23 @@ public enum Exclusion {
         return (selfWindows + fragments).contains { title.contains($0) || app.contains($0) }
     }
 }
+
+/// Since when the exclusion list has been readable, without a break (R8). What's heard is kept only
+/// if it was said since then: speech from a stretch when the list couldn't be read never gets in,
+/// however late its transcript arrives, or however hearing was started meanwhile.
+public final class ReadableSince: @unchecked Sendable {
+    private let lock = NSLock()
+    private var since: Date?
+
+    public init() {}
+
+    /// The list was just read, or couldn't be.
+    public func observe(_ readable: Bool, at now: Date = Date()) {
+        lock.withLock { since = readable ? (since ?? now) : nil }
+    }
+
+    /// Whether what was said at `saidAt` may be kept.
+    public func admits(_ saidAt: Date) -> Bool {
+        lock.withLock { since.map { saidAt >= $0 } ?? false }
+    }
+}

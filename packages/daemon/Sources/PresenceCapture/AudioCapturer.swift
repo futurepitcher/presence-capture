@@ -58,13 +58,14 @@ final class AudioCapturer: NSObject, Listener, SCStreamOutput, SCStreamDelegate,
     /// be checked against them.
     private let spans: DictationSpans
     private var dropped = (dictated: 0, tooLate: 0, unexcludable: 0)
-    /// Whether what's heard may be kept now: not while the exclusion list can't be read (R8).
-    private let mayKeep: @Sendable () -> Bool
+    /// Whether what was said at a moment may be kept: not if the exclusion list couldn't be read
+    /// then, or at any time since (R8).
+    private let mayKeep: @Sendable (Date) -> Bool
     /// Quitting: from then nothing makes it listen again, whatever a tick says.
     private var ending = false
 
     init(store: CaptureStore, devices: @escaping @Sendable () -> (microphone: Bool, systemAudio: Bool), spans: DictationSpans = DictationSpans(),
-         mayKeep: @escaping @Sendable () -> Bool = { true }, log: @escaping @Sendable (String) -> Void) {
+         mayKeep: @escaping @Sendable (Date) -> Bool = { _ in true }, log: @escaping @Sendable (String) -> Void) {
         self.store = store
         self.spans = spans
         self.mayKeep = mayKeep
@@ -291,10 +292,10 @@ final class AudioCapturer: NSObject, Listener, SCStreamOutput, SCStreamDelegate,
     }
 
     /// A segment and its transcript, written together or not at all, stamped when the words were
-    /// said: speech from a range forgotten while it was being transcribed is refused, and none is
-    /// kept while the exclusion list can't be read, however late it arrives.
+    /// said: speech from a range forgotten while it was being transcribed is refused, and none said
+    /// while the exclusion list couldn't be read is kept, however late it arrives.
     func keep(_ spoken: Spoken, from type: SCStreamOutputType) {
-        guard mayKeep() else { return lock.withLock { dropped.unexcludable += 1 } }
+        guard mayKeep(spoken.at) else { return lock.withLock { dropped.unexcludable += 1 } }
         switch Self.admits(spoken, spans: spans, now: Date()) {
         case .keep: break
         case .dictated: return lock.withLock { dropped.dictated += 1 }

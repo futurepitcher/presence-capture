@@ -102,15 +102,21 @@ final class DictationAppTests: XCTestCase {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = try CaptureStore(path: dir.appendingPathComponent("store.sqlite").path, masterKey: SymmetricKey(size: .bits256))
-        let readable = Flag()
-        let audio = AudioCapturer(store: store, devices: { (true, true) }, mayKeep: { readable.value }, log: { _ in })
-        let said = Spoken(at: Date(), seconds: 2, device: "Mic (input)", deviceType: "input", text: "the plan for friday")
-        // Transcribed while the list can't be read, however it was started: not kept.
-        audio.keep(said, from: .microphone)
-        XCTAssertEqual(try store.rows("SELECT COUNT(*) FROM capture_event").first?.int(0), 0, "heard and kept while the exclusion list couldn't be read")
-        readable.value = true
-        audio.keep(said, from: .microphone)
-        XCTAssertEqual(try store.rows("SELECT COUNT(*) FROM capture_event").first?.int(0), 2, "the segment and its transcript")
+        let readable = ReadableSince()
+        let audio = AudioCapturer(store: store, devices: { (true, true) }, mayKeep: { readable.admits($0) }, log: { _ in })
+        let t0 = Date()
+        let rows = { try store.rows("SELECT COUNT(*) FROM capture_event").first?.int(0) }
+        // Said while the list couldn't be read: not kept, even once it can be again.
+        readable.observe(false, at: t0)
+        let duringOutage = Spoken(at: t0.addingTimeInterval(2), seconds: 2, device: "Mic (input)", deviceType: "input", text: "the plan for friday")
+        audio.keep(duringOutage, from: .microphone)
+        XCTAssertEqual(try rows(), 0, "heard and kept while the exclusion list couldn't be read")
+        readable.observe(true, at: t0.addingTimeInterval(10))
+        audio.keep(duringOutage, from: .microphone)
+        XCTAssertEqual(try rows(), 0, "speech from while the list couldn't be read got in once it could")
+        // Said since it can be read: kept.
+        audio.keep(Spoken(at: t0.addingTimeInterval(11), seconds: 2, device: "Mic (input)", deviceType: "input", text: "after"), from: .microphone)
+        XCTAssertEqual(try rows(), 2, "the segment and its transcript")
     }
 
     func testAmbientAudioDropsWhatWasDictatedFromTheMicrophoneOnly() throws {
