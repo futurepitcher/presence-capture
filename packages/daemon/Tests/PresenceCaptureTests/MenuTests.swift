@@ -36,6 +36,15 @@ final class MenuTests: XCTestCase {
         }
     }
 
+    // MARK: Keep Captures For
+
+    func testAShorterPeriodWithNothingOlderToEraseStillStands() {
+        struct Failed: Error {}
+        XCTAssertTrue(AppDelegate.retentionChanged(.success(nil)), "a change with nothing to revoke was taken for a failure")
+        XCTAssertTrue(AppDelegate.retentionChanged(.success(Revocation(revocationId: "rev", revokedCaptureIds: ["a"], erasedOnDisk: true))))
+        XCTAssertFalse(AppDelegate.retentionChanged(.failure(Failed())))
+    }
+
     // MARK: Agents Read
 
     private let now = Date(timeIntervalSince1970: 1_800_000_000)

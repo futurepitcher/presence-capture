@@ -65,6 +65,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Why capture is held now, if it is, read afresh each time: paused, the screens asleep,
     /// another user's session in front, or locked.
     private var heldFor: String? {
+        // For good: nothing a notification says resumes capture once Quit is chosen.
+        if quitting { return "Quitting" }
         if paused { return "Paused" }
         if CGDisplayIsAsleep(CGMainDisplayID()) != 0 { return "Waiting (screens asleep)" }
         let session = CGSessionCopyCurrentDictionary() as? [String: Any]
@@ -163,10 +165,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Retention is a revocation (ADR 0003): what's older than the period is erased, with receipts.
+    /// The period is read when the sweep runs, not when it's queued: one waiting behind other store
+    /// work never erases by a period the person has since lengthened.
     private func retain(_ store: CaptureStore) {
-        let (days, log) = (Double(retentionDays), self.log!)
+        let (defaults, log) = (self.defaults, self.log!)
         admin.async {
             do {
+                let days = Double(defaults.integer(forKey: "retentionDays").nonZero ?? 14)
                 let result = try store.retain(days: days)
                 log.write("retention.done revoked=\(result?.revokedCaptureIds.count ?? 0)")
             } catch {
@@ -487,14 +492,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Whether a confirmed retention change stands: any success, one with nothing older to revoke
+    /// (nil) included.
+    static func retentionChanged(_ outcome: Result<Revocation?, Error>) -> Bool {
+        if case .success = outcome { return true }
+        return false
+    }
+
     /// The period is kept only once what's older is revoked.
     private func retained(_ outcome: Result<Revocation?, Error>, days: Int) {
         retentionChanging = false
         if quitting {
-            // Kept as it would be; just not said, as the app is going.
-            let succeeded = (try? outcome.get()) != nil
-            if succeeded { defaults.set(days, forKey: "retentionDays") }
-            log.write(succeeded ? "retention.set days=\(days)" : "retention.set_failed days=\(days)")
+            // Kept as it would be (a success with nothing to revoke included); just not said.
+            if Self.retentionChanged(outcome) { defaults.set(days, forKey: "retentionDays") }
+            log.write(Self.retentionChanged(outcome) ? "retention.set days=\(days)" : "retention.set_failed days=\(days)")
             return
         }
         let said = NSAlert()
@@ -535,12 +546,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // Capture stops first, at once; then what was heard and noted is written, off the main
         // thread (the store may be waiting on SQLite), and the app goes once it is.
+        quitting = true
+        ConnectAgent.quitting = true
         sensors?.stop()
         timers.forEach { $0.invalidate() }
         timers = []
         holdCapture(going: true)
-        quitting = true
-        ConnectAgent.quitting = true
         Self.finishWriting(activity: activity, audio: audio, admin: admin, connecting: ConnectAgent.underWay) {
             NSApp.reply(toApplicationShouldTerminate: true)
         }
@@ -554,8 +565,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static func finishWriting(activity: ActivityCapturer?, audio: Listener?, admin: DispatchQueue, connecting: DispatchGroup,
                               done: @escaping () -> Void) {
         Task.detached {
-            connecting.wait()
-            admin.sync {}
+            await withCheckedContinuation { done in connecting.notify(queue: .global()) { done.resume() } }
+            await withCheckedContinuation { done in admin.async { done.resume() } }
             activity?.flush()
             await audio?.finish()
             await MainActor.run { done() }
