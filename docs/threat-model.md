@@ -97,6 +97,27 @@ own one network request is Check for Updates…, which you choose, to `api.githu
 the release page and installs nothing. When hearing is on, macOS also downloads Apple's speech
 model for your language, once, through its own asset service.
 
+### Dictation (experimental)
+
+On macOS 26, if you turn it on, holding a key and speaking types the words where
+the cursor is. It's off until you choose it, and asks then for its own
+permissions:
+- **Input Monitoring**, for the key. The event tap is listen-only and asks for
+  modifier changes alone, so it never sees a key typed. But the permission macOS
+  grants is broader than that.
+- **Accessibility**, to type. The words go in through Accessibility where the
+  field takes them. Otherwise they're pasted: your clipboard is saved whole, the
+  words are written to it (marked transient) and pasted, and 750 ms later your
+  clipboard is put back.
+
+The focused field is checked at key-down, at release, and again just before
+typing. If it's a password field, or one whose kind can't be told, nothing is
+typed, shown or kept. If it moved, the words are held in a panel instead of
+typed. With **Remember What I Dictate** (on by default), what you said is kept
+like any transcript: excluded windows, password fields, cancelled dictations
+and Pause keep nothing. Its limits are in
+[known-limits.md](known-limits.md#dictation).
+
 ### `pcap-mcp` and grants
 
 An agent starts `pcap-mcp` over stdio. There is no socket (ADR 0001 §4.4). It serves six
@@ -208,7 +229,7 @@ How it's tested:
 |-----------|------------|--------------|
 | **Someone whose text you view, plus an agent with a grant** (ADR 0001 A1, A2, C1). Spoken words count too: they're transcribed | Content always arrives in the envelope, with provenance the text can't forge. The server has no write, send or run tool, so planted text can't act through it. The agent sees only what its grant admits, up to the row cap, and every read is logged | The envelope labels. It doesn't stop a credulous agent from following planted text with its other tools: writing a file, sending a message, passing on what it read. A server-side fix is "an open research problem" (ADR 0001 §6.2) |
 | **A malicious or compromised MCP client** (A3), such as a rogue extension | It's confined to its grant. No grant, or an expired or revoked one, is denied on the next call and logged. It can't write, issue grants, read the egress log or reach `sacred_mode` (ADR 0001 §7, T1 to T12) | It reads everything its grant admits. Many small queries can rebuild far more than intended: the log shows it, nothing prevents it (C2). The grant ID is a name, not a secret. It sits in the agent's config and command line, and whatever starts `pcap-mcp` with it reads under that grant |
-| **Another process running as you** (A4) | Little. Its reads through `pcap-mcp` appear in the egress log and in **Agents Read…**. Sealed content needs the master key, and macOS prompts for programs not on the Keychain item's list | No authentication boundary between local processes owned by the same user (ADR 0001 §6.1, [SECURITY.md](../SECURITY.md)). The Keychain trusts `pcap`, so a process that runs it can issue itself a grant, or Forget. It can read plain metadata and the egress log from the file. With write access to the file it can drop the log's triggers and recompute its chain, which is unkeyed (ADR 0001 names a local root user here). It can add a sensor to `sensors.json` |
+| **Another process running as you** (A4) | Little. Its reads through `pcap-mcp` appear in the egress log and in **Agents Read…**. Sealed content needs the master key, and macOS prompts for programs not on the Keychain item's list | No authentication boundary between local processes owned by the same user (ADR 0001 §6.1, [SECURITY.md](../SECURITY.md)). The Keychain trusts `pcap`, so a process that runs it can issue itself a grant, or Forget. It can read plain metadata and the egress log from the file. With write access to the file it can drop the log's triggers and recompute its chain, which is unkeyed (ADR 0001 names a local root user here). It can add a sensor to `sensors.json`. While a dictation is pasted, its words sit on the clipboard for up to 750 ms, where any app can read them. Clipboard managers that honor the transient mark don't keep them |
 | **Another macOS user** | The store is in your home folder, and macOS makes `~/Library` private to you by default. The project sets no file permissions of its own. Content is sealed, and the key is in your login Keychain. Capture pauses while another user has the Mac | Admin accounts and root can read the files, metadata included. Whoever has your login password can unlock your Keychain |
 | **Someone with a copy of the disk or a backup** (stolen Mac, Time Machine) | Content is ciphertext without the master key. After a Forget the key is gone from the live store, so a surviving copy of the ciphertext (snapshot, SSD remnant, later backup) is noise | Metadata is plain: times, apps, URLs, grants, the egress log. A backup made before a Forget holds the sealed content and its wrapped key, readable with the master key (ADR 0002 §4). The master key is in the login Keychain, which a backup of your home folder normally includes. Your login password and the backup's encryption protect it, not this project. The app doesn't require or check FileVault |
 | **A malicious plugin** (ADR 0007) | A sensor can't touch the store or key. Its output passes the gate, is tagged and can be revoked, and it runs only if its files match what you approved. A projector has no network, files, clock or randomness, runs under size and time limits, and its output is validated and sealed under the capture's key | A sensor runs as you, unsandboxed: it can read your files and use the network. Approve only commands you've read. A projector reads whatever its manifest names. The macOS app hosts none, so the Mac app has no projector surface today |
@@ -245,6 +266,14 @@ The ADRs state these. They're design limits, not bugs.
   effect at once, and the erasure finishes when the reader lets go.
 - *SSD and filesystem remnants* of SQLite pages are below what `secure_delete` can reach. The
   key per capture covers them, "not a claim about the hardware."
+
+**Dictation** ([known-limits.md](known-limits.md#dictation))
+- A move to another field of the same app in the moment after the key goes
+  down, or comes up, can go unnoticed. The words are then typed into the field
+  you're in at release, never into a password field, which is checked again
+  just before typing.
+- A paste can arrive after your clipboard is put back, in an app slower than
+  750 ms to read it.
 
 **ADR 0007 and ADR 0008**
 - Sensors "stay the honest exception." The gate guarantees what a sensor stores, and "nothing
