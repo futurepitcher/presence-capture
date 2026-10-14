@@ -51,7 +51,7 @@ const TOOLS = [
   },
   {
     name: 'now',
-    description: `What the person is doing now: the latest session, with its latest activity, screen text, and anything said in the last five minutes. ${SESSION} ${UNTRUSTED}`,
+    description: `What the person is doing now: the latest session, with its latest activity, screen text, and everything said in the last five minutes, newest first. ${SESSION} ${UNTRUSTED}`,
     inputSchema: { type: 'object', properties: {} },
   },
   {

@@ -132,7 +132,8 @@ public final class Recall {
 
     /// What the person is doing now: the latest session; the latest activity, which says so if the
     /// person is idle or locked now (or has been only that so far, with no session yet); the
-    /// session's latest screen text; and anything said in the five minutes before this call.
+    /// session's latest screen text; and everything said in the five minutes before this call, newest
+    /// first, so a grant's row cap drops the oldest.
     private func now() throws -> CanonicalJSON {
         try consistent {
             let session = sessions().last
@@ -145,7 +146,7 @@ public final class Recall {
             } ?? []
             let said = memory.ids("""
                 SELECT capture_id FROM doc WHERE capture_type = 'audio_transcript' AND captured_at >= ?
-                ORDER BY captured_at DESC, sequence DESC LIMIT 1
+                ORDER BY captured_at DESC, sequence DESC
                 """, CaptureStore.iso(Date().addingTimeInterval(-5 * 60)))
             var wanted: [String] = []
             for id in [session?.captureIds.last].compactMap({ $0 }) + latest + screen + said where !wanted.contains(id) { wanted.append(id) }
