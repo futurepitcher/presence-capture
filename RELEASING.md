@@ -30,10 +30,12 @@ in [docs/verify.md](docs/verify.md).
 5. Update the cask in `futurepitcher/homebrew-tap` (its source is in
    `packaging/homebrew/`) with the version and the DMG's SHA-256.
 
-A **dry run** is `release.yml` dispatched on a `v*` tag other than the
-release's (for example `v0.0.0`). It builds, signs, notarizes and attests, and publishes nothing:
-its files are a workflow artifact for seven days. Its attestation is the one
-the must-fail check in docs/verify.md uses.
+A **dry run** is `release.yml` dispatched on a `v0.0.*` tag (`v0.0.0`), and
+the workflow refuses a dispatch on any other: the verify command can't tell a
+dispatched run's attestation from a pushed one's, so the tag must. Pushing a
+`v0.0.*` tag builds nothing. A dry run builds, signs, notarizes and attests,
+and publishes nothing: its files are a workflow artifact for seven days. Its
+attestation is the one the must-fail check in docs/verify.md uses.
 
 The `release` environment holds `APPLE_CERTIFICATE` (a base64 `.p12`),
 `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`,
