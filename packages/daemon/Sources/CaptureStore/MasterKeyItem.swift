@@ -1,0 +1,66 @@
+import Foundation
+import Security
+
+/// Where the store's master key is kept in the Keychain, as the app and its readers name it.
+///
+/// The app keeps the key in items under one service, named after its bundle ID, so a build under
+/// another ID (a fork) has a key of its own. Which programs may read an item without a prompt is
+/// set when the item is made and never changed: changing an item's access list takes an
+/// authorization macOS asks the person for, and on current macOS it can ask again and again. So a
+/// change to who's trusted (a new reader in the bundle) is a new version of the item, made by the
+/// app from the newest older one, with the same key. Readers ask for the current version only.
+public enum MasterKeyItem {
+    /// Bumped whenever the set of trusted programs changes. v1: the app and `pcap-mcp`.
+    public static let version = 1
+
+    /// The item every reader asks for.
+    public static var current: String { account(version) }
+
+    /// What the current version is made from when it's missing, newest first: earlier versions, the
+    /// unversioned shared item of the first test builds, and the app's own item from before readers.
+    public static var older: [String] { (1..<version).reversed().map(account) + ["store.shared", "store"] }
+
+    static func account(_ version: Int) -> String { "store.shared.v\(version)" }
+
+    /// The service the items are under, from the app's bundle ID. A reader in the app's bundle
+    /// (`Contents/MacOS`) has the app's bundle as its own main bundle, so it names the same one.
+    public static func service(bundleIdentifier: String?) -> String {
+        (bundleIdentifier ?? "ai.presenceos.capture") + ".master-key"
+    }
+
+    /// Only the person's own default (login) keychain is searched. Left to the search list, a query
+    /// also asks every other keychain on it, and a locked one (a build's signing keychain left
+    /// behind) prompts for a password the person doesn't know, again and again.
+    public static var searchList: [Any] {
+        var keychain: SecKeychain?
+        guard SecKeychainCopyDefault(&keychain) == errSecSuccess, let keychain else { return [] }
+        return [keychain]
+    }
+
+    /// One item's key; nil when there's no such item. Anything else, an item that isn't 32 bytes
+    /// included, is an error rather than a key.
+    public static func read(service: String, account: String) throws -> Data? {
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching([
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrService: service,
+            kSecAttrAccount: account,
+            kSecReturnData: true,
+            kSecMatchLimit: kSecMatchLimitOne,
+            kSecMatchSearchList: searchList,
+        ] as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess, let data = result as? Data, data.count == 32 else { throw MasterKeyError.status(status) }
+        return data
+    }
+}
+
+public enum MasterKeyError: Error, CustomStringConvertible {
+    case status(OSStatus)
+
+    public var description: String {
+        switch self {
+        case .status(let status): return "Keychain status \(status)"
+        }
+    }
+}

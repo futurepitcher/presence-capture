@@ -82,7 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         log = Logger(path: home + "/logs/capture.log")
         let log = self.log!
         do {
-            let store = try CaptureStore(path: home + "/store.sqlite", masterKey: try Keychain.masterKey())
+            let store = try CaptureStore(path: home + "/store.sqlite", masterKey: try Keychain.masterKey(log: log.write))
             let capturer = ScreenCapturer(store: store, log: log.write)
             (self.store, self.capturer) = (store, capturer)
             activity = ActivityCapturer(store: store, log: log.write)
