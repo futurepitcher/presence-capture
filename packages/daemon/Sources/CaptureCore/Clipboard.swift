@@ -25,9 +25,11 @@ public final class ClipboardPaster {
     private let pasteboard: Clipboard
     private let paste: () -> Void
     private let schedule: (TimeInterval, @escaping () -> Void) -> Void
-    private var queue: [(text: String, check: () -> Bool, done: (Bool?) -> Void)] = []
+    private var queue: [(text: String, check: (@escaping (Bool) -> Void) -> Void, done: (Bool?) -> Void)] = []
     /// The restore waiting for its time, to run at once when asked (quitting).
     private var restoreNow: (() -> Void)?
+    /// Quitting: nothing more is pasted, whatever a check still to answer says.
+    private var stopped = false
     private var busy = false
 
     /// `paste` posts ⌘V; `schedule` runs a closure after a delay.
@@ -40,15 +42,20 @@ public final class ClipboardPaster {
 
     /// Pastes `text` once its turn comes, if `check` still says yes then (the focus is where it was,
     /// the dictation wasn't cancelled): a paste that waited behind another is checked when it's made,
-    /// not when it was asked for. `done` hears nil when it wasn't made, else whether the person's
-    /// clipboard was put back (false when something else copied meanwhile, and it was left as it is).
-    public func paste(_ text: String, check: @escaping () -> Bool = { true }, done: @escaping (Bool?) -> Void = { _ in }) {
+    /// not when it was asked for. `check` answers through its callback, on this thread, so it can ask
+    /// elsewhere (Accessibility, off the main thread) without holding this one. `done` hears nil when
+    /// it wasn't made, else whether the person's clipboard was put back (false when something else
+    /// copied meanwhile, and it was left as it is).
+    public func paste(_ text: String, check: @escaping (@escaping (Bool) -> Void) -> Void = { $0(true) },
+                      done: @escaping (Bool?) -> Void = { _ in }) {
+        guard !stopped else { return done(nil) }
         queue.append((text, check, done))
         next()
     }
 
     /// Puts back now a clipboard waiting for its time, and drops pastes not yet made (quitting).
     public func finishNow() {
+        stopped = true
         let waiting = queue
         queue = []
         for paste in waiting { paste.done(nil) }
@@ -56,13 +63,15 @@ public final class ClipboardPaster {
     }
 
     private func next() {
-        while !busy, !queue.isEmpty {
-            let (text, check, done) = queue.removeFirst()
-            guard check() else {
+        guard !busy, !queue.isEmpty else { return }
+        busy = true
+        let (text, check, done) = queue.removeFirst()
+        check { [self] allowed in
+            guard allowed, !stopped else {
+                busy = false
                 done(nil)
-                continue
+                return next()
             }
-            busy = true
             let saved = pasteboard.snapshot()
             pasteboard.write(text)
             let ours = pasteboard.changeCount
@@ -84,18 +93,29 @@ public final class ClipboardPaster {
     }
 }
 
-/// Where typing is going: the front app and its focused element. Compared at key-down and at
-/// release; if it moved, nothing is typed.
+/// Where typing is going: the front app, its focused element, and whether it's a password field.
+/// Compared at key-down, at release and just before typing; if it moved, nothing is typed.
 public struct DictationFocus: Equatable {
-    public let app: String
-    /// The focused element, as something comparable (an AXUIElement in the app, by CFEqual).
-    public let element: AnyHashable?
-    /// A password field, or Secure Event Input on: nothing is typed or kept.
-    public let secure: Bool
-
-    public init(app: String, element: AnyHashable?, secure: Bool) {
-        (self.app, self.element, self.secure) = (app, element, secure)
+    /// Whether the field is secure. Unknown (Accessibility didn't say) counts as secure: nothing is
+    /// typed, kept or shown.
+    public enum Security: Equatable {
+        case open
+        case secure
+        case unknown
     }
+
+    public let app: String
+    /// The focused element, as something comparable (an AXUIElement in the app, by CFEqual); nil
+    /// when it couldn't be read, or wasn't consistent with the front window while it was being read.
+    public let element: AnyHashable?
+    public let security: Security
+
+    public init(app: String, element: AnyHashable?, security: Security) {
+        (self.app, self.element, self.security) = (app, element, security)
+    }
+
+    /// Secure, or not known not to be.
+    public var secure: Bool { security != .open }
 }
 
 /// Whether to type a dictation in, and whether to keep it (R2b).
@@ -110,8 +130,9 @@ public enum DictationOutcome {
     }
 
     /// The focus at key-down, at release, and now (just before typing): typed only if all three are
-    /// the same known element, none of them secure. A field that couldn't be identified is taken as
-    /// moved, never as the same: nothing is pasted where it can't be checked.
+    /// the same known element, each known not to be secure. A field that couldn't be identified, or
+    /// whose security couldn't be told, is never typed into: secure if any is (or might be), else
+    /// moved.
     public static func typing(began: DictationFocus, released: DictationFocus, now: DictationFocus) -> Typing {
         if began.secure || released.secure || now.secure { return .secure }
         guard began.element != nil, began == released, released == now else { return .focusMoved }

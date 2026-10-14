@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import Carbon.HIToolbox
 import CaptureCore
 import CaptureStore
 
@@ -48,12 +49,22 @@ struct DictationParts {
     /// The app in front, on the main thread.
     var front: () -> FrontApp? = FrontApp.now
     /// Where typing would go, asked off the main thread (Accessibility can wait on an app).
-    var sample: @Sendable (FrontApp?) -> DictationSample = Focus.sample
+    var sample: @Sendable (FrontApp?) -> DictationSample = { Focus.sample($0) }
     var tidy: (String) async -> String? = { await Tidier.propose($0) }
-    /// Typing in: `check` is asked when a paste's turn comes; `done` hears how it went in, or nil
-    /// when it wasn't.
-    var type: (String, DictationFocus, @escaping () -> Bool, @escaping (String?) -> Void) -> Void
+    /// Typing in: `check` is asked (and answers on the main thread) before anything is typed or
+    /// pasted; `proceed` is asked off the main thread just before Accessibility changes the field;
+    /// `done` hears how it went in, or nil when it wasn't.
+    var type: (String, DictationFocus, @escaping (@escaping (Bool) -> Void) -> Void, @escaping () -> Bool, @escaping (String?) -> Void) -> Void
     var canType: () -> Bool = AXIsProcessTrusted
+    /// The permissions dictation needs to go on: the microphone, and Input Monitoring for the key.
+    var allowed: () -> Bool = { let a = Dictation.allowed; return a.microphone && a.inputMonitoring }
+    /// Secure Event Input, read on the main thread at key-down and release (cheap, no app asked).
+    var secureInput: () -> Bool = { IsSecureEventInputEnabled() }
+    /// Whether the field is still the one with the app's focus, asked off the main thread just
+    /// before Accessibility changes it.
+    var stillFocused: @Sendable (DictationFocus, FrontApp?) -> Bool = { focus, app in
+        (focus.element as? AXElement).map { Focus.stillFocused($0.element, in: app) } ?? false
+    }
     /// Puts back a clipboard a paste is holding, and drops pastes not yet made (quitting).
     var finishTyping: () -> Void = {}
     /// Whether the selected key is down now, by its physical key: never a modifier the other hand
@@ -88,7 +99,7 @@ enum DictationSettings {
 /// permission taken away), and every step after checks its token, so a cancelled one does nothing.
 /// Used from the main thread.
 @available(macOS 26, *)
-final class Dictation: Dictating {
+final class Dictation: Dictating, @unchecked Sendable {
     private let defaults: UserDefaults
     private let store: CaptureStore
     private let spans: DictationSpans
@@ -115,16 +126,21 @@ final class Dictation: Dictating {
     /// The one the microphone is on for, and the one the panel is showing.
     private var listening: Int?
     private var shown: Int?
+    /// The live tokens, readable off the main thread (Accessibility asks just before changing a field).
+    private let stillLive = LockedSet()
 
     private final class Live {
         let began: Date
         /// Where typing would go at key-down, and at release: asked off the main thread.
         let origin: Task<DictationSample, Never>
         var released: Task<DictationSample, Never>?
+        /// Secure Event Input at key-down and at release, read then, on the main thread.
+        let secureAtStart: Bool
+        var secureAtRelease = false
         let session: DictationHearing
 
-        init(began: Date, origin: Task<DictationSample, Never>, session: DictationHearing) {
-            (self.began, self.origin, self.session) = (began, origin, session)
+        init(began: Date, origin: Task<DictationSample, Never>, secureAtStart: Bool, session: DictationHearing) {
+            (self.began, self.origin, self.secureAtStart, self.session) = (began, origin, secureAtStart, session)
         }
     }
 
@@ -142,7 +158,9 @@ final class Dictation: Dictating {
             pasteboard: SystemClipboard(), paste: Inserter.postPaste,
             schedule: { delay, work in DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work) }))
         return DictationParts(listener: DictationListener(log: log),
-                              type: { text, focus, check, done in inserter.type(text, into: focus.element as? AXElement, check: check) { done($0?.rawValue) } },
+                              type: { text, focus, check, proceed, done in
+                                  inserter.type(text, into: focus.element as? AXElement, check: check, proceed: proceed) { done($0?.rawValue) }
+                              },
                               finishTyping: { inserter.paster.finishNow() })
     }
 
@@ -264,7 +282,8 @@ final class Dictation: Dictating {
                 DispatchQueue.main.async { if self?.shown == token { self?.panel.listening(level) } }
             })
             let (front, sample) = (parts.front(), parts.sample)
-            live[token] = Live(began: began, origin: Task.detached { sample(front) }, session: session)
+            live[token] = Live(began: began, origin: Task.detached { sample(front) }, secureAtStart: parts.secureInput(), session: session)
+            stillLive.insert(token)
             listening = token
             startPolling()
             // Shown once it's a dictation, not an ordinary press of the key.
@@ -289,6 +308,7 @@ final class Dictation: Dictating {
         }
         guard let dictation = live[token] else { return }
         // Where typing would go as the key comes up, before anything is waited for.
+        dictation.secureAtRelease = parts.secureInput()
         let (front, sample) = (parts.front(), parts.sample)
         dictation.released = Task.detached { sample(front) }
         panel.working()
@@ -304,9 +324,13 @@ final class Dictation: Dictating {
             listening = nil
         }
         guard let dictation = live.removeValue(forKey: token) else { return }
+        stillLive.remove(token)
         dictation.session.cancel()
-        if shown == token { shown = nil }
-        panel.hide()
+        // The panel is this dictation's, or no one's: never hidden from under a newer one.
+        if shown == token || shown == nil {
+            shown = nil
+            panel.hide()
+        }
         if why != .tooShort { log("dictation.cancelled why=\(why.rawValue)") }
         listener.prepare(download: false)
     }
@@ -320,6 +344,8 @@ final class Dictation: Dictating {
         poller?.invalidate()
         let timer = Timer(timeInterval: DictationHold.pollEvery, repeats: true) { [weak self] _ in
             guard let self else { return }
+            // A permission taken away stops it at once, not at the app's next tick.
+            guard self.parts.allowed() else { return self.cancelAll(.permissionLost) }
             self.act(self.hold.poll(keyDown: self.parts.keyDown(self.hold.key), at: ProcessInfo.processInfo.systemUptime))
         }
         // In every mode, so menu tracking never stops it.
@@ -332,13 +358,23 @@ final class Dictation: Dictating {
         poller = nil
     }
 
-    /// Whether a sample's front window is excluded, or might be: an exclusion list that can't be
-    /// read, or a window title that can't be (when there's a list to match it against), keeps nothing.
+    /// Whether a sample's front window is excluded, or might be. The built-in exclusions (system UI,
+    /// this app) always apply; an exclusion list that can't be read, an app that isn't known, or a
+    /// window title that can't be read when there's a list to match it against, keeps nothing.
     private func excluded(_ sample: DictationSample) -> Bool {
-        guard let fragments = fragments() else { return true }
-        guard !fragments.isEmpty else { return false }
-        guard let app = sample.app, let window = sample.window else { return true }
-        return Exclusion.isExcluded(app: app.name, window: window, fragments: fragments)
+        guard let fragments = fragments(), let app = sample.app else { return true }
+        if Exclusion.isExcluded(app: app.name, window: sample.window ?? "", fragments: fragments) { return true }
+        return sample.window == nil && !fragments.isEmpty
+    }
+
+    /// Still this dictation, and still allowed to go on: asked before each step.
+    private func going(_ token: Int) -> Bool {
+        guard live[token] != nil else { return false }
+        guard parts.allowed() else {
+            cancelAll(.permissionLost)
+            return false
+        }
+        return true
     }
 
     /// Released: the words, tidied if they may be, typed in if the focus is the same known field at
@@ -349,24 +385,29 @@ final class Dictation: Dictating {
         let heard = await dictation.session.finish() ?? ""
         let origin = await dictation.origin.value
         let released = await (dictation.released?.value ?? origin)
-        guard live[token] != nil else { return }
+        guard going(token) else { return }
         var text = DictationText.spokenCommands(heard)
         let app = origin.app?.bundle ?? origin.focus.app
         if DictationSettings.tidy(defaults), !text.isEmpty, !DictationText.neverTidied.contains(app), let proposal = await parts.tidy(text) {
-            guard live[token] != nil else { return }
+            guard going(token) else { return }
             if DictationText.tidyKeepsMeaning(proposal, of: text) { text = proposal } else { log("dictation.tidy_refused") }
         }
-        guard live[token] != nil else { return }
+        guard going(token) else { return }
         guard !text.isEmpty else { return done(token) }
 
         let (front, sample) = (parts.front(), parts.sample)
         let now = await Task.detached { sample(front) }.value
-        guard live[token] != nil else { return }
-        // Kept by where it was said: excluded there, or where it was released, it's not kept.
+        guard going(token) else { return }
+        // Kept by where it was said: excluded there, or where it was released, it's not kept; nor
+        // when a field was, or might have been, a password field.
         let excluded = self.excluded(origin) || self.excluded(released)
-        let secure = origin.focus.secure || released.focus.secure
-        let keep = { [weak self] in self?.remember(text, began: dictation.began, origin: origin, excluded: excluded, secure: secure) }
-        switch DictationOutcome.typing(began: origin.focus, released: released.focus, now: now.focus) {
+        let secure = origin.focus.secure || released.focus.secure || dictation.secureAtStart || dictation.secureAtRelease
+        let keep = { [weak self] in
+            guard let self, self.parts.allowed() else { return }
+            self.remember(text, began: dictation.began, origin: origin, excluded: excluded, secure: secure)
+        }
+        let typing = secure ? .secure : DictationOutcome.typing(began: origin.focus, released: released.focus, now: now.focus)
+        switch typing {
         case .type where !parts.canType():
             panel.hold(text)
             log("dictation.no_accessibility")
@@ -374,10 +415,19 @@ final class Dictation: Dictating {
             keep()
         case .type:
             let expected = now.focus
-            parts.type(text, expected, { [weak self] in
-                // When a paste's turn comes: still this dictation, still this field, still allowed.
-                guard let self, self.live[token] != nil, !self.held(), self.parts.canType() else { return false }
-                return self.parts.sample(self.parts.front()).focus == expected
+            let (stillLive, stillFocused, app) = (self.stillLive, parts.stillFocused, now.app)
+            parts.type(text, expected, { [weak self] answer in
+                // Before anything is typed or pasted: still this dictation, still allowed, and still this
+                // field (asked off the main thread), answered on the main thread.
+                guard let self, self.going(token), !self.held(), self.parts.canType() else { return answer(false) }
+                let (front, sample) = (self.parts.front(), self.parts.sample)
+                Task.detached {
+                    let now = sample(front)
+                    await MainActor.run { [weak self] in answer(self?.live[token] != nil && now.focus == expected && !now.focus.secure) }
+                }
+            }, {
+                // Off the main thread, just before Accessibility changes the field.
+                stillLive.contains(token) && stillFocused(expected, app)
             }, { [weak self] way in
                 guard let self, self.live[token] != nil else { return }
                 if let way {
@@ -410,8 +460,10 @@ final class Dictation: Dictating {
     /// The dictation is over: nothing after this can cancel it.
     private func done(_ token: Int, hidePanel: Bool = true) {
         live.removeValue(forKey: token)
+        stillLive.remove(token)
+        let mine = shown == token || shown == nil
         if shown == token { shown = nil }
-        if hidePanel { panel.hide() }
+        if hidePanel && mine { panel.hide() }
         listener.prepare(download: false)
     }
 
@@ -445,4 +497,13 @@ final class Dictation: Dictating {
 private func dictationTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent, info: UnsafeMutableRawPointer?) -> Unmanaged<CGEvent>? {
     if let info { Unmanaged<Dictation>.fromOpaque(info).takeUnretainedValue().handle(type, event) }
     return Unmanaged.passUnretained(event)
+}
+
+/// A set of tokens, read and written from any thread.
+final class LockedSet: @unchecked Sendable {
+    private let lock = NSLock()
+    private var tokens = Set<Int>()
+    func insert(_ token: Int) { lock.withLock { _ = tokens.insert(token) } }
+    func remove(_ token: Int) { lock.withLock { _ = tokens.remove(token) } }
+    func contains(_ token: Int) -> Bool { lock.withLock { tokens.contains(token) } }
 }

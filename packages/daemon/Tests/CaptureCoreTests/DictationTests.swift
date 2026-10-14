@@ -196,7 +196,7 @@ final class DictationTests: XCTestCase {
         var allowed = true
         var second: Bool?? = .none
         paster.paste("first")
-        paster.paste("second", check: { allowed }, done: { second = .some($0) })
+        paster.paste("second", check: { $0(allowed) }, done: { second = .some($0) })
         // While the first holds the clipboard, the focus moves (or Pause): the second isn't made.
         allowed = false
         later.advance(to: 1)
@@ -226,17 +226,20 @@ final class DictationTests: XCTestCase {
     // MARK: Typing in, and keeping
 
     func testFocusThatMovedOrASecureFieldTypesNothing() {
-        let field = DictationFocus(app: "com.apple.TextEdit", element: 1, secure: false)
-        let other = DictationFocus(app: "com.apple.TextEdit", element: 2, secure: false)
-        let password = DictationFocus(app: "com.apple.TextEdit", element: 3, secure: true)
-        let unknown = DictationFocus(app: "com.apple.TextEdit", element: nil, secure: false)
+        let field = DictationFocus(app: "com.apple.TextEdit", element: 1, security: .open)
+        let other = DictationFocus(app: "com.apple.TextEdit", element: 2, security: .open)
+        let password = DictationFocus(app: "com.apple.TextEdit", element: 3, security: .secure)
+        let unknown = DictationFocus(app: "com.apple.TextEdit", element: nil, security: .open)
+        let unsure = DictationFocus(app: "com.apple.TextEdit", element: 1, security: .unknown)
         XCTAssertEqual(DictationOutcome.typing(began: field, released: field, now: field), .type)
         XCTAssertEqual(DictationOutcome.typing(began: field, released: other, now: other), .focusMoved)
-        XCTAssertEqual(DictationOutcome.typing(began: field, released: field, now: DictationFocus(app: "com.apple.Safari", element: 1, secure: false)), .focusMoved)
+        XCTAssertEqual(DictationOutcome.typing(began: field, released: field, now: DictationFocus(app: "com.apple.Safari", element: 1, security: .open)), .focusMoved)
         // Released in a password field, then back: still refused.
         XCTAssertEqual(DictationOutcome.typing(began: field, released: password, now: field), .secure)
         // A field that can't be identified is never taken for the same one.
         XCTAssertEqual(DictationOutcome.typing(began: unknown, released: unknown, now: unknown), .focusMoved)
+        // A field whose security couldn't be told is taken as a password field.
+        XCTAssertEqual(DictationOutcome.typing(began: unsure, released: unsure, now: unsure), .secure)
     }
 
     func testWhatsKeptAndWhatIsnt() {

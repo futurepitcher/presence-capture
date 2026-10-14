@@ -34,6 +34,46 @@ final class DictationAppTests: XCTestCase {
         XCTAssertEqual(log.lines, ["dictation.kept", "append.refused_revoked kind=dictation"])
     }
 
+    /// A text field as Accessibility shows one, that can reformat what it's given.
+    final class Field: TextTarget {
+        var text: String
+        var range: CFRange
+        var readable = true
+        var reformat: (String) -> String = { $0 }
+        private(set) var changed = 0
+        init(_ text: String, selected range: CFRange) { (self.text, self.range) = (text, range) }
+        var value: String? { readable ? text : nil }
+        var selection: CFRange? { readable ? range : nil }
+        func setSelectedText(_ inserted: String) -> Bool {
+            changed += 1
+            text = (text as NSString).replacingCharacters(in: NSRange(location: range.location, length: range.length), with: reformat(inserted))
+            return true
+        }
+    }
+
+    func testAccessibilityInsertionIsCheckedAndNeverPastedTwice() throws {
+        let field = Field("Hello world", selected: CFRange(location: 6, length: 5))
+        XCTAssertEqual(Inserter.insert("there", into: field), .inserted)
+        XCTAssertEqual(field.text, "Hello there")
+
+        // A field that reformats (drops a newline, say): taken, so never pasted again.
+        let single = Field("", selected: CFRange(location: 0, length: 0))
+        single.reformat = { $0.replacingOccurrences(of: "\n", with: " ") }
+        XCTAssertEqual(Inserter.insert("a\nb", into: single), .unchecked)
+
+        // A field that can't be read isn't changed: it's pasted into instead, if at all.
+        let blind = Field("x", selected: CFRange(location: 0, length: 0))
+        blind.readable = false
+        XCTAssertEqual(Inserter.insert("y", into: blind), .refused)
+        XCTAssertEqual(blind.changed, 0)
+
+        // Told not to go on, just before the change: the field isn't touched.
+        let moved = Field("Hello", selected: CFRange(location: 5, length: 0))
+        XCTAssertEqual(Inserter.insert(" world", into: moved, proceed: { false }), .stopped)
+        XCTAssertEqual(moved.changed, 0, "the field was changed after it was told not to")
+        XCTAssertEqual(moved.text, "Hello")
+    }
+
     func testAmbientAudioDropsWhatWasDictatedFromTheMicrophoneOnly() throws {
         guard #available(macOS 26, *) else { throw XCTSkip("needs macOS 26") }
         let spans = DictationSpans()
