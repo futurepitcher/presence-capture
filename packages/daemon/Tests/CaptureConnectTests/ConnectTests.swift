@@ -203,8 +203,9 @@ final class ConnectTests: XCTestCase {
         let store = try store()
         let (claude, _) = try fakeClaude(failing: true)
         XCTAssertThrowsError(try connector(claude: claude).connect(.claudeCode, store: store, grant: grant(.claudeCode), entry: entry) { _ in true }) { error in
-            guard case ConnectError.claudeFailed(_, let output) = error else { return XCTFail("\(error)") }
+            guard case ConnectError.claudeAddFailed(_, let output, let restored, _) = error else { return XCTFail("\(error)") }
             XCTAssertTrue(output.contains("refused"))
+            XCTAssertTrue(restored, "nothing was changed, and it wasn't said")
         }
         XCTAssertTrue(try store.grants().allSatisfy { $0.revokedAt != nil }, "a connection that failed left its grant readable")
     }
@@ -241,7 +242,7 @@ final class ConnectTests: XCTestCase {
 
     func testClaudeCodesOldEntryIsPutBackWhenTheNewOneCantBeAdded() throws {
         let store = try store()
-        let (claude, log) = try fakeClaude(failingOn: "grn_new")
+        let claude = try claudeEditing(removeFails: false, addFailsOn: "grn_new")
         _ = try write(#"{"mcpServers": {"presence-capture": {"type": "stdio", "command": "/old", "args": ["--grant", "grn_old"]}}}"#, to: .claudeCode)
         XCTAssertThrowsError(try connector(claude: claude).connect(.claudeCode, store: store, grant: grant(.claudeCode),
                                                                    entry: { _ in self.entry("grn_new") }) { _ in true }) { error in
@@ -249,9 +250,8 @@ final class ConnectTests: XCTestCase {
             XCTAssertTrue(restored, "the connection that was there wasn't put back")
             XCTAssertNotNil(backup)
         }
-        let ran = try commands(log)
-        XCTAssertEqual(ran.map { Array($0.prefix(2)) }, [["mcp", "remove"], ["mcp", "add-json"], ["mcp", "add-json"]])
-        XCTAssertTrue(ran[2][3].contains("grn_old"), "what was put back isn't what was there")
+        let servers = try XCTUnwrap(try json(connector().file(for: .claudeCode))["mcpServers"] as? [String: Any])
+        XCTAssertEqual((servers["presence-capture"] as? [String: Any])?["args"] as? [String], ["--grant", "grn_old"], "what was put back isn't what was there")
     }
 
     func testAGrantThatCantBeRevokedIsSaidNeverDropped() throws {
@@ -288,8 +288,9 @@ final class ConnectTests: XCTestCase {
     func testAClaudeThatCantBeStartedAfterRemovingIsStillReportedWithTheBackup() throws {
         let store = try store()
         let (claude, _) = try fakeClaude()
-        // On `mcp remove` it removes itself, as an update replacing it mid-connection could.
-        try Data("#!/bin/sh\ncase \"$2\" in remove) rm -f \"$0\";; esac\nexit 0\n".utf8).write(to: claude)
+        // On `mcp remove` it removes the entry, then itself, as an update replacing it mid-connection could.
+        let file = connector().file(for: .claudeCode).path
+        try Data("#!/bin/sh\ncase \"$2\" in remove) printf '{\"mcpServers\": {}}' > '\(file)'; rm -f \"$0\";; esac\nexit 0\n".utf8).write(to: claude)
         _ = try write(#"{"mcpServers": {"presence-capture": {"type": "stdio", "command": "/old", "args": ["--grant", "grn_old"]}}}"#, to: .claudeCode)
         XCTAssertThrowsError(try connector(claude: claude).connect(.claudeCode, store: store, grant: grant(.claudeCode), entry: entry) { _ in true }) { error in
             guard case ConnectError.claudeAddFailed(_, _, let restored, let backup) = error else { return XCTFail("not reported as a failed add: \(error)") }
@@ -338,12 +339,48 @@ final class ConnectTests: XCTestCase {
         let plan = try connector.plan(.claudeCode, entry: entry("grn_new"))
         let started = Date()
         XCTAssertThrowsError(try connector.apply(plan)) { error in
-            guard case ConnectError.claudeFailed(_, let output) = error else { return XCTFail("\(error)") }
+            guard case ConnectError.claudeAddFailed(_, let output, _, _) = error else { return XCTFail("\(error)") }
             XCTAssertTrue(output.contains("didn't finish"), output)
         }
         XCTAssertLessThan(Date().timeIntervalSince(started), 6)
         Thread.sleep(forTimeInterval: 0.3)
         XCTAssertFalse(running(marker), "claude, or what it started, was left running")
+    }
+
+    /// A stand-in `claude` that edits the config as the real one does, then fails as told.
+    private func claudeEditing(removeFails: Bool, addFailsOn: String?) throws -> URL {
+        let file = connector().file(for: .claudeCode).path
+        return try claudeRunning("""
+            case "$2" in
+            remove) printf '{"mcpServers": {}}' > '\(file)'; \(removeFails ? "exit 1" : "exit 0");;
+            add-json) printf '{"mcpServers": {"presence-capture": %s}}' "$4" > '\(file)'; \(addFailsOn.map { "case \"$4\" in *\($0)*) exit 1;; esac" } ?? ""); exit 0;;
+            esac
+            """).claude
+    }
+
+    func testARemoveThatChangesTheConfigThenFailsIsPutBack() throws {
+        let store = try store()
+        let claude = try claudeEditing(removeFails: true, addFailsOn: nil)
+        _ = try write(#"{"mcpServers": {"presence-capture": {"type": "stdio", "command": "/old", "args": ["--grant", "grn_old"]}}}"#, to: .claudeCode)
+        XCTAssertThrowsError(try connector(claude: claude).connect(.claudeCode, store: store, grant: grant(.claudeCode), entry: entry) { _ in true }) { error in
+            guard case ConnectError.claudeAddFailed(_, _, let restored, let backup) = error else { return XCTFail("\(error)") }
+            XCTAssertTrue(restored, "the entry a failed remove took wasn't put back")
+            XCTAssertNotNil(backup)
+        }
+        let servers = try XCTUnwrap(try json(connector().file(for: .claudeCode))["mcpServers"] as? [String: Any])
+        XCTAssertEqual((servers["presence-capture"] as? [String: Any])?["args"] as? [String], ["--grant", "grn_old"])
+    }
+
+    func testAnAddThatWritesThenFailsLeavesNoEntryWhereThereWasNone() throws {
+        let store = try store()
+        let claude = try claudeEditing(removeFails: false, addFailsOn: "--store")
+        _ = try write(#"{"mcpServers": {}}"#, to: .claudeCode)
+        XCTAssertThrowsError(try connector(claude: claude).connect(.claudeCode, store: store, grant: grant(.claudeCode), entry: entry) { _ in true }) { error in
+            guard case ConnectError.claudeAddFailed(_, _, let restored, _) = error else { return XCTFail("\(error)") }
+            XCTAssertTrue(restored)
+        }
+        let servers = try json(connector().file(for: .claudeCode))["mcpServers"] as? [String: Any]
+        XCTAssertNil(servers?["presence-capture"], "an entry naming a withdrawn grant was left")
     }
 
     func testAWorkerThatIgnoresBeingAskedIsStoppedWhenClaudeTimesOut() throws {

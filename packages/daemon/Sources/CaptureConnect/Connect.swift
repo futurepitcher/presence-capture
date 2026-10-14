@@ -64,8 +64,8 @@ public enum ConnectError: Error, CustomStringConvertible, Equatable {
     case claudeNotFound
     /// `claude` refused; what it said.
     case claudeFailed(command: String, output: String)
-    /// The entry that was there was removed, and the new one couldn't be added: whether the old one
-    /// was put back, and where the config was copied before.
+    /// `claude` failed partway (removing the entry there, or adding the new one): whether the entry
+    /// was put back as it was, and where the config was copied before.
     case claudeAddFailed(command: String, output: String, restored: Bool, backup: String?)
     /// A grant that should have been withdrawn couldn't be: it can still read until it's revoked,
     /// with the command that does it.
@@ -81,8 +81,8 @@ public enum ConnectError: Error, CustomStringConvertible, Equatable {
         case .claudeFailed(let command, let output): return "`\(command)` failed:\n\(output)"
         case .claudeAddFailed(let command, let output, let restored, let backup):
             return "`\(command)` failed:\n\(output)\n" + (restored
-                ? "The connection that was there is put back as it was."
-                : "The connection that was there couldn't be put back\(backup.map { "; Claude Code's config as it was is in \($0)" } ?? "").")
+                ? "Claude Code's entry is as it was."
+                : "Claude Code's entry couldn't be put back as it was\(backup.map { "; its config as it was is in \($0)" } ?? "").")
         case .grantLeft(let grantId, let after, let why, let revoke):
             return "\(after); and its grant \(grantId) couldn't be withdrawn (\(why)). Revoke it:\n  \(revoke)"
         }
@@ -246,16 +246,14 @@ public struct Connector: Sendable {
                 try Data(text.utf8).write(to: plan.file, options: .atomic)
                 if let permissions { try manager.setAttributes([.posixPermissions: permissions], ofItemAtPath: plan.file.path) }
             case .claude(let claude, let add):
-                guard let previous = plan.before.map({ String(decoding: $0, as: UTF8.self) }) else {
-                    try run(claude, add)
-                    break
-                }
-                try run(claude, ["mcp", "remove", serverName, "--scope", "user"])
+                let remove = ["mcp", "remove", serverName, "--scope", "user"]
                 do {
+                    if plan.before != nil { try run(claude, remove) }
                     try run(claude, add)
                 } catch {
-                    // Removed, and not replaced, however it failed: what was there goes back.
-                    let restored = (try? run(claude, ["mcp", "add-json", serverName, previous, "--scope", "user"])) != nil
+                    // Whichever command failed, and whatever it changed before failing, the entry goes
+                    // back to what it was.
+                    let restored = restoreClaude(claude, to: plan.before, file: plan.file, remove: remove)
                     let (command, output): (String, String)
                     if case ConnectError.claudeFailed(let c, let o) = error { (command, output) = (c, o) } else {
                         (command, output) = ((["claude"] + add).map(Self.shellQuoted).joined(separator: " "), "\(error)")
@@ -265,6 +263,22 @@ public struct Connector: Sendable {
             }
             return backup
         }
+    }
+
+    /// Claude Code's user-scope entry, as compact JSON; nil when there's none.
+    private func claudeEntry(_ file: URL) -> Data? {
+        guard let root = try? Self.root(try read(file), file),
+              let entry = (root["mcpServers"] as? [String: Any])?[serverName] as? [String: Any] else { return nil }
+        return Data(PrettyJSON.compact(entry).utf8)
+    }
+
+    /// Puts Claude Code's entry back to `before` (nil: no entry), through its own commands, from
+    /// whatever a failed command left; true when it reads back as it was.
+    private func restoreClaude(_ claude: URL, to before: Data?, file: URL, remove: [String]) -> Bool {
+        if claudeEntry(file) == before { return true }
+        if claudeEntry(file) != nil { _ = try? run(claude, remove) }
+        if let before { _ = try? run(claude, ["mcp", "add-json", serverName, String(decoding: before, as: UTF8.self), "--scope", "user"]) }
+        return claudeEntry(file) == before
     }
 
     private func copyAside(_ file: URL) throws -> URL? {
