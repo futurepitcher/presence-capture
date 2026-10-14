@@ -86,8 +86,8 @@ The daemon is ported from PresenceVoice's working capture app.
 Built to [ADR 0008](docs/adr/0008-recall-indexes-in-memory.md): indexes live in
 memory, and everything at rest is sealed.
 
-- Projections for full-text search, vectors (Apple's sentence embedding) and
-  activity sessions.
+- Keyword search and activity sessions, in memory. Vectors were measured and
+  wait for a stronger model (ADR 0008, amended).
 - A native `pcap-mcp` with `search`, `recent`, `timeline`, `now`, `session`
   and `transcript`.
 - `pcap eval` for accuracy and latency.

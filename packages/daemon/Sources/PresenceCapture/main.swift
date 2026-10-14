@@ -1,8 +1,6 @@
 import AppKit
 import ApplicationServices
 import AVFoundation
-import CaptureCore
-import CaptureRecall
 import CaptureStore
 
 /// Presence Capture: a menu-bar app that reads the screen, hears this Mac and notes what's in front,
@@ -30,11 +28,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var store: CaptureStore?
     private var capturer: ScreenCapturer?
     private var activity: ActivityCapturer?
-    /// Embeds what's captured, on this Mac, for search by meaning (ADR 0008 §5); nil without an
-    /// English sentence embedding. Runs on a queue of its own, one run at a time.
-    private var projector: EmbeddingProjector?
-    private let projecting = DispatchQueue(label: "presence-capture.embeddings", qos: .utility)
-    private let projectorBusy = Flag()
     private var log: Logger!
     private var sensors: SensorPlugins?
     /// Whether capture is held, for sensor plugins, whose output arrives off the main thread.
@@ -94,13 +87,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let capturer = ScreenCapturer(store: store, log: log.write)
             (self.store, self.capturer) = (store, capturer)
             activity = ActivityCapturer(store: store, log: log.write)
-            if let embedder = Embedder() {
-                do {
-                    projector = try EmbeddingProjector(store: store, embedder: embedder)
-                } catch {
-                    log.write("embeddings.unavailable")
-                }
-            }
             if #available(macOS 26, *) {
                 let defaults = self.defaults
                 audio = AudioCapturer(store: store, devices: {
@@ -134,7 +120,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.audio?.tick(listening: !held && seesScreen)
             // An erasure a reader held up is finished as soon as the reader lets go (ADR 0002).
             if store.isErasurePending { _ = try? store.finishErasure() }
-            self.project()
             // A list that exists but can't be read: nothing is captured until it can be (R8).
             let fragments = Exclusion.load(self.exclusionPath)
             // Activity is noted while capturing, and the lock itself is noted while locked (it
@@ -238,20 +223,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func forgetQuarterHour() { forget(minutes: 15, label: "the last 15 minutes") }
     @objc private func forgetHour() { forget(minutes: 60, label: "the last hour") }
-
-    /// One run of the embedding projector, unless one is still going.
-    private func project() {
-        guard let projector, projectorBusy.claim() else { return }
-        let (busy, log) = (projectorBusy, self.log)
-        projecting.async {
-            defer { busy.release() }
-            do {
-                try projector.run()
-            } catch {
-                log?.write("embeddings.failed \(String(describing: type(of: error)))")
-            }
-        }
-    }
 
     /// A revocation of the stretch just past (ADR 0002): everything captured in it, and everything
     /// derived from it, erased from disk, with a receipt. It can't be undone, so it's asked first.
@@ -390,16 +361,6 @@ final class Flag: @unchecked Sendable {
         get { lock.withLock { stored } }
         set { lock.withLock { stored = newValue } }
     }
-
-    /// Sets it, and says whether it was clear: true for whoever claims it first.
-    func claim() -> Bool {
-        lock.withLock {
-            defer { stored = true }
-            return !stored
-        }
-    }
-
-    func release() { value = false }
 }
 
 /// Counts and states only, one line each, timestamped: never what was captured.

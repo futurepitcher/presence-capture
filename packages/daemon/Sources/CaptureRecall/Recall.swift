@@ -1,37 +1,30 @@
-import CaptureCore
 import CaptureStore
 import Foundation
 
 /// What this reader recalls from (ADR 0008): every capture its grant admits, unsealed into memory
-/// and nowhere else. Keyword search is SQLite FTS5 in `:memory:`; with an embedder, the captures'
-/// vectors (the daemon's EmbeddingProjector) are held too, and search fuses BM25 with cosine
-/// similarity (reciprocal rank). Sessions are computed from activity when asked for. The same tools,
-/// arguments and answers as the reference's src/recall.js, held to the same MCP conformance; the
-/// reference has no embedding model, and searches by keyword alone.
+/// and nowhere else. Keyword search is SQLite FTS5 in `:memory:`; sessions are computed from activity
+/// when asked for. The same tools, arguments and answers as the reference's src/recall.js, held to
+/// the same MCP conformance.
 ///
 /// It's built by reading through the grant, so the store enforces the grant and records every row
 /// this reader unsealed in the egress log (tool `index`). It's kept current on each call: captures
-/// and vectors after the last ones read, and revocations after the last one seen, which are evicted.
-/// Whatever it ranks is then served by id through the grant again, so nothing it holds is served
-/// without the store's say: a capture revoked or a grant withdrawn since serves nothing.
+/// after the last one read, and revocations after the last one seen, which are evicted. Whatever it
+/// ranks is then served by id through the grant again, so nothing it holds is served without the
+/// store's say: a capture revoked or a grant withdrawn since serves nothing.
+///
+/// Search by meaning isn't here for 0.1: Apple's on-device sentence embedding, measured on the eval,
+/// found 1 of 25 paraphrased questions among 15,000 captures and made fused results worse (ADR 0008,
+/// amended). It waits for a stronger model, on the branch wip/embeddings-0.2.
 public final class Recall {
     private let store: CaptureStore
     private let grantId: String
-    private let embedder: Embedder?
     private let memory = MemoryIndex()
-    /// Each capture's chunk vectors, by the embedder's model only: another model's aren't comparable.
-    private var vectors: [String: [[Float]]] = [:]
     private var afterSequence = 0
-    private var afterOutput = 0
     private var afterRevocation = 0
 
-    /// How many of each ranking search fuses.
-    static let candidates = 50
-
-    public init(store: CaptureStore, grantId: String, embedder: Embedder? = nil) {
+    public init(store: CaptureStore, grantId: String) {
         self.store = store
         self.grantId = grantId
-        self.embedder = embedder
         memory.exec("""
             CREATE TABLE doc (
               capture_id TEXT PRIMARY KEY, sequence INTEGER NOT NULL, captured_at TEXT NOT NULL,
@@ -76,27 +69,12 @@ public final class Recall {
                 afterSequence = max(afterSequence, sequence)
             }
         }
-        // Vectors arrive after their captures, often well after: followed by their own sequence.
-        if let embedder, try store.latestOutputSequence() > afterOutput {
-            while true {
-                let page = try store.readOutputs(grantId: grantId, tool: "index", kind: Vectors.kind, afterOutputSequence: afterOutput)
-                if page.isEmpty { break }
-                for envelope in page {
-                    let (provenance, content) = Self.parts(envelope)
-                    afterOutput = max(afterOutput, (provenance["output_sequence"] as? NSNumber)?.intValue ?? afterOutput)
-                    guard let id = provenance["capture_id"] as? String, let (model, vector) = content.flatMap(Vectors.decode),
-                          model == embedder.modelIdentifier else { continue }
-                    vectors[id, default: []].append(vector)
-                }
-            }
-        }
         // Every revocation since the last look, one that revoked nothing new included: the cursor moves
         // past all of them, so none is taken for a change still to come.
         let (through, revoked) = try store.revoked(after: afterRevocation)
         for id in revoked {
             memory.run("DELETE FROM doc WHERE capture_id = ?", id)
             memory.run("DELETE FROM words WHERE capture_id = ?", id)
-            vectors[id] = nil
         }
         afterRevocation = through
     }
@@ -114,30 +92,18 @@ public final class Recall {
 
     // MARK: Tools
 
-    /// Search: BM25 over any word of the query, fused (reciprocal rank) with the captures nearest the
-    /// query's meaning when there's an embedder and vectors to compare with.
+    /// Keyword search, ranked by BM25: any word of the query, as many results as asked for.
     private func search(_ args: [String: Any]) throws -> [CanonicalJSON] {
         guard let query = args["query"] as? String else { throw ToolError.invalid("query must be text") }
         let (from, to, max) = (try time(args, "from") ?? "0000-01-01T00:00:00.000Z", try time(args, "to") ?? "9999-12-31T23:59:59.999Z", try limit(args, 10))
         let words = Self.words(query)
-        let keyword = words.isEmpty ? [] : memory.ids("""
+        guard !words.isEmpty else { return try serve("search", query, []) }
+        let ids = memory.ids("""
             SELECT words.capture_id FROM words JOIN doc ON doc.capture_id = words.capture_id
             WHERE words MATCH ? AND doc.captured_at >= ? AND doc.captured_at <= ?
             ORDER BY bm25(words), doc.sequence DESC LIMIT ?
-            """, words.map { "\"\($0)\"" }.joined(separator: " OR "), from, to, Self.candidates)
-        var ranked = keyword
-        if let embedder, !vectors.isEmpty, let asked = embedder.embed(query).first {
-            let inSpan = Set(memory.ids("SELECT capture_id FROM doc WHERE captured_at >= ? AND captured_at <= ?", from, to))
-            let nearest = vectors.compactMap { id, chunks -> (String, Float)? in
-                guard inSpan.contains(id) else { return nil }
-                return (id, chunks.map { Embedder.similarity(asked, $0) }.max() ?? -1)
-            }
-            .sorted { $0.1 > $1.1 }
-            .prefix(Self.candidates)
-            .map(\.0)
-            ranked = Fusion.reciprocalRank([keyword, Array(nearest)])
-        }
-        return try serve("search", query, Array(ranked.prefix(max)))
+            """, words.map { "\"\($0)\"" }.joined(separator: " OR "), from, to, max)
+        return try serve("search", query, ids)
     }
 
     /// Everything captured between two times (by default the last hour), in the order captured.

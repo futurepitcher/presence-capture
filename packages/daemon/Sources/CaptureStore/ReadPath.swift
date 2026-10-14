@@ -126,12 +126,6 @@ extension CaptureStore {
         try lock.withLock { try rows("SELECT COALESCE(MAX(sequence), 0) FROM capture_event").first?.int(0) ?? 0 }
     }
 
-    /// The highest projection-output number (migration 010): a number, never content, so a reader
-    /// can tell whether there's a new output to read before reading (and recording) it.
-    public func latestOutputSequence() throws -> Int {
-        try lock.withLock { try rows("SELECT COALESCE(MAX(output_sequence), 0) FROM projection_entry").first?.int(0) ?? 0 }
-    }
-
     /// How far revocation has got (its highest sequence), and the captures revoked by revocations after
     /// `sequence` up to there, read together: ids and numbers only, so a reader can evict them and move
     /// its cursor past every revocation, one that revoked nothing new included.

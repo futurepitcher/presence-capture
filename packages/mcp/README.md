@@ -44,7 +44,7 @@ enforcing below the tool layer rather than inside it.
 
   | Tool | Answers |
   |------|---------|
-  | `search(query, from?, to?, limit?)` | Keyword search (FTS5, BM25), best match first. `pcap-mcp` fuses it with search by meaning (reciprocal rank) over the vectors the daemon embeds; this reference has no embedding model |
+  | `search(query, from?, to?, limit?)` | Keyword search (FTS5, BM25), best match first |
   | `recent(limit?)` | The newest captures first |
   | `timeline(from?, to?, limit?)` | Everything in a span (by default the last hour), in order |
   | `transcript(from?, to?, device?, limit?)` | What was said, from the microphone (`input`), this Mac (`output`), or both |

@@ -359,17 +359,6 @@ public final class CaptureStore: @unchecked Sendable {
                 projection, captureId, entryRef, Self.iso(Date()), output?.kind, sealed, output == nil ? nil : try nextSequence())
     }
 
-    /// The id of a grant to `clientId` that's in force (not revoked, not expired), if there is one: how
-    /// a first-party projector finds the grant it reads through.
-    public func grantInForce(clientId: String) throws -> String? {
-        try lock.withLock {
-            try rows("""
-                SELECT grant_id FROM grant_record WHERE client_id = ? AND revoked_at IS NULL AND expires_at > ?
-                ORDER BY expires_at DESC LIMIT 1
-                """, clientId, Self.iso(Date())).first?.text(0)
-        }
-    }
-
     /// The dedupe_key for a value a sensor marks as already seen: HMAC-SHA256 under a key derived
     /// from the master key, over "<source>\u{1F}<value>", as the reference derives it. The store
     /// refuses the same one twice, even after the first is revoked.

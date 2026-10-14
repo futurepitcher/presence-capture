@@ -3,15 +3,28 @@
 ## Status
 
 **Accepted** — 2026-10-10. Shapes M3 (search, vectors, sessions, `pcap-mcp`).
-**Amended** — 2026-10-14: the embedding model is the sentence embedding (§5).
+**Amended** — 2026-10-14: 0.1 ships keyword search alone; embeddings wait for
+a model that measures better (§5).
 
-The original choice was `NLContextualEmbedding`, mean-pooled. Five pairs were
-each measured three ways: a text, a paraphrase of it, and an unrelated text.
-Mean-pooled contextual vectors put the unrelated text nearer in one pair of
-five, and every similarity sat between 0.71 and 0.91. Apple's sentence
-embedding (`NLEmbedding.sentenceEmbedding`) put the paraphrase nearer in all
-five, by wide margins. It's also on-device, needs no asset download, and runs
-in about 4 ms a text. The pairs are `EmbedderTests`.
+The eval (`packages/schema/bin/eval.js`) was run on a 30-day store of 18,036
+captures, with 50 questions, 25 of them asked in words the answer doesn't use.
+
+| Ranking | Recall@5 |
+|---|---|
+| Keyword (BM25) alone | 40/50 |
+| Apple's on-device embeddings alone | 15/50, and 1 of the 25 paraphrased questions |
+| The two fused | 37/50 |
+
+Ordinary text scored 0.5–0.65 against nearly any question, above the real
+answers. Mean-pooled `NLContextualEmbedding` was worse still on paraphrase
+pairs (`EmbedderTests`), so the sentence embedding was the one measured.
+
+So 0.1 runs no embedding projector and keeps no vectors: they would cost
+storage and CPU for a worse answer. The store's side (sealed projection
+outputs, `output_sequence`, `readOutputs`) is in place. The projector, the
+quantized vector format and fusion are kept on the branch
+`wip/embeddings-0.2`, for a stronger open on-device model (Core ML), shipped
+only if it beats keyword search on this eval.
 
 ## Context
 
@@ -80,9 +93,7 @@ FTS5 table on disk. That breaks the project's central guarantee:
 
 5. **Projectors run in the daemon, the writer.**
    - Embeddings are computed by the daemon, as a first-party projector
-     (the sentence embedding, ADR 0004, chunks of about 60 words), and stored
-     sealed, each a unit vector quantized to a byte a component (about 700
-     bytes for 512 dimensions, with the model's name). The reader loads
+     (`NLContextualEmbedding`, ADR 0004), and stored sealed. The reader loads
      them; it embeds only the query.
    - Projector plugins (ADR 0007) are hosted by the daemon too, in a helper
      process it can kill at a capture's time limit. The helper never opens
