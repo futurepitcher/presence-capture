@@ -73,6 +73,8 @@ fields may be omitted or `null`.
 | `issue_grant` | `client_id`, `expires_at`; optional `privacy_levels`, `capture_types`, `sources`, `domains`, `time_from`, `time_to`, `max_rows_per_query` | `{grant_id}`. Fails with `constraint` for a grant naming `sacred_mode` |
 | `revoke_grant` | `grant_id` | `{}` |
 | `read` | `grant_id`, `tool`; optional `query`, `contains`, `limit`, `after_sequence` | `{envelopes}`, as ADR 0001 defines them, in sequence order, each served row recorded in the egress log. Fails with `denied` for a missing, revoked or expired grant |
+| `read_ids` | `grant_id`, `tool`, `capture_ids`; optional `query` | `{envelopes}` of the captures named that the grant admits, in that order, each once, up to the grant's cap, recorded in the egress log. `bad_request` when `capture_ids` isn't a list of strings |
+| `read_outputs` | `grant_id`, `tool`; optional `kind`, `after_output_sequence` (default 0), `limit` | `{envelopes}` of the projection outputs of captures the grant admits, in `output_sequence` order after the number given, up to the grant's cap, recorded in the egress log |
 | `content` | `capture_id` | `{text}`, the capture's text as the implementation unseals it, or `null` |
 | `payload` | `capture_id` | `{bytes_base64}`, or `null` |
 | `close` | — | `{}` |
@@ -81,7 +83,7 @@ fields may be omitted or `null`.
 
 After driving writes, the suite opens the store file **read-only** with
 SQLite. It expects the tables and the sealing format of SCHEMA.md
-(migrations `001`–`009`).
+(migrations `001`–`010`).
 
 Payload bytes are read from `payload_blob`, or from a file named by
 `capture_payload.storage_uri` in the form `file:<path relative to the store's

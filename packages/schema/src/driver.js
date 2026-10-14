@@ -21,7 +21,7 @@ function codeFor(err) {
   if (err instanceof AuthorizationError) return 'denied';
   if (err instanceof RevokedError) return 'constraint';
   if (/does not open this store|needs its masterKey|masterKey must be/.test(err.message)) return 'key';
-  if (/limit must be/.test(err.message)) return 'bad_request';
+  if (/limit must be|captureIds must be|afterOutputSequence must be/.test(err.message)) return 'bad_request';
   if (/constraint|append-only|write-once/i.test(err.message)) return 'constraint';
   return 'internal';
 }
@@ -125,6 +125,14 @@ export function createDriverHandler({ open = openStore } = {}) {
 
     read: ({ grant_id: grantId, tool, query, contains, limit, after_sequence: afterSequence }) => ({
       envelopes: need().createReader(grantId).read({ tool, query, contains, limit, afterSequence }),
+    }),
+
+    read_ids: ({ grant_id: grantId, tool, query, capture_ids: captureIds }) => ({
+      envelopes: need().createReader(grantId).readCaptures({ tool, query, captureIds }),
+    }),
+
+    read_outputs: ({ grant_id: grantId, tool, kind, after_output_sequence: afterOutputSequence, limit }) => ({
+      envelopes: need().createReader(grantId).readOutputs({ tool, kind, afterOutputSequence: afterOutputSequence ?? 0, limit }),
     }),
 
     content: ({ capture_id: captureId }) => ({ text: need().contentText(captureId) }),

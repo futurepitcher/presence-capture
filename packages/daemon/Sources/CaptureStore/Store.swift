@@ -316,8 +316,10 @@ public final class CaptureStore: @unchecked Sendable {
                 // Recording again that an entry exists changes nothing, so an index that failed after
                 // recording can retry. An entry with an output is kept once.
                 let again = output == nil ? " ON CONFLICT (projection_name, capture_id, entry_ref) DO NOTHING" : ""
-                try run("INSERT INTO projection_entry (projection_name, capture_id, entry_ref, created_at, output_kind, output_sealed) VALUES (?, ?, ?, ?, ?, ?)" + again,
-                        projection, captureId, entryRef, Self.iso(Date()), output?.kind, sealed)
+                // An output takes the next number in the store's sequence (migration 010), so a reader
+                // that follows outputs finds one written after its capture.
+                try run("INSERT INTO projection_entry (projection_name, capture_id, entry_ref, created_at, output_kind, output_sealed, output_sequence) VALUES (?, ?, ?, ?, ?, ?, ?)" + again,
+                        projection, captureId, entryRef, Self.iso(Date()), output?.kind, sealed, output == nil ? nil : try nextSequence())
             }
         }
     }
@@ -547,7 +549,8 @@ public final class CaptureStore: @unchecked Sendable {
     private func nextSequence() throws -> Int {
         let sql = """
             SELECT COALESCE(MAX(s), 0) + 1 FROM (
-              SELECT MAX(sequence) AS s FROM capture_event UNION ALL SELECT MAX(sequence) AS s FROM revocation)
+              SELECT MAX(sequence) AS s FROM capture_event UNION ALL SELECT MAX(sequence) AS s FROM revocation
+              UNION ALL SELECT MAX(output_sequence) AS s FROM projection_entry)
             """
         return try rows(sql).first?.int(0) ?? 1
     }
