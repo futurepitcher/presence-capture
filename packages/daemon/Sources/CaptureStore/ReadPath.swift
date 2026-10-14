@@ -112,6 +112,14 @@ extension CaptureStore {
         }
     }
 
+    /// How many captures there are, and how many are revoked: counts only, for diagnostics.
+    public func counts() throws -> (captures: Int, revoked: Int) {
+        try lock.withLock {
+            (try rows("SELECT COUNT(*) FROM capture_event").first?.int(0) ?? 0,
+             try rows("SELECT COUNT(*) FROM revoked_capture").first?.int(0) ?? 0)
+        }
+    }
+
     public func revokeGrant(_ grantId: String) throws {
         try lock.withLock { try run("UPDATE grant_record SET revoked_at = ? WHERE grant_id = ?", Self.iso(Date()), grantId) }
     }
