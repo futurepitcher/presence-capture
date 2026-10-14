@@ -1,0 +1,151 @@
+{
+  "_": "Activity sessions (ADR 0008): computed in memory from activity captures, never stored. Every implementation gives these answers; the reference (src/sessions.js) and the macOS daemon both test against this file. Activity is captured only when something changes, so each capture lasts until the next (the last until now). A session is a run of active time in one app and window, or in excluded windows, which have neither. A run of other active captures lasting under 30 seconds in all, after which the person is back in the same app and window, doesn't end the session: it's taken into it. Idle (no input for two minutes, as the capturer decides) and locked time end a session and belong to none. A session's id is 'ses_' and the id of its first capture; ended_at is when the capture that ended it began, or null while it goes on.",
+  "interruption_seconds": 30,
+  "cases": [
+    {
+      "why": "one app, one window",
+      "now": "2026-10-06T09:10:00.000Z",
+      "activity": [
+        { "id": "a1", "at": "2026-10-06T09:00:00.000Z", "state": "active", "app": "Notes", "window": "Plan" }
+      ],
+      "sessions": [
+        { "id": "ses_a1", "started_at": "2026-10-06T09:00:00.000Z", "ended_at": null, "capture_ids": ["a1"] }
+      ]
+    },
+    {
+      "why": "a switch to another app starts a new session",
+      "now": "2026-10-06T09:10:00.000Z",
+      "activity": [
+        { "id": "a1", "at": "2026-10-06T09:00:00.000Z", "state": "active", "app": "Notes", "window": "Plan" },
+        { "id": "a2", "at": "2026-10-06T09:05:00.000Z", "state": "active", "app": "Xcode", "window": "app" }
+      ],
+      "sessions": [
+        { "id": "ses_a1", "started_at": "2026-10-06T09:00:00.000Z", "ended_at": "2026-10-06T09:05:00.000Z", "capture_ids": ["a1"] },
+        { "id": "ses_a2", "started_at": "2026-10-06T09:05:00.000Z", "ended_at": null, "capture_ids": ["a2"] }
+      ]
+    },
+    {
+      "why": "the same app in another window is another session",
+      "now": "2026-10-06T09:10:00.000Z",
+      "activity": [
+        { "id": "a1", "at": "2026-10-06T09:00:00.000Z", "state": "active", "app": "Notes", "window": "Plan" },
+        { "id": "a2", "at": "2026-10-06T09:05:00.000Z", "state": "active", "app": "Notes", "window": "Groceries" }
+      ],
+      "sessions": [
+        { "id": "ses_a1", "started_at": "2026-10-06T09:00:00.000Z", "ended_at": "2026-10-06T09:05:00.000Z", "capture_ids": ["a1"] },
+        { "id": "ses_a2", "started_at": "2026-10-06T09:05:00.000Z", "ended_at": null, "capture_ids": ["a2"] }
+      ]
+    },
+    {
+      "why": "an interruption under 30 seconds, then back, is taken into the session",
+      "now": "2026-10-06T09:10:00.000Z",
+      "activity": [
+        { "id": "a1", "at": "2026-10-06T09:00:00.000Z", "state": "active", "app": "Notes", "window": "Plan" },
+        { "id": "a2", "at": "2026-10-06T09:01:00.000Z", "state": "active", "app": "Slack", "window": "Dana" },
+        { "id": "a3", "at": "2026-10-06T09:01:20.000Z", "state": "active", "app": "Notes", "window": "Plan" }
+      ],
+      "sessions": [
+        { "id": "ses_a1", "started_at": "2026-10-06T09:00:00.000Z", "ended_at": null, "capture_ids": ["a1", "a2", "a3"] }
+      ]
+    },
+    {
+      "why": "two interruptions in a row, under 30 seconds in all, are taken in too",
+      "now": "2026-10-06T09:10:00.000Z",
+      "activity": [
+        { "id": "a1", "at": "2026-10-06T09:00:00.000Z", "state": "active", "app": "Notes", "window": "Plan" },
+        { "id": "a2", "at": "2026-10-06T09:01:00.000Z", "state": "active", "app": "Slack", "window": "Dana" },
+        { "id": "a3", "at": "2026-10-06T09:01:10.000Z", "state": "active", "app": "Mail", "window": "Inbox" },
+        { "id": "a4", "at": "2026-10-06T09:01:25.000Z", "state": "active", "app": "Notes", "window": "Plan" }
+      ],
+      "sessions": [
+        { "id": "ses_a1", "started_at": "2026-10-06T09:00:00.000Z", "ended_at": null, "capture_ids": ["a1", "a2", "a3", "a4"] }
+      ]
+    },
+    {
+      "why": "an interruption of 30 seconds or more is a session of its own",
+      "now": "2026-10-06T09:10:00.000Z",
+      "activity": [
+        { "id": "a1", "at": "2026-10-06T09:00:00.000Z", "state": "active", "app": "Notes", "window": "Plan" },
+        { "id": "a2", "at": "2026-10-06T09:01:00.000Z", "state": "active", "app": "Slack", "window": "Dana" },
+        { "id": "a3", "at": "2026-10-06T09:01:30.000Z", "state": "active", "app": "Notes", "window": "Plan" }
+      ],
+      "sessions": [
+        { "id": "ses_a1", "started_at": "2026-10-06T09:00:00.000Z", "ended_at": "2026-10-06T09:01:00.000Z", "capture_ids": ["a1"] },
+        { "id": "ses_a2", "started_at": "2026-10-06T09:01:00.000Z", "ended_at": "2026-10-06T09:01:30.000Z", "capture_ids": ["a2"] },
+        { "id": "ses_a3", "started_at": "2026-10-06T09:01:30.000Z", "ended_at": null, "capture_ids": ["a3"] }
+      ]
+    },
+    {
+      "why": "a short visit that isn't followed by a return is a session of its own",
+      "now": "2026-10-06T09:10:00.000Z",
+      "activity": [
+        { "id": "a1", "at": "2026-10-06T09:00:00.000Z", "state": "active", "app": "Notes", "window": "Plan" },
+        { "id": "a2", "at": "2026-10-06T09:01:00.000Z", "state": "active", "app": "Slack", "window": "Dana" },
+        { "id": "a3", "at": "2026-10-06T09:01:10.000Z", "state": "active", "app": "Xcode", "window": "app" }
+      ],
+      "sessions": [
+        { "id": "ses_a1", "started_at": "2026-10-06T09:00:00.000Z", "ended_at": "2026-10-06T09:01:00.000Z", "capture_ids": ["a1"] },
+        { "id": "ses_a2", "started_at": "2026-10-06T09:01:00.000Z", "ended_at": "2026-10-06T09:01:10.000Z", "capture_ids": ["a2"] },
+        { "id": "ses_a3", "started_at": "2026-10-06T09:01:10.000Z", "ended_at": null, "capture_ids": ["a3"] }
+      ]
+    },
+    {
+      "why": "idle time ends the session and belongs to none",
+      "now": "2026-10-06T09:20:00.000Z",
+      "activity": [
+        { "id": "a1", "at": "2026-10-06T09:00:00.000Z", "state": "active", "app": "Notes", "window": "Plan" },
+        { "id": "a2", "at": "2026-10-06T09:10:00.000Z", "state": "idle", "app": "Notes", "window": "Plan" },
+        { "id": "a3", "at": "2026-10-06T09:15:00.000Z", "state": "active", "app": "Notes", "window": "Plan" }
+      ],
+      "sessions": [
+        { "id": "ses_a1", "started_at": "2026-10-06T09:00:00.000Z", "ended_at": "2026-10-06T09:10:00.000Z", "capture_ids": ["a1"] },
+        { "id": "ses_a3", "started_at": "2026-10-06T09:15:00.000Z", "ended_at": null, "capture_ids": ["a3"] }
+      ]
+    },
+    {
+      "why": "a lock ends the session, even a short one",
+      "now": "2026-10-06T09:20:00.000Z",
+      "activity": [
+        { "id": "a1", "at": "2026-10-06T09:00:00.000Z", "state": "active", "app": "Notes", "window": "Plan" },
+        { "id": "a2", "at": "2026-10-06T09:05:00.000Z", "state": "locked", "excluded": true },
+        { "id": "a3", "at": "2026-10-06T09:05:10.000Z", "state": "active", "app": "Notes", "window": "Plan" }
+      ],
+      "sessions": [
+        { "id": "ses_a1", "started_at": "2026-10-06T09:00:00.000Z", "ended_at": "2026-10-06T09:05:00.000Z", "capture_ids": ["a1"] },
+        { "id": "ses_a3", "started_at": "2026-10-06T09:05:10.000Z", "ended_at": null, "capture_ids": ["a3"] }
+      ]
+    },
+    {
+      "why": "excluded windows are a session of their own, with neither app nor window",
+      "now": "2026-10-06T09:20:00.000Z",
+      "activity": [
+        { "id": "a1", "at": "2026-10-06T09:00:00.000Z", "state": "active", "app": "Notes", "window": "Plan" },
+        { "id": "a2", "at": "2026-10-06T09:02:00.000Z", "state": "active", "excluded": true },
+        { "id": "a3", "at": "2026-10-06T09:03:00.000Z", "state": "active", "excluded": true },
+        { "id": "a4", "at": "2026-10-06T09:04:00.000Z", "state": "active", "app": "Notes", "window": "Plan" }
+      ],
+      "sessions": [
+        { "id": "ses_a1", "started_at": "2026-10-06T09:00:00.000Z", "ended_at": "2026-10-06T09:02:00.000Z", "capture_ids": ["a1"] },
+        { "id": "ses_a2", "started_at": "2026-10-06T09:02:00.000Z", "ended_at": "2026-10-06T09:04:00.000Z", "capture_ids": ["a2", "a3"] },
+        { "id": "ses_a4", "started_at": "2026-10-06T09:04:00.000Z", "ended_at": null, "capture_ids": ["a4"] }
+      ]
+    },
+    {
+      "why": "a session that ended in idle time has an end even with nothing after it",
+      "now": "2026-10-06T09:20:00.000Z",
+      "activity": [
+        { "id": "a1", "at": "2026-10-06T09:00:00.000Z", "state": "active", "app": "Notes", "window": "Plan" },
+        { "id": "a2", "at": "2026-10-06T09:10:00.000Z", "state": "idle", "app": "Notes", "window": "Plan" }
+      ],
+      "sessions": [
+        { "id": "ses_a1", "started_at": "2026-10-06T09:00:00.000Z", "ended_at": "2026-10-06T09:10:00.000Z", "capture_ids": ["a1"] }
+      ]
+    },
+    {
+      "why": "no activity, no sessions",
+      "now": "2026-10-06T09:20:00.000Z",
+      "activity": [],
+      "sessions": []
+    }
+  ]
+}

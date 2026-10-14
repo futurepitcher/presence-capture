@@ -2,6 +2,7 @@ export { openStore, AuthorizationError, ENVELOPE_VERSION } from './store.js';
 export { migrate } from './migrate.js';
 export { eachLine, jsonLine } from './lines.js';
 export { scheduleRetention } from './retention.js';
+export { sessionsOf } from './sessions.js';
 export { redact } from './redact.js';
 export { isExcluded, parseExclusionList, SELF_WINDOWS, SYSTEM_APPS } from './exclusion.js';
 export { runSensor } from './sensor-host.js';
