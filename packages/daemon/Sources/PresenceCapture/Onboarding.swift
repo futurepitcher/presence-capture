@@ -110,7 +110,7 @@ struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("4. Dictation (optional)").bold()
+                    Text("4. Dictation (optional, experimental)").bold()
                     Text("Hold a key and speak, in any app: what you say is typed where the cursor is, heard on this Mac. "
                          + "It asks for the microphone, Input Monitoring (for the key alone: no other key is ever seen) and Accessibility (to type).")
                         .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)

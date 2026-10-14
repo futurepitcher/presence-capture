@@ -48,8 +48,9 @@ struct DictationParts {
     var panel: DictationShowing = DictationPanel()
     /// The app in front, on the main thread.
     var front: () -> FrontApp? = FrontApp.now
-    /// Where typing would go, asked off the main thread (Accessibility can wait on an app).
-    var sample: @Sendable (FrontApp?) -> DictationSample = { Focus.sample($0) }
+    /// Where typing would go in an app, asked off the main thread (Accessibility can wait on an app),
+    /// timed from a moment (the key event it's for): one that took too long since is unknown.
+    var sample: @Sendable (FrontApp?, Date) -> DictationSample = { Focus.sample($0, since: $1) }
     var tidy: (String) async -> String? = { await Tidier.propose($0) }
     /// Typing in: `check` is asked (and answers on the main thread) before anything is typed or
     /// pasted; `proceed` is asked off the main thread just before Accessibility changes the field;
@@ -278,14 +279,18 @@ final class Dictation: Dictating, @unchecked Sendable {
         // Held (paused, locked): the key does nothing.
         guard !held() else { return act(hold.cancel(.paused)) }
         let began = Date()
+        // What's cheap to know at the key event itself, read before anything can hold it up: the app in
+        // front and Secure Event Input. Its focused field is sampled off the main thread, timed from here
+        // and begun now, alongside the microphone (which can take a moment to start).
+        let (front, secureAtStart, sample) = (parts.front(), parts.secureInput(), parts.sample)
+        let origin = Task.detached { sample(front, began) }
         spans.began(at: began)
         do {
-            // The microphone first: nothing below can hold it up.
+            // Then the microphone: nothing below can hold it up.
             let session = try listener.begin(level: { [weak self] level in
                 DispatchQueue.main.async { if self?.shown == token { self?.panel.listening(level) } }
             })
-            let (front, sample) = (parts.front(), parts.sample)
-            live[token] = Live(began: began, origin: Task.detached { sample(front) }, secureAtStart: parts.secureInput(), session: session)
+            live[token] = Live(began: began, origin: origin, secureAtStart: secureAtStart, session: session)
             stillLive.insert(token)
             listening = token
             startPolling()
@@ -303,17 +308,20 @@ final class Dictation: Dictating, @unchecked Sendable {
     }
 
     private func end(_ token: Int) {
+        // Where typing would go as the key comes up, read first: the app in front and Secure Event
+        // Input now, and its focused field sampled off the main thread, timed from now and begun now,
+        // alongside the microphone stopping.
+        let (released, front, secure, sample) = (Date(), parts.front(), parts.secureInput(), parts.sample)
+        let dictation = live[token]
+        dictation?.secureAtRelease = secure
+        dictation?.released = Task.detached { sample(front, released) }
         stopPolling()
-        spans.ended(at: Date())
+        spans.ended(at: released)
         if listening == token {
             listener.stop()
             listening = nil
         }
-        guard let dictation = live[token] else { return }
-        // Where typing would go as the key comes up, before anything is waited for.
-        dictation.secureAtRelease = parts.secureInput()
-        let (front, sample) = (parts.front(), parts.sample)
-        dictation.released = Task.detached { sample(front) }
+        guard let dictation else { return }
         panel.working()
         Task { @MainActor [weak self] in await self?.finish(token, dictation) }
     }
@@ -409,7 +417,7 @@ final class Dictation: Dictating, @unchecked Sendable {
         guard !text.isEmpty else { return done(token) }
 
         let (front, sample) = (parts.front(), parts.sample)
-        let now = await Task.detached { sample(front) }.value
+        let now = await Task.detached { sample(front, Date()) }.value
         guard going(token) else { return }
         // Kept by where it was said: excluded there, or where it was released, it's not kept; nor
         // when a field was, or might have been, a password field.
@@ -440,7 +448,7 @@ final class Dictation: Dictating, @unchecked Sendable {
                 }
                 let (front, sample) = (self.parts.front(), self.parts.sample)
                 Task.detached {
-                    let now = sample(front)
+                    let now = sample(front, Date())
                     await MainActor.run { [weak self] in
                         guard let self, self.going(token), !self.held(), self.parts.canType(), self.parts.front()?.pid == app?.pid else {
                             return answer(false)

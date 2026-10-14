@@ -6,6 +6,17 @@ or because it can't be fixed from inside the app.
 
 ## Dictation
 
+Dictation is experimental in 0.1.
+
+- **Where the cursor was is read a moment after the key.** At key-down and at
+  release, the app in front is read at the key event itself, but its focused
+  field is read through Accessibility just after, off the main thread, and
+  must be read within half a second of the key event (else nothing is typed
+  or kept). Moving to another field of the same app within that moment can go
+  unnoticed. The dictation is then typed into the field you're in at release,
+  rather than held in the panel. It's never typed into a password field: that's
+  checked again just before typing. Watching every focus change as it happens
+  would close this; it needs live testing, so it's left for after 0.1.
 - **A paste can arrive after the clipboard is put back.** When a field doesn't
   take text through Accessibility, a dictation is pasted: the clipboard holds
   the words, ⌘V is sent, and 750 ms later your clipboard is put back (unless

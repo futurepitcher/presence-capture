@@ -233,7 +233,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let forgetHour = NSMenuItem(title: "Forget the Last Hour…", action: #selector(forgetHour), keyEquivalent: "")
         hearMicrophoneItem = NSMenuItem(title: "Hear the Microphone", action: #selector(toggleMicrophone), keyEquivalent: "")
         hearSystemAudioItem = NSMenuItem(title: "Hear System Audio", action: #selector(toggleSystemAudio), keyEquivalent: "")
-        dictationItem = NSMenuItem(title: "Dictation", action: nil, keyEquivalent: "")
+        dictationItem = NSMenuItem(title: "Dictation (Experimental)", action: nil, keyEquivalent: "")
         let dictationMenu = NSMenu()
         dictateItem = NSMenuItem(title: "Hold a Key to Dictate", action: #selector(toggleDictation), keyEquivalent: "")
         dictationMenu.addItem(dictateItem)

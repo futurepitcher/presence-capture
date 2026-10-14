@@ -97,8 +97,12 @@ final class DictationFlowTests: XCTestCase {
         }
         /// Another app comes to the front as the next sample is taken (while it waits on the app).
         func switchWhileSampling(to app: FrontApp) { lock.withLock { switchTo = app } }
-        func sampled() -> DictationSample {
+        private var times: [Date] = []
+        /// The moments the samples were timed from, in order.
+        var since: [Date] { lock.withLock { times } }
+        func sampled(_ since: Date = Date()) -> DictationSample {
             lock.withLock {
+                times.append(since)
                 if let to = switchTo { (front, switchTo) = (to, nil) }
                 if revoke { (revoked, revoke) = (true, false) }
                 return now
@@ -165,7 +169,7 @@ final class DictationFlowTests: XCTestCase {
 
     private func dictation() throws -> Dictation {
         let (tidy, place, focusRead) = (self.tidy, self.place, self.focusRead)
-        let parts = DictationParts(listener: listener, panel: panel, front: { place.app }, sample: { _ in place.sampled() },
+        let parts = DictationParts(listener: listener, panel: panel, front: { place.app }, sample: { _, since in place.sampled(since) },
                                    tidy: { await tidy.propose($0) },
                                    type: { [unowned self] text, _, check, proceed, done in
                                        check { allowed in
@@ -417,6 +421,22 @@ final class DictationFlowTests: XCTestCase {
         XCTAssertEqual(typed, [])
         XCTAssertEqual(spans.verdict(at: Date().addingTimeInterval(-0.3), seconds: 0.3, now: Date()), .keep,
                        "speech around a tap of the key was dropped as dictated")
+    }
+
+    func testTheFieldsAtKeyDownAndReleaseAreTimedFromTheKeyEventsNotFromWhenTheyreRead() async throws {
+        let dictation = try dictation()
+        let beforeDown = Date()
+        dictation.press(keyCode: 63, flags: fn, at: 0)
+        let afterDown = Date()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let beforeUp = Date()
+        dictation.press(keyCode: 63, flags: 0, at: 2)
+        let afterUp = Date()
+        await until { !typed.isEmpty }
+        let since = place.since
+        XCTAssertGreaterThanOrEqual(since.count, 2)
+        XCTAssertTrue((beforeDown...afterDown).contains(since[0]), "the key-down sample wasn't timed from key-down")
+        XCTAssertTrue((beforeUp...afterUp).contains(since[1]), "the release sample wasn't timed from the release")
     }
 
     func testAnotherAppComingToTheFrontWhileTheFieldIsCheckedTypesNothing() async throws {

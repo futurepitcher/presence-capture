@@ -36,15 +36,15 @@ struct DictationSample: Equatable, @unchecked Sendable {
 /// Where typing would go (R2b), through Accessibility. Each question to an app waits at most
 /// `timeout`, and it's asked off the main thread: an app that doesn't answer never holds up the key,
 /// a lock or Pause. A sample is consistent or it's unknown: the front window is read before and after
-/// the focused element, the element must be in it, and all of it within `consistentWithin`; anything
-/// else is unknown (no element, security unknown, no window title), and unknown is never typed into
-/// or kept.
+/// the focused element, the element must be in it, and all of it must be done within
+/// `consistentWithin` of the moment it's for (the key event), however late it started; anything else
+/// is unknown (no element, security unknown, no window title), and unknown is never typed into or
+/// kept.
 enum Focus {
     static let timeout: Float = 0.25
     static let consistentWithin: TimeInterval = 0.5
 
-    static func sample(_ app: FrontApp?) -> DictationSample {
-        let started = Date()
+    static func sample(_ app: FrontApp?, since started: Date = Date()) -> DictationSample {
         let unknown = DictationSample(focus: DictationFocus(app: app?.bundle ?? "", element: nil, security: .unknown), app: app, window: nil)
         guard let app else { return unknown }
         let owner = AXUIElementCreateApplication(app.pid)

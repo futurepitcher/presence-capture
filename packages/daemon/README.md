@@ -193,11 +193,12 @@ Microphone.
 Retention erases what's older than 14 days unless Keep Captures For says
 otherwise, hourly. The log, in `logs/`, holds counts only.
 
-## Dictation
+## Dictation (experimental)
 
 On macOS 26, hold a key and speak, in any app: what you say is typed where the
 cursor is, transcribed on this Mac by the same `Transcriber` ambient audio
-uses. It's off until you turn it on (Dictation in the menu, or the set-up
+uses. It's experimental in 0.1: its limits are in
+[docs/known-limits.md](../../docs/known-limits.md#dictation). It's off until you turn it on (Dictation in the menu, or the set-up
 window), which asks for its permissions then: the microphone, Input Monitoring
 for the key, and Accessibility to type.
 
