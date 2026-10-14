@@ -1,0 +1,814 @@
+{
+ "_": "Three hand-written days for the recall eval (pcap-eval): a day of code, a day of calls, a day of reading and messaging. Every capture names its id, and every question the ids that answer it, each on its own: a capture that only mentions the subject (a roadmap listing the Windows port) or only part of the answer (the CSV export, without its date) is not one. Half the questions use the captures' own words (keyword), half ask in other words (paraphrase), which only search by meaning can answer. Synthetic: every person, company and number is made up.",
+ "captures": [
+  {
+   "id": "d1_activity_cursor",
+   "at": "2026-09-14T09:00:00.000Z",
+   "type": "activity",
+   "app": "com.todesktop.cursor",
+   "text": "{\"app\": \"Cursor\", \"window\": \"store.js \\u2014 presence-capture\", \"state\": \"active\"}"
+  },
+  {
+   "id": "d1_code_revoke",
+   "at": "2026-09-14T09:02:00.000Z",
+   "type": "screen_text",
+   "app": "com.todesktop.cursor",
+   "text": "function revoke({ scopeKind, scopeValue, reason }) { const revocationId = `rev_${randomUUID()}`; const affected = immediate(() => resolveScope(...)) }"
+  },
+  {
+   "id": "d1_said_race",
+   "at": "2026-09-14T09:10:00.000Z",
+   "type": "audio_transcript",
+   "app": "input",
+   "text": "I think the race is in resolve: we read the scope before we take the lock, so a capture committed in between slips through"
+  },
+  {
+   "id": "d1_sqlite_docs",
+   "at": "2026-09-14T09:20:00.000Z",
+   "type": "screen_text",
+   "app": "com.apple.Safari",
+   "text": "SQLite Transaction: BEGIN IMMEDIATE starts a write transaction immediately, acquiring the RESERVED lock, so no other connection can write until it commits"
+  },
+  {
+   "id": "d1_slack_priya",
+   "at": "2026-09-14T09:45:00.000Z",
+   "type": "screen_text",
+   "app": "com.tinyspeck.slackmacgap",
+   "text": "Priya Shah: can you review the migration for the egress chain before lunch? I added a unique index on prev_hash"
+  },
+  {
+   "id": "d1_terminal_tests",
+   "at": "2026-09-14T10:30:00.000Z",
+   "type": "screen_text",
+   "app": "com.apple.Terminal",
+   "text": "$ npm test\nℹ tests 183\nℹ pass 183\nℹ fail 0"
+  },
+  {
+   "id": "d1_xcode_error",
+   "at": "2026-09-14T11:05:00.000Z",
+   "type": "screen_text",
+   "app": "com.apple.dt.Xcode",
+   "text": "Build failed: StoreTests.swift:50:72 error: missing argument for parameter 'capturedAt' in call"
+  },
+  {
+   "id": "d1_pr_page",
+   "at": "2026-09-14T11:40:00.000Z",
+   "type": "screen_text",
+   "app": "com.google.Chrome",
+   "text": "Pull request #14: R0 — revocation holds with several writers. 8 checks passed. Merge pull request"
+  },
+  {
+   "id": "d1_notes_todo",
+   "at": "2026-09-14T13:15:00.000Z",
+   "type": "screen_text",
+   "app": "com.apple.Notes",
+   "text": "todo: fix the keychain prompt loop; ask Sam about notarization credentials; write the threat model"
+  },
+  {
+   "id": "d1_calendar_review",
+   "at": "2026-09-14T14:00:00.000Z",
+   "type": "screen_text",
+   "app": "com.apple.iCal",
+   "text": "Thursday 3:00 PM — Design review with Marco Rossi, Room 4B: onboarding and the agents read window"
+  },
+  {
+   "id": "d1_mail_sam",
+   "at": "2026-09-14T15:30:00.000Z",
+   "type": "screen_text",
+   "app": "com.apple.mail",
+   "text": "From: Sam Okafor — Subject: Apple Developer ID renewal due October 30. The signing certificate expires then; renew it before the release"
+  },
+  {
+   "id": "d1_podcast",
+   "at": "2026-09-14T17:10:00.000Z",
+   "type": "audio_transcript",
+   "app": "output",
+   "text": "and that is how the transistor replaced the vacuum tube, shrinking computers from rooms to desktops"
+  },
+  {
+   "id": "d2_activity_zoom",
+   "at": "2026-09-15T10:00:00.000Z",
+   "type": "activity",
+   "app": "us.zoom.xos",
+   "text": "{\"app\": \"zoom.us\", \"window\": \"Zoom Meeting\", \"state\": \"active\"}"
+  },
+  {
+   "id": "d2_said_dana",
+   "at": "2026-09-15T10:01:00.000Z",
+   "type": "audio_transcript",
+   "app": "output",
+   "text": "Dana: the pilot customer wants the export feature by the end of the month, they need their data out for the audit"
+  },
+  {
+   "id": "d2_said_csv",
+   "at": "2026-09-15T10:02:30.000Z",
+   "type": "audio_transcript",
+   "app": "input",
+   "text": "we can commit to a CSV export first, and the full API after that"
+  },
+  {
+   "id": "d2_said_marco",
+   "at": "2026-09-15T10:05:00.000Z",
+   "type": "audio_transcript",
+   "app": "output",
+   "text": "Marco: the budget for the contractor is twelve thousand dollars, and it has to cover the design work too"
+  },
+  {
+   "id": "d2_zoom_chat",
+   "at": "2026-09-15T10:06:00.000Z",
+   "type": "screen_text",
+   "app": "us.zoom.xos",
+   "text": "Zoom chat — Dana Lee: here's the link to the roadmap doc https://docs.example.com/roadmap-q4"
+  },
+  {
+   "id": "d2_roadmap_doc",
+   "at": "2026-09-15T10:15:00.000Z",
+   "type": "screen_text",
+   "app": "com.google.Chrome",
+   "text": "Roadmap Q4: dictation in 0.1, the recall eval, signed releases; the Windows port; the paid support tier"
+  },
+  {
+   "id": "d2_said_windows",
+   "at": "2026-09-15T10:20:00.000Z",
+   "type": "audio_transcript",
+   "app": "input",
+   "text": "let's move the Windows port to next year, there's no way we get it done this quarter"
+  },
+  {
+   "id": "d2_notes_call",
+   "at": "2026-09-15T10:45:00.000Z",
+   "type": "screen_text",
+   "app": "com.apple.Notes",
+   "text": "call notes: Dana — export by Sep 30; Marco — contractor budget 12k incl. design; Windows → 2027"
+  },
+  {
+   "id": "d2_messages_mom",
+   "at": "2026-09-15T12:30:00.000Z",
+   "type": "screen_text",
+   "app": "com.apple.MobileSMS",
+   "text": "Mom: Dinner on Sunday at 6? Bring the lasagna recipe, your aunt is coming too"
+  },
+  {
+   "id": "d2_said_standup",
+   "at": "2026-09-15T15:00:00.000Z",
+   "type": "audio_transcript",
+   "app": "output",
+   "text": "standup: Priya finished the onboarding screens yesterday, and the copy for each permission is in review"
+  },
+  {
+   "id": "d2_linear_ticket",
+   "at": "2026-09-15T15:20:00.000Z",
+   "type": "screen_text",
+   "app": "com.linear",
+   "text": "ENG-212 Onboarding window: permissions copy for microphone, screen recording and accessibility — In Review"
+  },
+  {
+   "id": "d2_figma",
+   "at": "2026-09-15T16:05:00.000Z",
+   "type": "screen_text",
+   "app": "com.figma.Desktop",
+   "text": "Onboarding v3 — microphone step: Hold Fn to dictate. Turn on to let Presence Capture hear the room"
+  },
+  {
+   "id": "d3_article_wal",
+   "at": "2026-09-16T08:40:00.000Z",
+   "type": "screen_text",
+   "app": "com.apple.Safari",
+   "text": "How SQLite WAL mode works: a checkpoint copies frames back to the database, but a reader holding an old snapshot stops the log from being reset"
+  },
+  {
+   "id": "d3_article_rrf",
+   "at": "2026-09-16T09:10:00.000Z",
+   "type": "screen_text",
+   "app": "com.apple.Safari",
+   "text": "Reciprocal Rank Fusion outperforms Condorcet and individual rank learning methods: combine ranked lists by summing 1/(k + rank)"
+  },
+  {
+   "id": "d3_messages_alex",
+   "at": "2026-09-16T10:00:00.000Z",
+   "type": "screen_text",
+   "app": "com.apple.MobileSMS",
+   "text": "Alex: are we still on for climbing Saturday morning? The gym opens at 8"
+  },
+  {
+   "id": "d3_slack_general",
+   "at": "2026-09-16T10:30:00.000Z",
+   "type": "screen_text",
+   "app": "com.tinyspeck.slackmacgap",
+   "text": "#general — Office closed Friday for the holiday. Enjoy the long weekend!"
+  },
+  {
+   "id": "d3_amazon",
+   "at": "2026-09-16T11:15:00.000Z",
+   "type": "screen_text",
+   "app": "com.google.Chrome",
+   "text": "Order placed: noise cancelling headphones, arriving Thursday. Order #114-2232"
+  },
+  {
+   "id": "d3_x_post",
+   "at": "2026-09-16T12:00:00.000Z",
+   "type": "screen_text",
+   "app": "com.google.Chrome",
+   "text": "Apple announces new on-device foundation models for developers at WWDC, running entirely on the Mac"
+  },
+  {
+   "id": "d3_kindle",
+   "at": "2026-09-16T13:30:00.000Z",
+   "type": "screen_text",
+   "app": "com.amazon.Kindle",
+   "text": "Thinking, Fast and Slow — Chapter 3: The Lazy Controller. System 2 is lazy, and self-control takes effort"
+  },
+  {
+   "id": "d3_said_passport",
+   "at": "2026-09-16T14:00:00.000Z",
+   "type": "audio_transcript",
+   "app": "input",
+   "text": "remind me to renew the passport before the trip to Lisbon in November"
+  },
+  {
+   "id": "d3_booking",
+   "at": "2026-09-16T14:10:00.000Z",
+   "type": "screen_text",
+   "app": "com.google.Chrome",
+   "text": "Lisbon — Hotel Avenida, Nov 12–16, 4 nights. Confirmation number 88213"
+  },
+  {
+   "id": "d3_mail_bill",
+   "at": "2026-09-16T15:00:00.000Z",
+   "type": "screen_text",
+   "app": "com.apple.mail",
+   "text": "Your electricity bill for August is $84.20, due on September 25"
+  },
+  {
+   "id": "d3_notes_gifts",
+   "at": "2026-09-16T16:20:00.000Z",
+   "type": "screen_text",
+   "app": "com.apple.Notes",
+   "text": "Gift ideas: Mom — an Italian cookbook; Alex — a chalk bag; Sam — good coffee beans"
+  },
+  {
+   "id": "d3_hn",
+   "at": "2026-09-16T17:45:00.000Z",
+   "type": "screen_text",
+   "app": "com.google.Chrome",
+   "text": "Show HN: Presence Capture, an open capture substrate whose forgetting you can prove"
+  }
+ ],
+ "questions": [
+  {
+   "id": "q01",
+   "kind": "keyword",
+   "ask": {
+    "tool": "search",
+    "query": "egress chain migration review"
+   },
+   "expect": [
+    "d1_slack_priya"
+   ]
+  },
+  {
+   "id": "q02",
+   "kind": "keyword",
+   "ask": {
+    "tool": "search",
+    "query": "BEGIN IMMEDIATE"
+   },
+   "expect": [
+    "d1_sqlite_docs"
+   ]
+  },
+  {
+   "id": "q03",
+   "kind": "keyword",
+   "ask": {
+    "tool": "search",
+    "query": "Developer ID renewal"
+   },
+   "expect": [
+    "d1_mail_sam"
+   ]
+  },
+  {
+   "id": "q04",
+   "kind": "keyword",
+   "ask": {
+    "tool": "search",
+    "query": "design review Marco"
+   },
+   "expect": [
+    "d1_calendar_review"
+   ]
+  },
+  {
+   "id": "q05",
+   "kind": "keyword",
+   "ask": {
+    "tool": "search",
+    "query": "missing argument capturedAt"
+   },
+   "expect": [
+    "d1_xcode_error"
+   ]
+  },
+  {
+   "id": "q06",
+   "kind": "keyword",
+   "ask": {
+    "tool": "search",
+    "query": "export feature end of the month"
+   },
+   "expect": [
+    "d2_said_dana"
+   ]
+  },
+  {
+   "id": "q07",
+   "kind": "keyword",
+   "ask": {
+    "tool": "search",
+    "query": "contractor budget"
+   },
+   "expect": [
+    "d2_said_marco",
+    "d2_notes_call"
+   ]
+  },
+  {
+   "id": "q08",
+   "kind": "keyword",
+   "ask": {
+    "tool": "search",
+    "query": "Windows port"
+   },
+   "expect": [
+    "d2_said_windows",
+    "d2_notes_call"
+   ]
+  },
+  {
+   "id": "q09",
+   "kind": "keyword",
+   "ask": {
+    "tool": "search",
+    "query": "lasagna"
+   },
+   "expect": [
+    "d2_messages_mom"
+   ]
+  },
+  {
+   "id": "q10",
+   "kind": "keyword",
+   "ask": {
+    "tool": "search",
+    "query": "onboarding permissions copy"
+   },
+   "expect": [
+    "d2_linear_ticket"
+   ]
+  },
+  {
+   "id": "q11",
+   "kind": "keyword",
+   "ask": {
+    "tool": "search",
+    "query": "WAL checkpoint"
+   },
+   "expect": [
+    "d3_article_wal"
+   ]
+  },
+  {
+   "id": "q12",
+   "kind": "keyword",
+   "ask": {
+    "tool": "search",
+    "query": "climbing Saturday"
+   },
+   "expect": [
+    "d3_messages_alex"
+   ]
+  },
+  {
+   "id": "q13",
+   "kind": "keyword",
+   "ask": {
+    "tool": "search",
+    "query": "office closed Friday"
+   },
+   "expect": [
+    "d3_slack_general"
+   ]
+  },
+  {
+   "id": "q14",
+   "kind": "keyword",
+   "ask": {
+    "tool": "search",
+    "query": "headphones order"
+   },
+   "expect": [
+    "d3_amazon"
+   ]
+  },
+  {
+   "id": "q15",
+   "kind": "keyword",
+   "ask": {
+    "tool": "search",
+    "query": "renew passport"
+   },
+   "expect": [
+    "d3_said_passport"
+   ]
+  },
+  {
+   "id": "q16",
+   "kind": "keyword",
+   "ask": {
+    "tool": "search",
+    "query": "Hotel Avenida confirmation"
+   },
+   "expect": [
+    "d3_booking"
+   ]
+  },
+  {
+   "id": "q17",
+   "kind": "keyword",
+   "ask": {
+    "tool": "search",
+    "query": "electricity bill"
+   },
+   "expect": [
+    "d3_mail_bill"
+   ]
+  },
+  {
+   "id": "q18",
+   "kind": "keyword",
+   "ask": {
+    "tool": "search",
+    "query": "gift ideas"
+   },
+   "expect": [
+    "d3_notes_gifts"
+   ]
+  },
+  {
+   "id": "q19",
+   "kind": "keyword",
+   "ask": {
+    "tool": "search",
+    "query": "Show HN open capture substrate"
+   },
+   "expect": [
+    "d3_hn"
+   ]
+  },
+  {
+   "id": "q20",
+   "kind": "keyword",
+   "ask": {
+    "tool": "search",
+    "query": "lazy controller"
+   },
+   "expect": [
+    "d3_kindle"
+   ]
+  },
+  {
+   "id": "q21",
+   "kind": "keyword",
+   "ask": {
+    "tool": "search",
+    "query": "reciprocal rank fusion"
+   },
+   "expect": [
+    "d3_article_rrf"
+   ]
+  },
+  {
+   "id": "q22",
+   "kind": "keyword",
+   "ask": {
+    "tool": "search",
+    "query": "npm test pass"
+   },
+   "expect": [
+    "d1_terminal_tests"
+   ]
+  },
+  {
+   "id": "q23",
+   "kind": "keyword",
+   "ask": {
+    "tool": "search",
+    "query": "revocation holds several writers pull request"
+   },
+   "expect": [
+    "d1_pr_page"
+   ]
+  },
+  {
+   "id": "q24",
+   "kind": "keyword",
+   "ask": {
+    "tool": "search",
+    "query": "transistor"
+   },
+   "expect": [
+    "d1_podcast"
+   ]
+  },
+  {
+   "id": "q25",
+   "kind": "keyword",
+   "ask": {
+    "tool": "search",
+    "query": "CSV export"
+   },
+   "expect": [
+    "d2_said_csv"
+   ]
+  },
+  {
+   "id": "q26",
+   "kind": "paraphrase",
+   "ask": {
+    "tool": "search",
+    "query": "when does the client need their data download"
+   },
+   "expect": [
+    "d2_said_dana",
+    "d2_notes_call"
+   ]
+  },
+  {
+   "id": "q27",
+   "kind": "paraphrase",
+   "ask": {
+    "tool": "search",
+    "query": "how much money do we have for the freelancer"
+   },
+   "expect": [
+    "d2_said_marco",
+    "d2_notes_call"
+   ]
+  },
+  {
+   "id": "q28",
+   "kind": "paraphrase",
+   "ask": {
+    "tool": "search",
+    "query": "which platform did we postpone"
+   },
+   "expect": [
+    "d2_said_windows",
+    "d2_notes_call"
+   ]
+  },
+  {
+   "id": "q29",
+   "kind": "paraphrase",
+   "ask": {
+    "tool": "search",
+    "query": "family dinner this weekend"
+   },
+   "expect": [
+    "d2_messages_mom"
+   ]
+  },
+  {
+   "id": "q30",
+   "kind": "paraphrase",
+   "ask": {
+    "tool": "search",
+    "query": "who finished the welcome screens"
+   },
+   "expect": [
+    "d2_said_standup"
+   ]
+  },
+  {
+   "id": "q31",
+   "kind": "paraphrase",
+   "ask": {
+    "tool": "search",
+    "query": "what am I getting my mother as a present"
+   },
+   "expect": [
+    "d3_notes_gifts"
+   ]
+  },
+  {
+   "id": "q32",
+   "kind": "paraphrase",
+   "ask": {
+    "tool": "search",
+    "query": "where am I staying in Portugal"
+   },
+   "expect": [
+    "d3_booking"
+   ]
+  },
+  {
+   "id": "q33",
+   "kind": "paraphrase",
+   "ask": {
+    "tool": "search",
+    "query": "how much was the power bill"
+   },
+   "expect": [
+    "d3_mail_bill"
+   ]
+  },
+  {
+   "id": "q34",
+   "kind": "paraphrase",
+   "ask": {
+    "tool": "search",
+    "query": "bouldering plans with Alex"
+   },
+   "expect": [
+    "d3_messages_alex"
+   ]
+  },
+  {
+   "id": "q35",
+   "kind": "paraphrase",
+   "ask": {
+    "tool": "search",
+    "query": "is the office open at the end of the week"
+   },
+   "expect": [
+    "d3_slack_general"
+   ]
+  },
+  {
+   "id": "q36",
+   "kind": "paraphrase",
+   "ask": {
+    "tool": "search",
+    "query": "when do my new earbuds arrive"
+   },
+   "expect": [
+    "d3_amazon"
+   ]
+  },
+  {
+   "id": "q37",
+   "kind": "paraphrase",
+   "ask": {
+    "tool": "search",
+    "query": "the bug where we read before locking"
+   },
+   "expect": [
+    "d1_said_race"
+   ]
+  },
+  {
+   "id": "q38",
+   "kind": "paraphrase",
+   "ask": {
+    "tool": "search",
+    "query": "what did the build complain about"
+   },
+   "expect": [
+    "d1_xcode_error"
+   ]
+  },
+  {
+   "id": "q39",
+   "kind": "paraphrase",
+   "ask": {
+    "tool": "search",
+    "query": "documents I need before travelling abroad"
+   },
+   "expect": [
+    "d3_said_passport"
+   ]
+  },
+  {
+   "id": "q40",
+   "kind": "paraphrase",
+   "ask": {
+    "tool": "search",
+    "query": "the psychology book I'm reading"
+   },
+   "expect": [
+    "d3_kindle"
+   ]
+  },
+  {
+   "id": "q41",
+   "kind": "paraphrase",
+   "ask": {
+    "tool": "search",
+    "query": "who should look at the database change"
+   },
+   "expect": [
+    "d1_slack_priya"
+   ]
+  },
+  {
+   "id": "q42",
+   "kind": "paraphrase",
+   "ask": {
+    "tool": "search",
+    "query": "when does the signing certificate expire"
+   },
+   "expect": [
+    "d1_mail_sam"
+   ]
+  },
+  {
+   "id": "q43",
+   "kind": "paraphrase",
+   "ask": {
+    "tool": "search",
+    "query": "meeting about the design later this week"
+   },
+   "expect": [
+    "d1_calendar_review"
+   ]
+  },
+  {
+   "id": "q44",
+   "kind": "paraphrase",
+   "ask": {
+    "tool": "search",
+    "query": "how do you combine several ranked lists"
+   },
+   "expect": [
+    "d3_article_rrf"
+   ]
+  },
+  {
+   "id": "q45",
+   "kind": "paraphrase",
+   "ask": {
+    "tool": "search",
+    "query": "the plan for next quarter"
+   },
+   "expect": [
+    "d2_roadmap_doc"
+   ]
+  },
+  {
+   "id": "q46",
+   "kind": "paraphrase",
+   "ask": {
+    "tool": "search",
+    "query": "why can't the database log be cleaned up"
+   },
+   "expect": [
+    "d3_article_wal"
+   ]
+  },
+  {
+   "id": "q47",
+   "kind": "paraphrase",
+   "ask": {
+    "tool": "search",
+    "query": "the post about our open source launch"
+   },
+   "expect": [
+    "d3_hn"
+   ]
+  },
+  {
+   "id": "q48",
+   "kind": "paraphrase",
+   "ask": {
+    "tool": "search",
+    "query": "what's still left to do on the keychain"
+   },
+   "expect": [
+    "d1_notes_todo"
+   ]
+  },
+  {
+   "id": "q49",
+   "kind": "paraphrase",
+   "ask": {
+    "tool": "search",
+    "query": "news about Apple's AI models"
+   },
+   "expect": [
+    "d3_x_post"
+   ]
+  },
+  {
+   "id": "q50",
+   "kind": "paraphrase",
+   "ask": {
+    "tool": "search",
+    "query": "did all the tests succeed"
+   },
+   "expect": [
+    "d1_terminal_tests"
+   ]
+  }
+ ]
+}
