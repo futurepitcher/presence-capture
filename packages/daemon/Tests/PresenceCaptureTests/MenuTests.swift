@@ -65,6 +65,14 @@ final class MenuTests: XCTestCase {
         XCTAssertEqual(days.map(\.day), ["2026-10-14", "2026-10-13"])
         XCTAssertEqual(days[0].lines.map(\.clientId), ["a", "b"])
         XCTAssertEqual(AgentsReadView.name("claude-code"), "Claude Code")
+
+        // Many withdrawn grants never hide an older one still active.
+        let old = grant("cursor", expires: 86_400)
+        let withdrawn = (0..<50).map { grant("claude-code-\($0)", expires: 86_400, revoked: true) }
+        let (active, history) = AgentsReadView.split(withdrawn + [old], now: now)
+        XCTAssertEqual(active.map(\.grantId), [old.grantId])
+        XCTAssertEqual(history.count, 50)
+        XCTAssertEqual(AgentsReadView.short("grn_1234567890abcdef"), "grn_12345678")
         XCTAssertEqual(AgentsReadView.name("my-agent"), "my-agent")
     }
 
@@ -81,8 +89,9 @@ final class MenuTests: XCTestCase {
                      line("2026-10-13", "claude-code", "now", rows: 4, types: ["activity": 2, "screen_text": 2])])
         let views: [(String, AnyView)] = [
             ("agents-read", AnyView(AgentsReadView(load: { snapshot }, revoke: { _ in }).frame(width: 600, height: 460))),
-            // Drawn on its own: an offscreen drawing leaves a ScrollView's content out.
+            // Drawn on their own: an offscreen drawing leaves a ScrollView's content out.
             ("agents-read-list", AnyView(AgentsReadView.ReadsList(egress: snapshot.egress).padding(20).frame(width: 600))),
+            ("agents-read-grants", AnyView(AgentsReadView.GrantsList(grants: snapshot.grants, withdraw: { _ in }).padding(20).frame(width: 600))),
             ("onboarding", AnyView(OnboardingView(permissions: { Permissions(screen: true, microphone: false, accessibility: false) }, canHear: true, hearing: { false },
                                                   allowScreen: {}, allowMicrophone: {}, allowAccessibility: {}, connect: { _ in }, done: {}))),
         ]
