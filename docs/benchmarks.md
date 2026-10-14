@@ -4,7 +4,7 @@ Numbers anyone can reproduce, with the commands that produce them.
 
 ## Recall (the eval)
 
-[`eval/`](../eval/README.md), run on 2026-10-14 against `pcap-mcp` built in
+[`eval/`](https://github.com/futurepitcher/presence-capture/blob/main/eval/README.md), run on 2026-10-14 against `pcap-mcp` built in
 release, on an Apple Silicon Mac:
 
 ```sh
@@ -19,7 +19,7 @@ npm run eval -- --days 30 --server "$(swift build -c release --package-path pack
 | 25 paraphrased questions | 40% | 60% | 0.49 |
 
 Each tool is timed twice: on a quiet store, and again while
-[`eval/writer.js`](../eval/writer.js) appends twelve captures a second beside
+[`eval/writer.js`](https://github.com/futurepitcher/presence-capture/blob/main/eval/writer.js) appends twelve captures a second beside
 the server, with every call a quarter second after the last, so each one has
 a new batch to index and can meet a write. (The daemon samples every five
 seconds.) The gate is on the second.
@@ -55,7 +55,7 @@ has to beat 40/50 on this eval before it ships.
 Forget, on a real Mac with the app capturing, checked the way someone holding
 a copy of the store would check it: by looking for the exact sealed bytes of
 what was forgotten in every file under the store's folder.
-[`scripts/live-forget-check.mjs`](../scripts/live-forget-check.mjs) walks you
+[`scripts/live-forget-check.mjs`](https://github.com/futurepitcher/presence-capture/blob/main/scripts/live-forget-check.mjs) walks you
 through it, with the app running and capturing for 20 minutes or more, and Hear
 the Microphone on:
 
@@ -96,7 +96,7 @@ It exits 0 on PASS, 1 on any failed check, 2 if it can't run, and 3 if it's
 incomplete: the words were seen but never heard. It revokes its own grant
 however it ends, Ctrl-C included, and checks that it did. The artifact scan is
 the conformance suite's
-([`inspect.js`](../packages/schema/conformance/store/inspect.js)).
+([`inspect.js`](https://github.com/futurepitcher/presence-capture/blob/main/packages/schema/conformance/store/inspect.js)).
 
 ## Still to measure
 

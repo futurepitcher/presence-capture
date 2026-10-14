@@ -2,7 +2,7 @@
 
 **Version:** 0.1.0-draft
 **Status:** Normative for v0.1. Shape may change until 1.0.0.
-**Reference implementation:** [`packages/schema`](../../packages/schema)
+**Reference implementation:** [`packages/schema`](https://github.com/futurepitcher/presence-capture/tree/main/packages/schema)
 
 ## Stability statement
 
@@ -11,7 +11,7 @@ While this document is at `0.x`, any part may change without a migration path.
 revocation semantics; everything else remains advisory.
 
 **Conformance is defined by the suite in
-[`packages/schema/conformance`](../../packages/schema/conformance), not by this
+[`packages/schema/conformance`](https://github.com/futurepitcher/presence-capture/tree/main/packages/schema/conformance), not by this
 prose.** Where the two disagree, the suite is correct and this document is a bug.
 
 Keywords MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
@@ -286,7 +286,7 @@ one implementation verifies in any other.
   payloads under a short retention of its own, sealed and erased like any
   other payload. Default budget: under 1 GB a month. Retention is R12.
 - **Vector store.** The interface is defined in
-  [`src/vector-store.js`](../../packages/schema/src/vector-store.js);
+  [`src/vector-store.js`](https://github.com/futurepitcher/presence-capture/blob/main/packages/schema/src/vector-store.js);
   **LanceDB** is the shipped default, chosen for being Rust-native over Apache
   Arrow and embeddable without a server process. A backend MAY be substituted,
   but R3 is mandatory regardless — run `conformance/vector-store.test.js`
@@ -295,7 +295,7 @@ one implementation verifies in any other.
   than extracting from every frame, and higher fidelity where available.
 - **Audio and transcription.** Transcription is in scope and runs on-device. A
   default ASR MUST be redistributable without a gate or a revenue limit — see
-  the [daemon licensing table](../../packages/daemon/README.md). On macOS the
+  the [daemon licensing table](https://github.com/futurepitcher/presence-capture/blob/main/packages/daemon/README.md). On macOS the
   default is the OS's own recogniser
   ([ADR 0004](../adr/0004-apple-on-device-models.md)). Diarization is
   opt-in, never a default dependency, because the available models are gated
@@ -304,7 +304,7 @@ one implementation verifies in any other.
 ## Conformance
 
 An implementation is conformant when it passes the **store layer** of
-[`packages/schema/conformance`](../../packages/schema/conformance), driven
+[`packages/schema/conformance`](https://github.com/futurepitcher/presence-capture/tree/main/packages/schema/conformance), driven
 through the [driver protocol](DRIVER.md). That layer writes through your
 implementation and then reads your store's files directly, so it holds any
 language to the same bytes. The suite requires Node ≥ 22.13 and has **no

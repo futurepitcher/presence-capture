@@ -129,6 +129,21 @@ test('T3: the grant caps rows even when the tool call asks for more', () => with
   },
 ));
 
+test('recall: a time is a date and a time to the second, with a zone; anything else is refused', () => withServer({
+  seed: [['standard', 'at nine', { capturedAt: '2026-10-14T09:00:00.000Z' }]],
+}, async ({ rpc }) => {
+  const refused = (response) => Boolean(response.error || response.result?.isError);
+  for (const from of ['2026-10-14', '2026-10-14T08:59:00', '2026-10-14 08:59:00Z', '2026-10-14t08:59:00Z', '2026-10-14T08:59Z',
+    '2026-10-14T01:59:00-07', '2026-10-14T08:59:00GMT', 'yesterday', '1728896340']) {
+    assert.ok(refused(await call(rpc, 'timeline', { from, to: '2026-10-14T10:00:00Z' })), `from ${JSON.stringify(from)} was taken`);
+  }
+  for (const from of ['2026-10-14T08:59:00Z', '2026-10-14T08:59:00z', '2026-10-14T08:59:00.500Z', '2026-10-14T01:59:00-07:00', '2026-10-14T01:59:00-0700']) {
+    const response = await call(rpc, 'timeline', { from, to: '2026-10-14T10:00:00Z' });
+    assert.ok(!refused(response), `from ${JSON.stringify(from)} was refused`);
+    assert.deepEqual(ids(envelopesFrom(response)), ['at nine'], `from ${JSON.stringify(from)}`);
+  }
+}));
+
 test('T3: a malformed limit never lifts the grant cap', () => withServer(
   { grant: { maxRowsPerQuery: 1, privacyLevels: ['standard', 'sensitive'] } },
   async ({ rpc }) => {

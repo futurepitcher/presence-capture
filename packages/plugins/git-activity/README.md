@@ -15,7 +15,7 @@ message is replaced before anything is written) and sealing. Its captures are
 ```sh
 node sensor.mjs --once ~/code/my-repo                 # the last day's commits, then exit
 node sensor.mjs --every 30 ~/code/a ~/code/b          # watch
-node ../../schema/bin/sensor-kit.js -- node sensor.mjs --once ~/code/my-repo   # check it
+node ../../schema/bin/sensor-kit.js -- node "$PWD/sensor.mjs" --once ~/code/my-repo   # check it (an absolute path: sensors start in /)
 ```
 
 On macOS, list it in `~/Library/Application Support/Presence Capture/sensors.json`.

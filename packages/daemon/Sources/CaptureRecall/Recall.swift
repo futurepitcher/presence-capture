@@ -212,9 +212,16 @@ public final class Recall {
     }
 
     /// A time argument, as the store writes times; nil when it's not given.
+    /// A date and a time to the second (a fraction allowed), with a zone: Z, or an offset of hours and
+    /// minutes. The same pattern the reference server checks (packages/mcp/src/recall.js): the
+    /// formatter alone would take more (an offset of hours alone, "GMT").
+    private static let isoTime = try! NSRegularExpression(pattern: #"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:?\d{2})$"#)
+
     private func time(_ args: [String: Any], _ name: String) throws -> String? {
         guard let value = args[name], !(value is NSNull) else { return nil }
-        guard let text = value as? String, let date = CaptureStore.date(text) else { throw ToolError.invalid("\(name) must be an ISO 8601 time") }
+        guard let text = value as? String,
+              Self.isoTime.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil,
+              let date = CaptureStore.date(text) else { throw ToolError.invalid("\(name) must be an ISO 8601 time") }
         return CaptureStore.iso(date)
     }
 

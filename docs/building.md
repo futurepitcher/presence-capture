@@ -44,10 +44,10 @@ npm ci && npm test                       # the reference and both conformance su
 ## A release
 
 Releases are made only by
-[`release.yml`](../.github/workflows/release.yml), from a `v*` tag, on a
+[`release.yml`](https://github.com/futurepitcher/presence-capture/blob/main/.github/workflows/release.yml), from a `v*` tag, on a
 GitHub-hosted runner, in the protected `release` environment. That
 environment holds the Apple credentials and asks the maintainer to approve
-each run. [`release.sh`](../packages/daemon/release.sh) does the work:
+each run. [`release.sh`](https://github.com/futurepitcher/presence-capture/blob/main/packages/daemon/release.sh) does the work:
 1. builds the app, with `pcap-mcp` and `pcap` inside it;
 2. signs it inside-out with Developer ID and the hardened runtime;
 3. makes the DMG, signs it, notarizes it and staples it;
@@ -60,7 +60,7 @@ with the keychain search list put back as it was.
 no credentials. It's signed ad hoc and not notarized, which makes it a check
 of the packaging, never a release.
 
-The maintainer's steps are in [RELEASING.md](../RELEASING.md).
+The maintainer's steps are in [RELEASING.md](https://github.com/futurepitcher/presence-capture/blob/main/RELEASING.md).
 
 ## Verifiable, not reproducible
 

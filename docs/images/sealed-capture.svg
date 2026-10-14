@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 492" width="760" height="492" role="img" aria-labelledby="sealed-title sealed-desc">
+  <title id="sealed-title">One capture, sealed under its own key</title>
+  <desc id="sealed-desc">The master key, kept in the Keychain, wraps one data key per capture. That data key seals the capture's text, its payload bytes and any output derived from it. All of these are deleted when the capture is revoked. The capture_event row, which holds only metadata, stays.</desc>
+  <style>
+    .t { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2937; font-size: 13px; }
+    .h { font-weight: 600; font-size: 14px; }
+    .big { font-weight: 600; font-size: 17px; }
+    .m { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; font-weight: 600; fill: #1f2937; }
+    .s { fill: #64748b; }
+    .box { stroke-width: 1.5; }
+    .gone { fill: #c2410c; fill-opacity: 0.12; stroke: #c2410c; }
+    .stay { fill: #1d4ed8; fill-opacity: 0.1; stroke: #1d4ed8; }
+    .out { fill: none; stroke: #64748b; stroke-dasharray: 5 4; }
+    .line { fill: none; stroke: #64748b; stroke-width: 1.5; }
+    .arrow { fill: none; stroke: #64748b; stroke-width: 1.5; marker-end: url(#head); }
+  </style>
+  <defs>
+    <marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#64748b"/>
+    </marker>
+  </defs>
+
+  <rect x="0.75" y="0.75" width="758.5" height="490.5" rx="12" fill="#f8fafc" stroke="#64748b" stroke-opacity="0.4"/>
+  <text class="t big" x="24" y="36">One capture, sealed under its own key</text>
+
+  <!-- Keychain -->
+  <rect class="box out" x="24" y="86" width="190" height="136" rx="8"/>
+  <text class="t h" x="40" y="110">Keychain</text>
+  <text class="t s" x="40" y="128">this Mac only, not synced</text>
+  <rect class="box stay" x="40" y="142" width="158" height="56" rx="6"/>
+  <text class="t h" x="119" y="166" text-anchor="middle">master key</text>
+  <text class="t s" x="119" y="186" text-anchor="middle">never in the store</text>
+
+  <!-- wrapped data key -->
+  <rect class="box gone" x="272" y="96" width="190" height="116" rx="8"/>
+  <text class="m" x="288" y="122">capture_key</text>
+  <text class="t" x="288" y="146">data key for this capture,</text>
+  <text class="t" x="288" y="164">wrapped by the master key</text>
+  <text class="t s" x="288" y="190">one key per capture</text>
+
+  <path class="arrow" d="M214 154 L270 154"/>
+  <text class="t s" x="242" y="146" text-anchor="middle">wraps</text>
+
+  <!-- sealed values -->
+  <rect class="box gone" x="534" y="56" width="202" height="64" rx="8"/>
+  <text class="m" x="550" y="80">capture_content</text>
+  <text class="t" x="550" y="102">the text, sealed</text>
+
+  <rect class="box gone" x="534" y="136" width="202" height="64" rx="8"/>
+  <text class="m" x="550" y="160">payload_blob</text>
+  <text class="t" x="550" y="182">bytes, if kept, sealed</text>
+
+  <rect class="box gone" x="534" y="216" width="202" height="64" rx="8"/>
+  <text class="m" x="550" y="240">projection_entry</text>
+  <text class="t" x="550" y="262">derived output, sealed</text>
+
+  <path class="line" d="M462 154 L498 154 M498 88 L498 248"/>
+  <path class="arrow" d="M498 88 L532 88"/>
+  <path class="arrow" d="M498 168 L532 168"/>
+  <path class="arrow" d="M498 248 L532 248"/>
+  <text class="t s" x="480" y="144" text-anchor="middle">seals</text>
+
+  <!-- metadata that stays -->
+  <rect class="box stay" x="24" y="306" width="712" height="84" rx="8"/>
+  <text class="m" x="40" y="332">capture_event</text>
+  <text class="t h" x="168" y="332">stays after Forget: the record that it was captured</text>
+  <text class="t" x="40" y="356">capture_id, captured_at, capture_type, source, source_app, source_url (where known),</text>
+  <text class="t" x="40" y="376">privacy_level, classification, extraction, derived_from, dedupe_key (an HMAC). Append-only. No content.</text>
+
+  <!-- note -->
+  <text class="t s" x="24" y="414">AES-256-GCM. Each sealed value is bound to its capture by authenticated data (AAD),</text>
+  <text class="t s" x="24" y="432">so it cannot be moved to another capture and still open.</text>
+
+  <!-- legend -->
+  <rect class="box gone" x="24" y="456" width="16" height="16" rx="3"/>
+  <text class="t" x="48" y="469">deleted by revocation</text>
+  <rect class="box stay" x="228" y="456" width="16" height="16" rx="3"/>
+  <text class="t" x="252" y="469">kept</text>
+  <rect class="box out" x="318" y="456" width="16" height="16" rx="3"/>
+  <text class="t" x="342" y="469">outside the store</text>
+</svg>

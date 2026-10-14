@@ -1,7 +1,7 @@
 # Verifying a release
 
 Every Presence Capture release is built in GitHub Actions, on a GitHub-hosted
-runner, from a `v*` tag, by [`release.yml`](../.github/workflows/release.yml).
+runner, from a `v*` tag, by [`release.yml`](https://github.com/futurepitcher/presence-capture/blob/main/.github/workflows/release.yml).
 It's signed with Developer ID, notarized by Apple, and attested: GitHub records
 which workflow built the DMG, from which commit and tag. You can check all of
 that before you open it.
