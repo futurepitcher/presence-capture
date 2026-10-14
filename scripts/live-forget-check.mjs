@@ -14,9 +14,10 @@
  *     window to be forgotten, and asks you to put two words on screen and say them aloud. It waits
  *     until both are captured and readable through pcap-mcp: on screen (screen_text) and heard by
  *     the microphone (an audio_transcript from input);
- *  2. snapshots, capture by capture, the sealed bytes (wrapped keys, sealed text and payloads,
+ *  2. asks you to Pause, and waits until nothing new is captured for two of the app's ticks; then
+ *     snapshots, capture by capture, the sealed bytes (wrapped keys, sealed text and payloads,
  *     projection outputs) of everything from the last 20 minutes. These are raw bytes, so no key
- *     is needed;
+ *     is needed. Every capture Forget then revokes must have been snapshotted;
  *  3. pins the store's write-ahead log with a read transaction of its own, and asks you to choose
  *     Forget the Last 15 Minutes… in the menu;
  *  4. while pinned, checks:
@@ -31,7 +32,8 @@
  *     - none of the snapshotted bytes of the captures it revoked is left in any file under the
  *       store's folder (the words' captures must be among them);
  *     - nothing stamped inside the window is stored unrevoked (H2, H6);
- *     - the control capture is still readable.
+ *     - the control capture is still readable;
+ *     and reminds you to Resume.
  *
  * Exits 0 on PASS, 1 on any failed check, 2 if it can't run (or can't revoke its own grant, which
  * it then names), and 3 if it's INCOMPLETE: the words were captured from the screen but never heard
@@ -251,7 +253,21 @@ try {
   }
   const markers = ids(seen);
 
-  // 2. The sealed bytes, capture by capture, of everything from the last 20 minutes: wider than any
+  // 2. Paused, so nothing new is captured between the snapshot and Forget: what Forget revokes must
+  // all have been snapshotted, or it can't be looked for on disk.
+  await ask('Now choose Pause in the Presence Capture menu, so nothing new is captured while the store is checked.');
+  const latest = () => query('SELECT COALESCE(MAX(sequence), 0) AS s FROM capture_event')[0].s;
+  let last = latest();
+  let quietSince = Date.now();
+  for (const started = Date.now(); Date.now() - quietSince < 12_000;) {
+    if (Date.now() - started > 90_000) throw new Error('captures kept arriving for 90 seconds: is Presence Capture paused?');
+    await sleep(1_000);
+    const now = latest();
+    if (now !== last) [last, quietSince] = [now, Date.now()];
+  }
+  ok('paused: nothing new captured for 12 seconds');
+
+  // The sealed bytes, capture by capture, of everything from the last 20 minutes: wider than any
   // 15 minutes Forget can take from here on.
   const snapshotFrom = new Date(Date.now() - 20 * 60_000).toISOString();
   const snapshotted = query('SELECT capture_id FROM capture_event WHERE captured_at >= ? AND capture_id NOT IN (SELECT capture_id FROM revoked_capture)', snapshotFrom)
@@ -320,6 +336,8 @@ try {
   if (completed) ok(`the erasure completed at ${completed}`);
   else fail('the erasure didn\'t complete within 10 seconds');
 
+  const unsnapshotted = [...revoked].filter((id) => !artifacts.has(id));
+  if (unsnapshotted.length > 0) fail(`${unsnapshotted.length} captures it revoked were made after the snapshot, so they can't be looked for on disk (was it paused?): ${unsnapshotted.slice(0, 5).join(', ')}`);
   const secrets = [...revoked].flatMap((id) => artifacts.get(id) ?? []);
   if (secrets.length === 0) fail('none of the captures it revoked had sealed bytes snapshotted: nothing to look for');
   let survivors = 0;
@@ -344,6 +362,7 @@ try {
   const around = ids(await client.call('timeline', { from: new Date(Date.parse(controlRow.captured_at) - 1_000).toISOString(), to: new Date(Date.parse(controlRow.captured_at) + 1_000).toISOString(), limit: 50 }));
   if (around.includes(control)) ok('the control capture is still readable');
   else fail('the control capture is no longer readable');
+  process.stdout.write('\nChoose Resume in the Presence Capture menu to capture again.\n');
 } catch (err) {
   process.stderr.write(`live-forget-check: ${err instanceof Interrupted ? 'interrupted' : err.message}\n`);
   process.exitCode = err instanceof Interrupted ? 130 : 2;
