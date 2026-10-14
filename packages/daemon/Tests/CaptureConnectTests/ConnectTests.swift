@@ -383,6 +383,51 @@ final class ConnectTests: XCTestCase {
         XCTAssertNil(servers?["presence-capture"], "an entry naming a withdrawn grant was left")
     }
 
+    /// A stand-in `claude` whose add writes `written` to the config, then fails.
+    private func claudeWritingThenFailing(_ written: String) throws -> URL {
+        let file = connector().file(for: .claudeCode).path
+        return try claudeRunning("""
+            case "$2" in
+            remove) printf '{"mcpServers": {}}' > '\(file)'; exit 0;;
+            add-json) printf '%s' '\(written)' > '\(file)'; exit 1;;
+            esac
+            """).claude
+    }
+
+    func testAnEntrySomeoneElseWroteMeanwhileIsLeftAlone() throws {
+        let store = try store()
+        // While this connection's add fails, another invocation writes an entry of its own.
+        let claude = try claudeWritingThenFailing(#"{"mcpServers": {"presence-capture": {"command": "/someone-else"}}}"#)
+        _ = try write(#"{"mcpServers": {"presence-capture": {"type": "stdio", "command": "/old", "args": ["--grant", "grn_old"]}}}"#, to: .claudeCode)
+        XCTAssertThrowsError(try connector(claude: claude).connect(.claudeCode, store: store, grant: grant(.claudeCode), entry: entry) { _ in true }) { error in
+            guard case ConnectError.claudeAddFailed(_, _, let restored, let backup) = error else { return XCTFail("\(error)") }
+            XCTAssertFalse(restored)
+            XCTAssertNotNil(backup)
+        }
+        let servers = try XCTUnwrap(try json(connector().file(for: .claudeCode))["mcpServers"] as? [String: Any])
+        XCTAssertEqual((servers["presence-capture"] as? [String: Any])?["command"] as? String, "/someone-else", "someone else's entry was written over")
+    }
+
+    func testAConfigLeftUnreadableIsNotTakenForRestored() throws {
+        let store = try store()
+        let claude = try claudeWritingThenFailing("{ not json")
+        _ = try write(#"{"mcpServers": {}}"#, to: .claudeCode)
+        XCTAssertThrowsError(try connector(claude: claude).connect(.claudeCode, store: store, grant: grant(.claudeCode), entry: entry) { _ in true }) { error in
+            guard case ConnectError.claudeAddFailed(_, _, let restored, let backup) = error else { return XCTFail("\(error)") }
+            XCTAssertFalse(restored, "a config that can't be read was said to be as it was")
+            XCTAssertNotNil(backup)
+        }
+    }
+
+    func testARelativeStoresRevokeCommandNeverTargetsTheAppsStore() throws {
+        let store = try store()
+        _ = try write(#"{"mcpServers": {"presence-capture": {"command": "/x", "args": ["--grant", "grn_old", "--store", "./other.sqlite", "--master-key-file", "k"]}}}"#, to: .cursor)
+        let connection = try XCTUnwrap(try connector().connect(.cursor, store: store, grant: grant(.cursor), entry: entry) { _ in true })
+        let revoke = try XCTUnwrap(connection.stillActive?.revoke)
+        XCTAssertTrue(revoke.contains("--store '<absolute path of ./other.sqlite>'"), revoke)
+        XCTAssertTrue(revoke.contains("--master-key-file '<absolute path of k>'"), revoke)
+    }
+
     func testAWorkerThatIgnoresBeingAskedIsStoppedWhenClaudeTimesOut() throws {
         let marker = "pcap-test-\(UUID().uuidString.prefix(8))"
         // claude exits when asked; what it started ignores being asked, and would go on.

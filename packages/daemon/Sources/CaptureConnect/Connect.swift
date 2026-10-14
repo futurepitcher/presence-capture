@@ -253,7 +253,7 @@ public struct Connector: Sendable {
                 } catch {
                     // Whichever command failed, and whatever it changed before failing, the entry goes
                     // back to what it was.
-                    let restored = restoreClaude(claude, to: plan.before, file: plan.file, remove: remove)
+                    let restored = restoreClaude(claude, to: plan.before, new: Data(add[3].utf8), file: plan.file, remove: remove)
                     let (command, output): (String, String)
                     if case ConnectError.claudeFailed(let c, let o) = error { (command, output) = (c, o) } else {
                         (command, output) = ((["claude"] + add).map(Self.shellQuoted).joined(separator: " "), "\(error)")
@@ -265,20 +265,33 @@ public struct Connector: Sendable {
         }
     }
 
-    /// Claude Code's user-scope entry, as compact JSON; nil when there's none.
-    private func claudeEntry(_ file: URL) -> Data? {
-        guard let root = try? Self.root(try read(file), file),
-              let entry = (root["mcpServers"] as? [String: Any])?[serverName] as? [String: Any] else { return nil }
-        return Data(PrettyJSON.compact(entry).utf8)
+    /// Claude Code's user-scope entry as it reads now.
+    private enum ClaudeEntry: Equatable {
+        case absent
+        case present(Data)
+        /// The config couldn't be read or isn't JSON: what's there can't be known.
+        case unreadable
     }
 
-    /// Puts Claude Code's entry back to `before` (nil: no entry), through its own commands, from
-    /// whatever a failed command left; true when it reads back as it was.
-    private func restoreClaude(_ claude: URL, to before: Data?, file: URL, remove: [String]) -> Bool {
-        if claudeEntry(file) == before { return true }
-        if claudeEntry(file) != nil { _ = try? run(claude, remove) }
+    private func claudeEntry(_ file: URL) -> ClaudeEntry {
+        guard let root = try? Self.root(try read(file), file) else { return .unreadable }
+        guard let entry = (root["mcpServers"] as? [String: Any])?[serverName] as? [String: Any] else { return .absent }
+        return .present(Data(PrettyJSON.compact(entry).utf8))
+    }
+
+    /// Puts Claude Code's entry back to `before` (nil: no entry), through its own commands, from what
+    /// a failed command of this connection left: the old entry removed, or the new one written. True
+    /// when it reads back as it was. Anything else (an entry someone else wrote meanwhile, a config
+    /// that can't be read) is left as it is, and false.
+    private func restoreClaude(_ claude: URL, to before: Data?, new: Data, file: URL, remove: [String]) -> Bool {
+        let wanted: ClaudeEntry = before.map { .present($0) } ?? .absent
+        let ours: [ClaudeEntry] = [.present(new)] + (before == nil ? [] : [.absent])
+        let now = claudeEntry(file)
+        if now == wanted { return true }
+        guard ours.contains(now) else { return false }
+        if case .present = now { _ = try? run(claude, remove) }
         if let before { _ = try? run(claude, ["mcp", "add-json", serverName, String(decoding: before, as: UTF8.self), "--scope", "user"]) }
-        return claudeEntry(file) == before
+        return claudeEntry(file) == wanted
     }
 
     private func copyAside(_ file: URL) throws -> URL? {
@@ -391,12 +404,21 @@ public struct Connector: Sendable {
         return args[index + 1]
     }
 
-    /// The command that revokes the grant an entry's arguments name, in `store`.
-    public func revokeCommand(_ args: [String], store: String?) -> String {
+    /// The command that revokes the grant an entry's arguments name, in `store`. A store or key file
+    /// that can't be resolved from here is a placeholder to fill in, never left out: left out, the
+    /// command would revoke in the app's store, and leave the grant active in its own.
+    public func revokeCommand(_ args: [String], store: String?, unresolvedStore: String? = nil) -> String {
         var words = [pcap, "grant", "revoke", Self.option("--grant", args) ?? "<grant_id>"]
-        if let store { words += ["--store", store] }
-        if let key = Self.option("--master-key-file", args) { words += ["--master-key-file", key] }
+        if let store { words += ["--store", store] } else if let relative = unresolvedStore { words += ["--store", "<absolute path of \(relative)>"] }
+        if let key = Self.option("--master-key-file", args) { words += ["--master-key-file", key.hasPrefix("/") ? key : "<absolute path of \(key)>"] }
         return words.map(Self.shellQuoted).joined(separator: " ")
+    }
+
+    /// The store an entry names, as written, when it's relative: from --store, or its env's
+    /// PRESENCE_CAPTURE_HOME.
+    static func relativeStore(args: [String], env: [String: String]) -> String? {
+        let path = option("--store", args) ?? env["PRESENCE_CAPTURE_HOME"].map { $0 + "/store.sqlite" }
+        return path.flatMap { $0.hasPrefix("/") ? nil : $0 }
     }
 
     /// The store an entry's server opens, as pcap-mcp chooses it: its --store, else its environment's
@@ -465,9 +487,10 @@ extension Connector {
         if let old = made.plan.replacing, old != grantId {
             let here = Self.option("--store", new.args).map(Self.standardized)
             let there = Self.store(args: made.plan.replacedArgs, env: made.plan.replacedEnv)
-            let revoke = revokeCommand(made.plan.replacedArgs, store: there)
+            let relative = Self.relativeStore(args: made.plan.replacedArgs, env: made.plan.replacedEnv)
+            let revoke = revokeCommand(made.plan.replacedArgs, store: there, unresolvedStore: relative)
             if there == nil {
-                stillActive = (old, "its store can't be known from here (its PRESENCE_CAPTURE_HOME is a relative path)", revoke)
+                stillActive = (old, "its store, \(relative ?? "?"), is relative to wherever the client starts pcap-mcp, so it can't be known from here", revoke)
             } else if here != there {
                 stillActive = (old, "it's in another store, \(there!)", revoke)
             } else {
