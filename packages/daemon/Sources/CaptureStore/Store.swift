@@ -94,16 +94,14 @@ public final class CaptureStore: @unchecked Sendable {
         try exec("PRAGMA foreign_keys = ON")
         // Deleted content is overwritten, not left on a free page (R11).
         try exec("PRAGMA secure_delete = ON")
-        try exec("PRAGMA journal_mode = WAL")
+        try switchToWAL()
         try migrate()
-        if let probe = try rows("SELECT capture_id, wrapped_key FROM capture_key LIMIT 1").first {
-            do {
-                _ = try Seal.open(probe.data(1), key: masterKey, aad: "key:\(probe.text(0))")
-            } catch {
-                sqlite3_close(db)
-                db = nil
-                throw StoreError.wrongKey
-            }
+        do {
+            try checkKey(writing: true)
+        } catch {
+            sqlite3_close(db)
+            db = nil
+            throw error
         }
         // A writer opening the store finishes what an earlier one couldn't: a command-line
         // revocation, say, that exited while a reader held the log.
@@ -131,14 +129,46 @@ public final class CaptureStore: @unchecked Sendable {
             db = nil
             throw StoreError.sqlite("the store isn't migrated to this version: open it with Presence Capture first")
         }
-        if let probe = try rows("SELECT capture_id, wrapped_key FROM capture_key LIMIT 1").first {
-            do {
-                _ = try Seal.open(probe.data(1), key: masterKey, aad: "key:\(probe.text(0))")
-            } catch {
-                sqlite3_close(db)
-                db = nil
-                throw StoreError.wrongKey
-            }
+        do {
+            try checkKey(writing: false)
+        } catch {
+            sqlite3_close(db)
+            db = nil
+            throw error
+        }
+    }
+
+    static let keyCheck = "presence-capture key check"
+
+    /// Refuses a master key that isn't the store's (migration 009): against the store's own key
+    /// check; where there's none yet, against a capture's key, and then a writer writes the check, so
+    /// a store with every capture revoked still knows its key. Written with INSERT OR IGNORE and read
+    /// back, so of two writers opening it at once, the one whose key differs is refused.
+    private func checkKey(writing: Bool) throws {
+        func opens(_ sealed: Data, aad: String, expected: String? = nil) -> Bool {
+            guard let value = try? Seal.open(sealed, key: masterKey, aad: aad) else { return false }
+            return expected.map { Data($0.utf8) == value } ?? true
+        }
+        var check = try rows("SELECT sealed FROM key_check WHERE id = 1").first?.data(0)
+        if check == nil {
+            if let probe = try rows("SELECT capture_id, wrapped_key FROM capture_key LIMIT 1").first,
+               !opens(probe.data(1), aad: "key:\(probe.text(0))") { throw StoreError.wrongKey }
+            guard writing else { return }
+            try run("INSERT OR IGNORE INTO key_check (id, sealed, created_at) VALUES (1, ?, ?)",
+                    try Seal.seal(Data(Self.keyCheck.utf8), key: masterKey, aad: "key_check"), Self.iso(Date()))
+            check = try rows("SELECT sealed FROM key_check WHERE id = 1").first?.data(0)
+        }
+        guard let check, opens(check, aad: "key_check", expected: Self.keyCheck) else { throw StoreError.wrongKey }
+    }
+
+    /// A new store is switched to WAL by whichever writer gets there first, and SQLite tells the
+    /// other it's locked at once rather than after its busy timeout: so that one waits here, as
+    /// long as the timeout would have.
+    private func switchToWAL() throws {
+        for waited in stride(from: 0, through: 5000, by: 20) {
+            if sqlite3_exec(db, "PRAGMA journal_mode = WAL", nil, nil, nil) == SQLITE_OK { return }
+            guard sqlite3_errcode(db) == SQLITE_BUSY, waited < 5000 else { throw failure() }
+            Thread.sleep(forTimeInterval: 0.02)
         }
     }
 
@@ -216,18 +246,34 @@ public final class CaptureStore: @unchecked Sendable {
     /// forgotten, anything older than retention. So is one derived from a revoked capture. Either
     /// would otherwise arrive after the revocation and be readable.
     private func refuseForgotten(capturedAt: String, derivedFrom: String?) throws {
-        // time_range scopes are kept in canonical form (revoke), so they compare as text.
-        let forgotten = try rows("""
-            SELECT 1 FROM revocation WHERE scope_kind = 'time_range'
-              AND substr(scope_value, 1, instr(scope_value, '/') - 1) <= ?
-              AND substr(scope_value, instr(scope_value, '/') + 1) >= ?
+        // A range kept in canonical form (revoke) compares as text. One a version before migration 008
+        // kept as it was given (to the second, say) is read into that form here, so it forgets as much
+        // as it did when it was made.
+        var forgotten = try !rows("""
+            SELECT 1 FROM revocation WHERE scope_kind = 'time_range' AND \(Self.canonicalRangeSQL)
+              AND substr(scope_value, 1, 24) <= ? AND substr(scope_value, 26, 24) >= ?
             LIMIT 1
-            """, capturedAt, capturedAt)
-        if !forgotten.isEmpty { throw StoreError.revoked("captured_at falls in a revoked time range") }
+            """, capturedAt, capturedAt).isEmpty
+        if !forgotten {
+            forgotten = try rows("SELECT scope_value FROM revocation WHERE scope_kind = 'time_range' AND NOT \(Self.canonicalRangeSQL)")
+                .contains { row in
+                    // One that never parsed never resolved, so it never forgot anything.
+                    guard let bounds = try? Self.canonicalRange(row.text(0)).split(separator: "/").map(String.init) else { return false }
+                    return bounds[0] <= capturedAt && bounds[1] >= capturedAt
+                }
+        }
+        if forgotten { throw StoreError.revoked("captured_at falls in a revoked time range") }
         if let derivedFrom, try isRevoked(derivedFrom) { throw StoreError.revoked("derived_from names a revoked capture") }
     }
 
-    private func isRevoked(_ captureId: String) throws -> Bool {
+    /// True in SQL when a time_range scope_value is two canonical times, which compare as text.
+    static let canonicalRangeSQL = """
+        (length(scope_value) = 49 AND substr(scope_value, 25, 1) = '/'
+          AND substr(scope_value, 20, 1) = '.' AND substr(scope_value, 24, 1) = 'Z'
+          AND substr(scope_value, 45, 1) = '.' AND substr(scope_value, 49, 1) = 'Z')
+        """
+
+    func isRevoked(_ captureId: String) throws -> Bool {
         try !rows("SELECT 1 FROM revoked_capture WHERE capture_id = ?", captureId).isEmpty
     }
 
@@ -377,6 +423,9 @@ public final class CaptureStore: @unchecked Sendable {
     /// result row (busy = 1), never as an error. Retried for about a second; true once truncated.
     /// Until it is, the erasure isn't reported done and its receipt has no completed_at.
     private func truncateLog(attempts: Int = 20) throws -> Bool {
+        // Only the erasures already committed when the checkpoint starts are proven by it. One another
+        // writer commits after, while a reader holds the log again, is not, and stays pending.
+        let through = try rows("SELECT COALESCE(MAX(sequence), 0) FROM revocation").first?.int(0) ?? 0
         var truncated = false
         do {
             // Retried on its own short schedule, so SQLite's busy wait is off while it tries: with it
@@ -388,17 +437,27 @@ public final class CaptureStore: @unchecked Sendable {
                 if !truncated && attempt < attempts - 1 { Thread.sleep(forTimeInterval: 0.05) }
             }
         }
-        if truncated { try stampErasures() }
+        if truncated {
+            afterTruncation?()
+            try stampErasures(through: through)
+        }
         return truncated
     }
 
-    /// Every erasure pending until now is done: the log holding its frames was just truncated.
-    /// Recorded in the store, so it survives this process. If the stamp can't be written now
-    /// (another writer held the lock throughout the busy timeout), the receipts stay pending, which
-    /// is never wrong, and the next truncation stamps them.
-    private func stampErasures() throws {
+    /// For tests: runs after the log is truncated and before the erasures that proves are stamped,
+    /// so a test can commit another writer's revocation in between.
+    var afterTruncation: (() -> Void)?
+
+    /// Every erasure pending through revocation `through` is done: the log holding its frames was
+    /// just truncated. Recorded in the store, so it survives this process. If the stamp can't be
+    /// written now (another writer held the lock throughout the busy timeout), the receipts stay
+    /// pending, which is never wrong, and the next truncation stamps them.
+    private func stampErasures(through: Int) throws {
         do {
-            try run("UPDATE erasure_receipt SET completed_at = ? WHERE completed_at IS NULL", Self.iso(Date()))
+            try run("""
+                UPDATE erasure_receipt SET completed_at = ?
+                WHERE completed_at IS NULL AND revocation_id IN (SELECT revocation_id FROM revocation WHERE sequence <= ?)
+                """, Self.iso(Date()), through)
         } catch StoreError.sqlite where sqlite3_errcode(db) == SQLITE_BUSY {}
     }
 
@@ -451,9 +510,13 @@ public final class CaptureStore: @unchecked Sendable {
 
     private func migrate() throws {
         try exec("CREATE TABLE IF NOT EXISTS schema_migration (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)")
-        let applied = Set(try rows("SELECT name FROM schema_migration").map { $0.text(0) })
-        for migration in Migrations.all where !applied.contains(migration.name) {
-            try transaction {
+        let applied = { Set(try self.rows("SELECT name FROM schema_migration").map { $0.text(0) }) }
+        let pending = try Migrations.all.filter { try !applied().contains($0.name) }
+        for migration in pending {
+            // Under the write lock, and checked again inside it: two writers opening an older store at
+            // once can't both apply the same migration.
+            try transaction(immediate: true) {
+                guard try !applied().contains(migration.name) else { return }
                 try exec(migration.sql)
                 try run("INSERT INTO schema_migration (name, applied_at) VALUES (?, ?)", migration.name, Self.iso(Date()))
             }

@@ -117,8 +117,11 @@ actor ScreenCapturer {
                 readMs += Date().timeIntervalSince(started) * 1000
             }
             guard stillOn(pid), currentTitle(window.windowID) == title, let text else { continue }
-            lastKept[window.windowID] = hash
-            guard !text.isEmpty else { continue }
+            // Nothing in it to keep: remembered as read, so an unchanged blank window isn't read again.
+            guard !text.isEmpty else {
+                lastKept[window.windowID] = hash
+                continue
+            }
             // A page's address only where the browser says it (never inferred from what's on screen),
             // and only for this window: its focused window must be the one read, by title, and it
             // must still be in front with that title once the address is read. A tab switched
@@ -137,6 +140,9 @@ actor ScreenCapturer {
                 log("append.refused_revoked kind=screen")
                 continue
             }
+            // Remembered only once it's kept: a window whose text was refused (its moment was
+            // forgotten), or not written at all, is read again while it's on screen.
+            lastKept[window.windowID] = hash
             frames += 1
         }
     }

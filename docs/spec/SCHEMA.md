@@ -99,7 +99,11 @@ Content is sealed per capture and erased by revocation
 **Sealing.** AES-256-GCM, combined form `nonce(12) ‖ ciphertext ‖ tag(16)`,
 byte-compatible with CryptoKit's `AES.GCM.SealedBox.combined`. The master key
 MUST NOT be written to the store or beside it; on macOS it lives in the
-Keychain. A store MUST refuse to open with the wrong master key.
+Keychain. A store MUST refuse to open with the wrong master key, even once
+every capture is revoked: `key_check` (migration 009) holds `presence-capture
+key check` sealed by the master key with AAD `key_check`, written once by the
+first writer to open the store, after its key has been checked against a
+capture's where there is one.
 
 **Erasure.** In the transaction that records a revocation, an implementation
 MUST delete the revoked set's sealed payloads, sealed text and keys, and write
@@ -113,7 +117,9 @@ complete it once the log can be truncated.
 Completion is kept in the store, not in the memory of the process that
 revoked, which may exit first (a command-line Forget while an MCP server
 reads). The receipt's `completed_at` stays NULL until a truncation succeeds,
-and is stamped then. A writer that opens the store MUST try to finish any
+and is stamped then, but only on receipts whose revocation was committed
+before that truncation began: another writer's revocation committed after it
+is not proven by it. A writer that opens the store MUST try to finish any
 pending erasure. **A revocation with no erasure receipt is non-conformant.**
 Plaintext content MUST NOT reach disk at any time.
 
@@ -137,7 +143,8 @@ under the write lock taken before anything is read (`BEGIN IMMEDIATE`), so a
 capture another writer commits meanwhile is either in the revoked set or
 refused afterwards (R13). A `time_range` scope's `scope_value` MUST be written
 with both bounds in the form `captured_at` is written, so the two compare as
-text.
+text. A range a version before migration 008 kept in another form MUST still
+be honoured, read into that form when it's compared.
 
 **A revocation holds against later writes (R13).** A capture can arrive after
 the moment it records: speech is written once it's transcribed, a screen once
@@ -161,10 +168,13 @@ forgets or issues grants, and every MCP server, which writes its egress
 records. Any write that depends on something read MUST take the write lock
 before reading it (`BEGIN IMMEDIATE`), so no other writer can commit in
 between: an append and its R13 check, a projection entry and its check, a
-revocation and its scope, and a read, its grant check and its egress record. A
-batch of captures that belong together (an audio segment and its transcript)
-MUST be written in one transaction, so a failure leaves neither, and a
-`dedupe_key` doesn't outlive a batch that failed.
+revocation and its scope, and each migration and the check that it's still
+pending. A read MAY choose and unseal what it serves under a read snapshot,
+which holds no lock, but MUST then check its grant again, leave out anything
+revoked since, and record its egress, in one transaction under the write lock.
+A batch of captures that belong together (an audio segment and its
+transcript) MUST be written in one transaction, so a failure leaves neither,
+and a `dedupe_key` doesn't outlive a batch that failed.
 
 ### `projection`, `projection_entry`, `projection_revocation` (R3)
 
@@ -276,7 +286,7 @@ PRESENCE_CAPTURE_DRIVER="/path/to/your-driver" npm run conformance:store
 
 The reference implementation also passes an API layer covering its read path
 (grants, envelope and egress, ADR 0001 T1–T12) and replay (R4). The store
-layer has 50 tests and the API layer 74, among them the five that distinguish
+layer has 55 tests and the API layer 77, among them the five that distinguish
 this schema:
 
 - **revocation propagation** — derived views and vector entries do not survive

@@ -123,6 +123,8 @@ export function createMcpServer({ store, grantId }) {
             isError: true,
           });
         }
+        // A malformed argument (a limit that isn't a whole number) is the caller's error, and nothing is served.
+        if (err instanceof RangeError) return jsonRpcError(id, -32602, err.message);
         return jsonRpcError(id, -32603, err.message);
       }
     }

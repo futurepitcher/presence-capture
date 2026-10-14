@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -118,4 +122,104 @@ test('store ADR 0001: a grant revoked by another writer is refused on the next r
     await other.close();
   }
   await assert.rejects(call('read', { grant_id: grant, tool: 'recent' }), { code: 'denied' });
+}));
+
+test('store R13: a range a version before migration 008 kept as given still forgets as much', () => withStore(async ({ call, path }) => {
+  // Revocations kept verbatim by an earlier version: to the second, and with an offset.
+  const db = new DatabaseSync(path);
+  try {
+    const next = () => db.prepare(`SELECT COALESCE(MAX(s), 0) + 1 AS n FROM (
+      SELECT MAX(sequence) AS s FROM capture_event UNION ALL SELECT MAX(sequence) AS s FROM revocation)`).get().n;
+    const insert = db.prepare(`INSERT INTO revocation (revocation_id, sequence, revoked_at, scope_kind, scope_value, reason)
+      VALUES (?, ?, '2026-10-06T12:00:00.000Z', 'time_range', ?, 'forget 15m')`);
+    insert.run('rev_seconds', next(), '2026-10-06T09:00:00Z/2026-10-06T09:15:00Z');
+    insert.run('rev_offset', next(), '2026-10-06T12:00:00+02:00/2026-10-06T12:15:00+02:00');
+  } finally {
+    db.close();
+  }
+  await assert.rejects(call('append', screenText('at the start of the first', { captured_at: '2026-10-06T09:00:00.000Z' })), { code: 'constraint' });
+  await assert.rejects(call('append', screenText('inside the second', { captured_at: '2026-10-06T10:05:00.000Z' })), { code: 'constraint' });
+  await call('append', screenText('between them', { captured_at: '2026-10-06T09:30:00.000Z' }));
+}));
+
+test('store R1: two writers opening a new store at once both open it, each migration applied once', async () => {
+  for (let round = 0; round < 5; round++) {
+    const dir = mkdtempSync(join(tmpdir(), 'pc-open-'));
+    const path = join(dir, 'store.sqlite');
+    const key = randomBytes(32).toString('hex');
+    const [a, b] = [startDriver(), startDriver()];
+    try {
+      await Promise.all([a.call('open', { path, master_key_hex: key }), b.call('open', { path, master_key_hex: key })]);
+      const names = query(path, 'SELECT name FROM schema_migration').map((r) => r.name);
+      assert.equal(names.length, new Set(names).size);
+    } finally {
+      await Promise.all([a.close(), b.close()]);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('store R11: a store with every capture revoked still refuses another master key', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pc-key-'));
+  const path = join(dir, 'store.sqlite');
+  const key = randomBytes(32).toString('hex');
+  try {
+    const first = startDriver();
+    await first.call('open', { path, master_key_hex: key });
+    const { capture_id: id } = await first.call('append', screenText('the only capture'));
+    await first.call('revoke', { scope_kind: 'capture', scope_value: id });
+    await first.close();
+
+    const wrong = startDriver();
+    await assert.rejects(wrong.call('open', { path, master_key_hex: randomBytes(32).toString('hex') }), { code: 'key' });
+    await wrong.close();
+
+    const right = startDriver();
+    await right.call('open', { path, master_key_hex: key });
+    await right.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('store ADR 0001: a malformed limit never lifts the grant cap', () => withStore(async ({ call }) => {
+  for (const text of ['one', 'two', 'three']) await call('append', screenText(text));
+  const { grant_id: grant } = await call('issue_grant', { client_id: 'agent', expires_at: '2099-01-01T00:00:00.000Z', max_rows_per_query: 1 });
+  for (const limit of ['invalid', -1, 1.5]) {
+    try {
+      const { envelopes } = await call('read', { grant_id: grant, tool: 'recent', limit });
+      assert.ok(envelopes.length <= 1, `limit ${JSON.stringify(limit)} served ${envelopes.length} rows past a cap of 1`);
+    } catch (err) {
+      assert.equal(err.code, 'bad_request');
+    }
+  }
+}));
+
+test('store ADR 0001: a read through a long history does not hold the write lock while it searches', () => withStore(async ({ call, path }) => {
+  const captures = Array.from({ length: 4000 }, (_, i) => screenText(`line ${i} of a long day`));
+  await call('append_all', { captures });
+  const { grant_id: grant } = await call('issue_grant', { client_id: 'agent', expires_at: '2099-01-01T00:00:00.000Z' });
+
+  // While a search that matches nothing reads all 4000, another writer tries for the lock, without waiting.
+  const other = new DatabaseSync(path);
+  other.exec('PRAGMA busy_timeout = 0');
+  let done = false;
+  const searching = call('read', { grant_id: grant, tool: 'search', contains: 'nothing matches this' }).finally(() => { done = true; });
+  let tries = 0;
+  let locked = 0;
+  while (!done) {
+    await sleep(5);
+    if (done) break;
+    tries += 1;
+    try {
+      other.exec('BEGIN IMMEDIATE');
+      other.exec('COMMIT');
+    } catch {
+      locked += 1;
+    }
+  }
+  other.close();
+  assert.deepEqual((await searching).envelopes, []);
+  assert.ok(tries >= 3, `the search finished too quickly to tell (${tries} tries)`);
+  assert.ok(locked <= tries / 2, `the write lock was held for ${locked} of ${tries} tries while the search read`);
 }));

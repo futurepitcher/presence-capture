@@ -58,3 +58,14 @@ test('R3: a backend that keeps entries fails this test', () => {
   assert.notEqual(leaky.size(), 0, 'fixture is wrong: the leaky backend should still hold entries');
   store.close();
 });
+
+test('R3/R13: a vector for a revoked capture is refused before it reaches the backend', () => {
+  const store = openStore();
+  const vectors = makeVectorStore();
+  const bound = bindVectorStore(store, vectors);
+  const id = store.appendCapture({ captureType: 'screen_text', source: 'screen', privacyLevel: 'standard', contentText: 'gone' });
+  bound.revoke({ scopeKind: 'capture', scopeValue: id });
+
+  assert.throws(() => bound.index({ captureId: id, entryRef: 'vec:late', vector: [0.5, 0.6] }), { name: 'RevokedError' });
+  assert.equal(vectors.size(), 0, 'the backend kept a vector the store refused to record');
+});

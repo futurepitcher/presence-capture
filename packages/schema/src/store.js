@@ -21,11 +21,46 @@ function canonicalTime(value, what) {
   return date.toISOString();
 }
 
+/** SQL true when a time_range scope_value is two canonical times: compared as text. */
+const CANONICAL_RANGE = `(length(scope_value) = 49 AND substr(scope_value, 25, 1) = '/'
+  AND substr(scope_value, 20, 1) = '.' AND substr(scope_value, 24, 1) = 'Z'
+  AND substr(scope_value, 45, 1) = '.' AND substr(scope_value, 49, 1) = 'Z')`;
+
 /** A time_range's bounds, each in that form. */
 function canonicalRange(value) {
   const bounds = typeof value === 'string' ? value.split('/') : [];
   if (bounds.length !== 2) throw new Error('time_range is from/to, each an ISO 8601 time');
   return bounds.map((b, i) => canonicalTime(b, i === 0 ? 'time_range from' : 'time_range to')).join('/');
+}
+
+const KEY_CHECK = 'presence-capture key check';
+
+/**
+ * Refuses a master key that isn't the store's (migration 009). Against the
+ * store's own key check; where there's none yet, against a capture's key, and
+ * then the check is written, so a store with every capture revoked still knows
+ * its key. Written with INSERT OR IGNORE and read back, so of two writers
+ * opening it at once, the one whose key differs is refused.
+ */
+function checkKey(db, masterKey) {
+  const refuse = () => { throw new Error('masterKey does not open this store'); };
+  const opens = (sealed, aad, expected) => {
+    try {
+      const value = unseal(masterKey, sealed, aad);
+      return expected === undefined || value.toString('utf8') === expected;
+    } catch {
+      return false;
+    }
+  };
+  let check = db.prepare('SELECT sealed FROM key_check WHERE id = 1').get();
+  if (!check) {
+    const probe = db.prepare('SELECT capture_id, wrapped_key FROM capture_key LIMIT 1').get();
+    if (probe && !opens(probe.wrapped_key, `key:${probe.capture_id}`)) refuse();
+    db.prepare('INSERT OR IGNORE INTO key_check (id, sealed, created_at) VALUES (1, ?, ?)')
+      .run(seal(masterKey, Buffer.from(KEY_CHECK), 'key_check'), now());
+    check = db.prepare('SELECT sealed FROM key_check WHERE id = 1').get();
+  }
+  if (!opens(check.sealed, 'key_check', KEY_CHECK)) refuse();
 }
 
 /** Raised when a read is attempted without sufficient authority. */
@@ -56,9 +91,12 @@ export class RevokedError extends Error {
  * must be given the one it was created with.
  *
  * @param {string} [path] file path, or ':memory:' for an ephemeral store
- * @param {{masterKey?: Buffer}} [options]
+ * @param {{masterKey?: Buffer, onTruncated?: () => void}} [options]
+ *   `onTruncated` is for tests: it runs after the log is truncated and before
+ *   the erasures that proves are stamped, so a test can commit another writer's
+ *   revocation in between.
  */
-export function openStore(path = ':memory:', { masterKey } = {}) {
+export function openStore(path = ':memory:', { masterKey, onTruncated } = {}) {
   if (!masterKey) {
     if (path !== ':memory:') throw new Error('a file store needs its masterKey');
     masterKey = newKey();
@@ -77,18 +115,29 @@ export function openStore(path = ':memory:', { masterKey } = {}) {
   db.exec('PRAGMA busy_timeout = 5000');
   // Deleted content is overwritten, not left on a free page (R11).
   db.exec('PRAGMA secure_delete = ON');
-  db.exec('PRAGMA journal_mode = WAL');
+  // A new store is switched to WAL by whichever writer gets there first, and
+  // SQLite tells the other it's locked at once rather than after its busy
+  // timeout: so that one waits here, as long as the timeout would have.
+  for (let waited = 0; ; waited += 20) {
+    try {
+      db.exec('PRAGMA journal_mode = WAL');
+      break;
+    } catch (err) {
+      if ((err.errcode & 0xff) !== 5 || waited >= 5000) {
+        db.close();
+        throw err;
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+  }
   migrate(db);
 
   // Fail at open, not on some later read, when the key is not this store's.
-  const probe = db.prepare('SELECT capture_id, wrapped_key FROM capture_key LIMIT 1').get();
-  if (probe) {
-    try {
-      unseal(masterKey, probe.wrapped_key, `key:${probe.capture_id}`);
-    } catch {
-      db.close();
-      throw new Error('masterKey does not open this store');
-    }
+  try {
+    checkKey(db, masterKey);
+  } catch (err) {
+    db.close();
+    throw err;
   }
 
   /**
@@ -205,13 +254,24 @@ export function openStore(path = ':memory:', { masterKey } = {}) {
    * otherwise arrive after the revocation and be readable.
    */
   function refuseForgotten(capturedAt, derivedFrom) {
-    // time_range scopes are kept in canonical form (revoke), so they compare as text.
+    // A range kept in canonical form (revoke) compares as text. One a version
+    // before migration 008 kept as it was given (to the second, say) is read
+    // into that form here, so it forgets as much as it did when it was made.
     const forgotten = db.prepare(`
-      SELECT 1 FROM revocation WHERE scope_kind = 'time_range'
-        AND substr(scope_value, 1, instr(scope_value, '/') - 1) <= ?
-        AND substr(scope_value, instr(scope_value, '/') + 1) >= ?
+      SELECT 1 FROM revocation WHERE scope_kind = 'time_range' AND ${CANONICAL_RANGE}
+        AND substr(scope_value, 1, 24) <= ? AND substr(scope_value, 26, 24) >= ?
       LIMIT 1
-    `).get(capturedAt, capturedAt);
+    `).get(capturedAt, capturedAt) !== undefined || db.prepare(`
+      SELECT scope_value FROM revocation WHERE scope_kind = 'time_range' AND NOT (${CANONICAL_RANGE})
+    `).all().some(({ scope_value: value }) => {
+      let bounds;
+      try {
+        bounds = canonicalRange(value).split('/');
+      } catch {
+        return false; // never resolvable, so it never forgot anything
+      }
+      return bounds[0] <= capturedAt && bounds[1] >= capturedAt;
+    });
     if (forgotten) throw new RevokedError('captured_at falls in a revoked time range');
     if (derivedFrom != null && isRevoked(derivedFrom)) throw new RevokedError('derived_from names a revoked capture');
   }
@@ -475,6 +535,10 @@ export function openStore(path = ':memory:', { masterKey } = {}) {
    * writer finishes it later (finishErasure, or opening the store).
    */
   function truncateLog(attempts = 20) {
+    // Only the erasures already committed when the checkpoint starts are
+    // proven by it. One another writer commits after, while a reader holds the
+    // log again, is not, and stays pending.
+    const through = db.prepare('SELECT COALESCE(MAX(sequence), 0) AS s FROM revocation').get().s;
     let truncated = false;
     // Retried on its own short schedule, so SQLite's busy wait is off while it
     // tries: with it on, each attempt would wait out the whole busy timeout.
@@ -487,20 +551,26 @@ export function openStore(path = ':memory:', { masterKey } = {}) {
     } finally {
       db.exec('PRAGMA busy_timeout = 5000');
     }
-    if (truncated) stampErasures();
+    if (truncated) {
+      onTruncated?.();
+      stampErasures(through);
+    }
     return truncated;
   }
 
   /**
-   * Every erasure pending until now is done: the log holding its frames was
-   * just truncated. Recorded in the store, so it survives this process. If
-   * the stamp can't be written now (another writer held the lock throughout
-   * the busy timeout), the receipts stay pending, which is never wrong, and
-   * the next truncation stamps them.
+   * Every erasure pending through revocation `through` is done: the log
+   * holding its frames was just truncated. Recorded in the store, so it
+   * survives this process. If the stamp can't be written now (another writer
+   * held the lock throughout the busy timeout), the receipts stay pending,
+   * which is never wrong, and the next truncation stamps them.
    */
-  function stampErasures() {
+  function stampErasures(through) {
     try {
-      db.prepare('UPDATE erasure_receipt SET completed_at = ? WHERE completed_at IS NULL').run(now());
+      db.prepare(`
+        UPDATE erasure_receipt SET completed_at = ?
+        WHERE completed_at IS NULL AND revocation_id IN (SELECT revocation_id FROM revocation WHERE sequence <= ?)
+      `).run(now(), through);
     } catch (err) {
       if ((err.errcode & 0xff) !== 5) throw err; // SQLITE_BUSY
     }
@@ -608,20 +678,80 @@ export function openStore(path = ':memory:', { masterKey } = {}) {
    */
   function createReader(grantId) {
     if (!grantRecord(grantId)) throw new AuthorizationError('no grant: default deny');
-    return {
-      // The grant check, what's served and its egress record in one
-      // transaction under the write lock: a grant revoked by another process
-      // can't be served after its check, and every row served is recorded.
-      read: (request) => immediate(() => readLocked(grantId, request)),
-    };
+    return { read: (request) => read(grantId, request) };
   }
 
-  function readLocked(grantId, { tool, query = '', contains = null, limit = null, afterSequence = null }) {
+  /** The grant a read is made under, as it is now: refused when it's missing, revoked or expired. */
+  function authorizedGrant(grantId) {
     const grant = grantRecord(grantId);
     if (!grant) throw new AuthorizationError('no grant: default deny');
     if (grant.revoked_at) throw new AuthorizationError('grant revoked');
     if (grant.expires_at <= now()) throw new AuthorizationError('grant expired');
+    return grant;
+  }
 
+  function read(grantId, { tool, query = '', contains = null, limit = null, afterSequence = null }) {
+    // Checked before it's compared: Math.min with anything but a number is
+    // NaN, which no count reaches, and the grant's cap would be lost.
+    if (limit != null && !(Number.isInteger(limit) && limit >= 0)) throw new RangeError('limit must be a whole number, 0 or more');
+
+    // What the grant admits is chosen and unsealed under a read snapshot,
+    // which never holds the write lock: a search through a long history
+    // doesn't keep the daemon, or a Forget, waiting while it reads.
+    db.exec('BEGIN');
+    let rows;
+    try {
+      rows = admitted(authorizedGrant(grantId), { contains, limit, afterSequence });
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+
+    // Served only once the grant is checked again and the serving recorded, in
+    // one transaction under the write lock: a grant revoked meanwhile serves
+    // nothing, a capture revoked meanwhile isn't served (R2), and every row
+    // served is in the egress log (ADR 0001).
+    return immediate(() => {
+      const grant = authorizedGrant(grantId);
+      const served = rows.filter((r) => !isRevoked(r.capture_id));
+
+      // Every payload crosses the boundary wrapped (ADR 0001 §4.3).
+      // provenance comes from capture metadata, never from the content.
+      const envelopes = served.map((r) => ({
+        presence_capture_untrusted: {
+          envelope_version: ENVELOPE_VERSION,
+          provenance: {
+            capture_id: r.capture_id,
+            sequence: r.sequence,
+            captured_at: r.captured_at,
+            source_app: r.source_app,
+            source_url: r.source_url,
+            capture_type: r.capture_type,
+            privacy_level: r.privacy_level,
+            extraction: r.extraction,
+          },
+          content: r.content_text,
+        },
+      }));
+
+      appendEgressLocked({
+        servedAt: now(),
+        clientId: grant.client_id,
+        grantId: grant.grant_id,
+        tool,
+        queryFingerprint: sha256(`${tool}\u0000${query}\u0000${contains ?? ''}`),
+        captureIds: served.map((r) => r.capture_id),
+        privacyLevelsServed: [...new Set(served.map((r) => r.privacy_level))],
+        rowCount: served.length,
+        byteCount: Buffer.byteLength(JSON.stringify(envelopes)),
+      });
+      return envelopes;
+    });
+  }
+
+  /** The captures a grant admits, in sequence order, with their text unsealed, up to its cap. */
+  function admitted(grant, { contains, limit, afterSequence }) {
     const levels = JSON.parse(grant.privacy_levels);
     const types = JSON.parse(grant.capture_types);
     const domains = JSON.parse(grant.domains);
@@ -668,39 +798,7 @@ export function openStore(path = ':memory:', { masterKey } = {}) {
       if (needle && !text?.toLowerCase().includes(needle)) continue;
       rows.push({ ...row, content_text: text });
     }
-
-    // Every payload crosses the boundary wrapped (ADR 0001 §4.3).
-    // provenance comes from capture metadata, never from the content.
-    const envelopes = rows.map((r) => ({
-      presence_capture_untrusted: {
-        envelope_version: ENVELOPE_VERSION,
-        provenance: {
-          capture_id: r.capture_id,
-          sequence: r.sequence,
-          captured_at: r.captured_at,
-          source_app: r.source_app,
-          source_url: r.source_url,
-          capture_type: r.capture_type,
-          privacy_level: r.privacy_level,
-          extraction: r.extraction,
-        },
-        content: r.content_text,
-      },
-    }));
-
-    appendEgressLocked({
-      servedAt: now(),
-      clientId: grant.client_id,
-      grantId: grant.grant_id,
-      tool,
-      queryFingerprint: sha256(`${tool}\u0000${query}\u0000${contains ?? ''}`),
-      captureIds: rows.map((r) => r.capture_id),
-      privacyLevelsServed: [...new Set(rows.map((r) => r.privacy_level))],
-      rowCount: rows.length,
-      byteCount: Buffer.byteLength(JSON.stringify(envelopes)),
-    });
-
-    return envelopes;
+    return rows;
   }
 
   // ---------------------------------------------------------------- replay

@@ -50,7 +50,7 @@ Unset, the suite drives the reference driver
 | `constraint` | The schema refused the write: an unknown privacy level, a duplicate `dedupe_key`, a write to an append-only table, or a write a revocation refuses (SCHEMA.md R13) |
 | `key` | The master key doesn't open this store |
 | `denied` | A read the grant doesn't allow: no grant, or a revoked or expired one (ADR 0001) |
-| `bad_request` | An unknown op, missing arguments, or no store is open |
+| `bad_request` | An unknown op, missing or malformed arguments (a `limit` that isn't a whole number), or no store is open |
 | `internal` | Anything else |
 
 The suite checks codes, never messages.
@@ -81,7 +81,7 @@ fields may be omitted or `null`.
 
 After driving writes, the suite opens the store file **read-only** with
 SQLite. It expects the tables and the sealing format of SCHEMA.md
-(migrations `001`–`008`).
+(migrations `001`–`009`).
 
 Payload bytes are read from `payload_blob`, or from a file named by
 `capture_payload.storage_uri` in the form `file:<path relative to the store's

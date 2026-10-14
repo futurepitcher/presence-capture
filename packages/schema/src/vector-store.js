@@ -65,8 +65,11 @@ export function bindVectorStore(store, vectors, projectionName = 'vectors') {
 
   return {
     index({ captureId, entryRef, vector }) {
-      vectors.upsert({ captureId, entryRef, vector });
+      // Recorded first: the store refuses an entry for a revoked capture, and
+      // then nothing reaches the backend. Recorded and not upserted (the
+      // backend failed) is harmless: revocation prunes the entry either way.
       store.addProjectionEntry({ projection: projectionName, captureId, entryRef });
+      vectors.upsert({ captureId, entryRef, vector });
     },
 
     /** Revoke, then prune the backend using the ids the store reports. */

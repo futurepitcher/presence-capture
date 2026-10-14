@@ -118,25 +118,47 @@ extension CaptureStore {
 
     /// What the grant allows of what the request asks, enveloped, in sequence order, and logged.
     ///
-    /// The grant check, what's served and its egress record are one transaction under the write
-    /// lock (BEGIN IMMEDIATE): a grant revoked by another process can't be served after its check,
-    /// and every row served is recorded, chained to the record before it (migration 007 refuses a
-    /// fork besides).
+    /// Chosen and unsealed under a read snapshot, which never holds the write lock, so a search
+    /// through a long history doesn't keep the daemon, or a Forget, waiting while it reads. Then
+    /// served only once the grant is checked again and the serving recorded, in one transaction under
+    /// the write lock (BEGIN IMMEDIATE): a grant revoked meanwhile serves nothing, a capture revoked
+    /// meanwhile isn't served (R2), and every row served is recorded, chained to the record before it
+    /// (migration 007 refuses a fork besides).
     public func read(grantId: String, _ request: ReadRequest) throws -> [CanonicalJSON] {
         try lock.withLock {
+            var chosen: [(id: String, level: String, envelope: CanonicalJSON)] = []
+            try transaction { chosen = try admitted(by: try authorizedGrant(grantId), request) }
             var served: [CanonicalJSON] = []
-            try transaction(immediate: true) { served = try readLocked(grantId: grantId, request) }
+            try transaction(immediate: true) {
+                let grant = try authorizedGrant(grantId)
+                let kept = try chosen.filter { try !isRevoked($0.id) }
+                var levelsServed: [String] = []
+                for item in kept where !levelsServed.contains(item.level) { levelsServed.append(item.level) }
+                let fingerprint = SHA256.hash(data: Data("\(request.tool)\u{0}\(request.query)\u{0}\(request.contains ?? "")".utf8))
+                    .map { String(format: "%02x", $0) }.joined()
+                try appendEgressLocked(
+                    clientId: grant.text(0), grantId: grantId, tool: request.tool, queryFingerprint: fingerprint,
+                    captureIds: kept.map(\.id), privacyLevelsServed: levelsServed,
+                    byteCount: CanonicalJSON.array(kept.map(\.envelope)).text.utf8.count)
+                served = kept.map(\.envelope)
+            }
             return served
         }
     }
 
-    private func readLocked(grantId: String, _ request: ReadRequest) throws -> [CanonicalJSON] {
+    /// The grant a read is made under, as it is now: refused when it's missing, revoked or expired.
+    private func authorizedGrant(_ grantId: String) throws -> Row {
         guard let grant = try rows("""
             SELECT client_id, expires_at, revoked_at, domains, time_from, time_to, privacy_levels, capture_types, sources, max_rows_per_query
             FROM grant_record WHERE grant_id = ?
             """, grantId).first else { throw StoreError.denied("no grant: default deny") }
         if grant.optionalText(2) != nil { throw StoreError.denied("grant revoked") }
         if grant.text(1) <= Self.iso(Date()) { throw StoreError.denied("grant expired") }
+        return grant
+    }
+
+    /// The captures a grant admits, in sequence order, enveloped with their text unsealed, up to its cap.
+    private func admitted(by grant: Row, _ request: ReadRequest) throws -> [(id: String, level: String, envelope: CanonicalJSON)] {
         let decode = { (i: Int) -> [String] in
             (try? JSONSerialization.jsonObject(with: Data(grant.text(i).utf8)) as? [String]) ?? []
         }
@@ -185,16 +207,7 @@ extension CaptureStore {
             served.append((id, row.text(6), envelope))
             return served.count < cap
         }
-
-        var levelsServed: [String] = []
-        for item in served where !levelsServed.contains(item.level) { levelsServed.append(item.level) }
-        let fingerprint = SHA256.hash(data: Data("\(request.tool)\u{0}\(request.query)\u{0}\(request.contains ?? "")".utf8))
-            .map { String(format: "%02x", $0) }.joined()
-        try appendEgressLocked(
-            clientId: grant.text(0), grantId: grantId, tool: request.tool, queryFingerprint: fingerprint,
-            captureIds: served.map(\.id), privacyLevelsServed: levelsServed,
-            byteCount: CanonicalJSON.array(served.map(\.envelope)).text.utf8.count)
-        return served.map(\.envelope)
+        return served
     }
 
     /// A capture's text, unsealed, for a caller already holding the lock.

@@ -21,6 +21,7 @@ function codeFor(err) {
   if (err instanceof AuthorizationError) return 'denied';
   if (err instanceof RevokedError) return 'constraint';
   if (/does not open this store|needs its masterKey|masterKey must be/.test(err.message)) return 'key';
+  if (/limit must be/.test(err.message)) return 'bad_request';
   if (/constraint|append-only|write-once/i.test(err.message)) return 'constraint';
   return 'internal';
 }
