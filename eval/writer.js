@@ -2,9 +2,8 @@
  * A writer beside the server while pcap-eval times it, as the daemon writes
  * while an agent reads: every quarter second, a batch of a screen capture, an
  * activity and an utterance, appended together (BEGIN IMMEDIATE, as the
- * daemon's writers do). Twelve captures a second is far more than the daemon
- * writes (it samples every five seconds), so the latency measured under it is
- * an upper bound. The text is filler, so it never answers a question.
+ * daemon's writers do): twelve captures a second, where the daemon samples
+ * every five seconds. The text is filler, so it never answers a question.
  *
  *   node eval/writer.js <store> <master-key-file>
  *

@@ -44,6 +44,7 @@ import { openStore } from '../src/store.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const TARGET = { recallAt5: 0.8, searchP95Ms: 300 };
+const PROTOCOL_VERSION = '2025-06-18';
 /** How long a call may take before the run fails, and a server that won't exit is killed. */
 const REQUEST_TIMEOUT_MS = 60_000;
 const EXIT_TIMEOUT_MS = 10_000;
@@ -104,6 +105,9 @@ function startServer(command, { path, grantId, keyFile }) {
     } catch {
       return end('the server wrote a line that isn\'t JSON');
     }
+    if (message === null || typeof message !== 'object' || Array.isArray(message)) {
+      return end('the server wrote a line that isn\'t a JSON-RPC message');
+    }
     const pending = waiting.get(message.id);
     waiting.delete(message.id);
     pending?.done(message);
@@ -122,6 +126,23 @@ function startServer(command, { path, grantId, keyFile }) {
     });
     server.stdin.write(jsonLine({ jsonrpc: '2.0', id, method, params }));
   });
+  /** A notification: no id, no answer. */
+  const notify = (method, params) => {
+    if (!gone) server.stdin.write(jsonLine({ jsonrpc: '2.0', method, ...(params ? { params } : {}) }));
+  };
+  /**
+   * The MCP lifecycle, as a client runs it: initialize, check the server agreed
+   * to this protocol version and offers tools, then say so with
+   * notifications/initialized before any other request.
+   */
+  const initialize = async () => {
+    const response = await rpc('initialize', { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'pcap-eval', version: '1' } });
+    if (response.error) throw new Error(`initialize failed: ${JSON.stringify(response.error)}`);
+    const agreed = response.result?.protocolVersion;
+    if (agreed !== PROTOCOL_VERSION) throw new Error(`the server answered protocol ${JSON.stringify(agreed)}; this eval speaks ${PROTOCOL_VERSION}`);
+    if (!response.result?.capabilities?.tools) throw new Error('the server offers no tools');
+    notify('notifications/initialized');
+  };
   /** A tool's answer and how long it took, in milliseconds. */
   const call = async (name, args) => {
     const started = process.hrtime.bigint();
@@ -137,7 +158,7 @@ function startServer(command, { path, grantId, keyFile }) {
     await new Promise((done) => server.once('close', done));
     clearTimeout(killer);
   };
-  return { rpc, call, close };
+  return { initialize, call, close };
 }
 
 /**
@@ -150,8 +171,12 @@ async function startWriter({ path, keyFile }) {
   const said = [];
   let heard = () => {};
   eachLine(writer.stdout, (line) => {
-    if (line.trim() === '') return;
-    said.push(JSON.parse(line));
+    try {
+      const message = JSON.parse(line);
+      if (message !== null && typeof message === 'object') said.push(message);
+    } catch {
+      return;
+    }
     heard();
   });
   const closed = new Promise((done) => writer.once('close', (code, signal) => done(signal ?? code)));
@@ -162,7 +187,7 @@ async function startWriter({ path, keyFile }) {
     stop: async () => {
       writer.stdin.end();
       const how = await closed;
-      const written = said.find((m) => 'written' in m)?.written ?? 0;
+      const written = said.find((m) => Number.isInteger(m.written))?.written ?? 0;
       if (how !== 0 || written === 0) throw new Error(`the writer failed (${how}), having written ${written}`);
       return written;
     },
@@ -212,12 +237,12 @@ async function main() {
 
     const server = startServer(options.server, { path, grantId, keyFile });
     try {
-      await server.rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'pcap-eval', version: '1' } });
+      await server.initialize();
       const { ms: coldStartMs } = await server.call('recent', { limit: 1 });
       const span = { from: fixture.captures.map((c) => c.at).sort()[0], to: fixture.captures.map((c) => c.at).sort().at(-1) };
       const ask = (question) => server.call(question.ask.tool, { ...question.ask, tool: undefined, limit: 10 });
 
-      /** Every question once, then the other tools 20 times each, `pace` ms apart. */
+      /** Every question once, then the other tools 20 times each, each call `pace` ms after the last. */
       const timed = async (pace, onAnswer = () => {}) => {
         const latency = { search: [], recent: [], timeline: [], now: [] };
         for (const question of fixture.questions) {
@@ -226,11 +251,12 @@ async function main() {
           latency.search.push(ms);
           onAnswer(question, answer);
         }
+        const others = [['recent', { limit: 10 }], ['timeline', { ...span, limit: 50 }], ['now', {}]];
         for (let i = 0; i < 20; i++) {
-          if (pace) await sleep(pace);
-          latency.recent.push((await server.call('recent', { limit: 10 })).ms);
-          latency.timeline.push((await server.call('timeline', { ...span, limit: 50 })).ms);
-          latency.now.push((await server.call('now', {})).ms);
+          for (const [tool, args] of others) {
+            if (pace) await sleep(pace);
+            latency[tool].push((await server.call(tool, args)).ms);
+          }
         }
         return latency;
       };

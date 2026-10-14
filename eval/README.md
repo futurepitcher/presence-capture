@@ -34,9 +34,9 @@ answers the way a real day's text does, and never answering a question itself.
   questions and for each kind;
 - p50 and p95 latency for `search`, `recent`, `timeline` and `now`, twice:
   on a quiet store, and while `writer.js` appends twelve captures a second
-  beside the server (the daemon's writers, many times over), with the calls a
-  quarter second apart so each indexes new captures and meets a write. The
-  latency target applies to the second;
+  beside the server, with every call a quarter second after the last, so each
+  one has a new batch to index and can meet a write. The latency target
+  applies to the second;
 - the cold start: the first call, which builds the server's memory;
 - the questions missed in the top five.
 
