@@ -33,6 +33,27 @@ final class StoreFolderTests: XCTestCase {
         store.close()
         XCTAssertEqual((try FileManager.default.attributesOfItem(atPath: folder.path))[.posixPermissions] as? Int, 0o700)
     }
+
+    func testAStoreLeftReadableByOthersIsMadePrivateWhenOpened() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("home")
+        let path = folder.appendingPathComponent("store.sqlite").path
+        let key = SymmetricKey(size: .bits256)
+        try CaptureStore(path: path, masterKey: key).close()
+        // As an earlier build, or a copy, left it: readable by every account.
+        for file in [path, path + "-wal", path + "-shm"] where FileManager.default.fileExists(atPath: file) {
+            try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file)
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+        let store = try CaptureStore(path: path, masterKey: key)
+        defer { store.close() }
+        for file in [path, path + "-wal", path + "-shm"] where FileManager.default.fileExists(atPath: file) {
+            XCTAssertEqual((try FileManager.default.attributesOfItem(atPath: file))[.posixPermissions] as? Int, 0o600, file)
+        }
+        CaptureStore.makePrivate(folder.path, mode: 0o700)
+        XCTAssertEqual((try FileManager.default.attributesOfItem(atPath: folder.path))[.posixPermissions] as? Int, 0o700)
+    }
 }
 
 /// A writer that waits for the store says, once it has it, whether it still may write.

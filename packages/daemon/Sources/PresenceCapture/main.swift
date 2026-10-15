@@ -117,6 +117,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         buildMenu()
+        // The app's own folders and log, the person's alone, however an earlier build left them.
+        for folder in [home, home + "/logs"] { CaptureStore.makePrivate(folder, mode: 0o700) }
+        CaptureStore.makePrivate(home + "/logs/capture.log", mode: 0o600)
         log = Logger(path: home + "/logs/capture.log")
         let log = self.log!
         do {

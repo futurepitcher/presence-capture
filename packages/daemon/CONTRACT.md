@@ -33,8 +33,10 @@ Per captured artifact, in this order:
    after persistence is not redaction. The daemon's redactor passes
    [`cases/redaction.json`](../schema/cases/redaction.json). A page's address,
    kept in plain metadata that Forget leaves, keeps only its scheme, host and
-   path, redacted the same way; an address with no host (`data:`,
-   `javascript:`, `blob:`) isn't kept at all. Both stores pass
+   path, redacted the same way. An address of a scheme that can carry the
+   page itself (`data:`, `javascript:`, `vbscript:`, `blob:`, `about:`), or
+   one with no `scheme://` form, isn't kept at all; a local `file://`
+   address keeps its path, redacted (`/Users/[USER]/…`). Both stores pass
    [`cases/source-url.json`](../schema/cases/source-url.json).
 4. **Seal.** Generate the capture's data key. Seal its text and any payload
    bytes with it (AES-256-GCM, AAD `text:` / `payload:<capture_id>`), and wrap

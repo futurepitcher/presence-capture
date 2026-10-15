@@ -43,6 +43,8 @@ export function redact(text) {
 }
 
 const URL_MAX = 2048;
+// Schemes whose address can carry the page itself, refused whatever follows them.
+const CARRIES_PAGE = /^(?:data|javascript|vbscript|blob|about):/i;
 
 /**
  * A page's address as it's kept (in plain metadata, which Forget leaves): its scheme, host and
@@ -56,7 +58,7 @@ export function cleanSourceUrl(url) {
   let out = String(url).replace(/[\u0000-\u001f\u007f]/g, '');
   out = out.split('#')[0].split('?')[0];
   const parts = out.match(/^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^/]*)([\s\S]*)$/);
-  if (!parts) return null;
+  if (!parts || CARRIES_PAGE.test(parts[1])) return null;
   out = parts[1] + parts[2].slice(parts[2].lastIndexOf('@') + 1) + parts[3];
   out = [...redact(out)].slice(0, URL_MAX).join('');
   return out === '' ? null : out;

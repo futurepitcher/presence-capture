@@ -52,9 +52,16 @@ final class SensorPlugins: @unchecked Sendable {
             log("sensors.config_unreadable")
             return
         }
+        var seen = Set<String>()
         for config in configs {
             guard Observations.headerError(["sensor": config.name, "protocol": "1"]) == nil, !config.command.isEmpty else {
                 log("sensors.config_invalid")
+                continue
+            }
+            // A name is one sensor: a second entry under it is refused, so every sensor running is
+            // one stop() knows of.
+            guard seen.insert(config.name).inserted else {
+                log("sensors.config_duplicate name=\(config.name)")
                 continue
             }
             lock.withLock { self.configs[config.name] = config }
@@ -170,7 +177,8 @@ final class SensorPlugins: @unchecked Sendable {
             kill(-process.processIdentifier, SIGKILL)
             guard let self else { return }
             let again = self.lock.withLock { () -> Bool in
-                self.running[config.name] = nil
+                // Only this process's entry: never one a later launch under the name made.
+                if self.running[config.name] === process { self.running[config.name] = nil }
                 return !self.stopping
             }
             self.log("sensors.stopped name=\(config.name)")
@@ -185,7 +193,8 @@ final class SensorPlugins: @unchecked Sendable {
             // minute on, say) either finishes before stop looks, and is stopped with the rest, or
             // finds it stopping and doesn't start.
             let started = try lock.withLock { () -> Bool in
-                guard !stopping else { return false }
+                // Stopping, or a sensor of this name already running: not started.
+                guard !stopping, running[config.name] == nil else { return false }
                 try process.run()
                 running[config.name] = process
                 return true

@@ -100,6 +100,14 @@ public final class CaptureStore: @unchecked Sendable {
     /// with none of the person's environment.
     public static var defaultHome: String { NSHomeDirectory() + "/Library/Application Support/Presence Capture" }
 
+    /// Makes a file or folder the person's alone (`mode`), when it's there and theirs: a store or a
+    /// home made before files were kept private, or copied in. Anything else is left as it is.
+    public static func makePrivate(_ path: String, mode: mode_t) {
+        var info = stat()
+        guard lstat(path, &info) == 0, info.st_uid == getuid(), (info.st_mode & S_IFMT) != S_IFLNK else { return }
+        if info.st_mode & 0o777 != mode { chmod(path, mode) }
+    }
+
     /// Opens (creating when missing) the store at `path`, sealed under `masterKey`, which is never
     /// written down. Refuses a key that isn't this store's.
     public init(path: String, masterKey: SymmetricKey) throws {
@@ -122,6 +130,10 @@ public final class CaptureStore: @unchecked Sendable {
         // outside the store's directory.
         try exec("PRAGMA temp_store = MEMORY")
         try switchToWAL()
+        // A store made before files were kept private (or copied in) is made so now: the database
+        // and its log and index, where they're the person's. New ones SQLite makes follow the
+        // database's mode.
+        for file in [path, path + "-wal", path + "-shm"] { Self.makePrivate(file, mode: 0o600) }
         try migrate()
         do {
             try checkKey(writing: true)

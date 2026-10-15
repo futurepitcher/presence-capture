@@ -10,6 +10,8 @@ public enum SourceURL {
     public static let maxLength = 2048
     private static let control = try! NSRegularExpression(pattern: #"[\u0000-\u001f\u007f]"#)
     private static let authority = try! NSRegularExpression(pattern: #"^([a-zA-Z][a-zA-Z0-9+.-]*://)([^/]*)([\s\S]*)$"#)
+    /// Schemes whose address can carry the page itself, refused whatever follows them.
+    private static let carriesPage: Set<String> = ["data", "javascript", "vbscript", "blob", "about"]
 
     public static func clean(_ url: String?) -> String? {
         guard let url else { return nil }
@@ -20,7 +22,8 @@ public enum SourceURL {
         out = String(String.UnicodeScalarView(out.unicodeScalars.prefix { $0 != "?" }))
         guard let match = authority.firstMatch(in: out, range: NSRange(out.startIndex..., in: out)),
               let scheme = Range(match.range(at: 1), in: out), let host = Range(match.range(at: 2), in: out),
-              let rest = Range(match.range(at: 3), in: out) else { return nil }
+              let rest = Range(match.range(at: 3), in: out),
+              !carriesPage.contains(out[scheme].dropLast(3).lowercased()) else { return nil }
         let hostPart = out[host].unicodeScalars
         let withoutUser = hostPart.lastIndex(of: "@").map { String(String.UnicodeScalarView(hostPart[hostPart.index(after: $0)...])) } ?? String(hostPart)
         out = String(out[scheme]) + withoutUser + String(out[rest])

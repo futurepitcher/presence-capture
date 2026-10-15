@@ -63,6 +63,26 @@
       "output": null
     },
     {
+      "name": "data:// with slashes still carries the page: none of it kept",
+      "input": "data://text/plain,PRIVATE_MEETING_NOTES",
+      "output": null
+    },
+    {
+      "name": "javascript://, in any case: none of it kept",
+      "input": "JavaScript://example.com/%0Aalert(1)",
+      "output": null
+    },
+    {
+      "name": "about://, blob://: none of it kept",
+      "input": "about://blank",
+      "output": null
+    },
+    {
+      "name": "a local file keeps its path, redacted",
+      "input": "file:///Users/zac/notes/plan.txt?x#y",
+      "output": "file:///Users/[USER]/notes/plan.txt"
+    },
+    {
       "name": "nothing left is null",
       "input": "?only=query",
       "output": null
