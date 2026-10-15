@@ -108,7 +108,9 @@ windows you've excluded are skipped, secrets and personal identifiers are
 redacted from the text, and the text is sealed under a key of its own. The
 system's own screens (the lock screen, password prompts, notifications) and
 Presence Capture's own windows are never read. The record of each capture (its
-time, app and the page's URL) isn't sealed, and isn't redacted.
+time, app and the page's address) isn't sealed. Of the address, only the
+scheme, host and path are kept, redacted like text: never its query or
+fragment.
 
 Exclusions cover what's read from the screen, activity and dictation. They don't
 reach ambient audio: a call in an excluded app is still heard. Pause, or turn

@@ -1,3 +1,4 @@
+import CaptureCore
 import CaptureStore
 import Foundation
 
@@ -51,9 +52,16 @@ final class SensorPlugins: @unchecked Sendable {
             log("sensors.config_unreadable")
             return
         }
+        var seen = Set<String>()
         for config in configs {
             guard Observations.headerError(["sensor": config.name, "protocol": "1"]) == nil, !config.command.isEmpty else {
                 log("sensors.config_invalid")
+                continue
+            }
+            // A name is one sensor: a second entry under it is refused, so every sensor running is
+            // one stop() knows of.
+            guard seen.insert(config.name).inserted else {
+                log("sensors.config_duplicate name=\(config.name)")
                 continue
             }
             lock.withLock { self.configs[config.name] = config }
@@ -83,15 +91,19 @@ final class SensorPlugins: @unchecked Sendable {
         launch(approved)
     }
 
-    func stop() {
-        let processes = lock.withLock { () -> [Process] in
+    /// Stops every sensor with all it started: each process group told to stop at once, and two
+    /// seconds on, killed, group and all, so nothing a sensor ran outlives the app. `done` hears once
+    /// that's happened (at once, when none was running): quitting waits for it.
+    func stop(done: @escaping @Sendable () -> Void = {}) {
+        let groups = lock.withLock { () -> [pid_t] in
             stopping = true
-            return Array(running.values)
+            return running.values.map(\.processIdentifier)
         }
-        processes.forEach { $0.terminate() }
-        // One that ignores being told to stop is killed, so it can't outlive the app.
+        guard !groups.isEmpty else { return done() }
+        for group in groups { kill(-group, SIGTERM) }
         DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
-            for process in processes where process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            for group in groups { kill(-group, SIGKILL) }
+            done()
         }
     }
 
@@ -120,7 +132,7 @@ final class SensorPlugins: @unchecked Sendable {
         process.standardError = FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
         let gate = Gate(store: store, source: "sensor:\(config.name)")
-        var buffer = Data()
+        var buffer = LineBuffer()
         var named = false
         out.fileHandleForReading.readabilityHandler = { [weak self] handle in
             guard let self else { return }
@@ -129,10 +141,14 @@ final class SensorPlugins: @unchecked Sendable {
                 handle.readabilityHandler = nil
                 return
             }
-            buffer.append(chunk)
-            while let end = buffer.firstIndex(of: UInt8(ascii: "\n")) {
-                let line = buffer[buffer.startIndex..<end]
-                buffer.removeSubrange(buffer.startIndex...end)
+            guard let lines = buffer.add(chunk) else {
+                // A line past its limit with no end: nothing more is read of it, and it's stopped.
+                handle.readabilityHandler = nil
+                self.log("sensors.line_too_long name=\(config.name)")
+                kill(-process.processIdentifier, SIGKILL)
+                return
+            }
+            for line in lines {
                 let value = try? JSONSerialization.jsonObject(with: line, options: [.fragmentsAllowed])
                 if !named {
                     // The header must name the sensor it was configured as.
@@ -156,10 +172,13 @@ final class SensorPlugins: @unchecked Sendable {
                 }
             }
         }
-        process.terminationHandler = { [weak self] _ in
+        process.terminationHandler = { [weak self] process in
+            // What it started and left running goes with it: nothing is left without its sensor.
+            kill(-process.processIdentifier, SIGKILL)
             guard let self else { return }
             let again = self.lock.withLock { () -> Bool in
-                self.running[config.name] = nil
+                // Only this process's entry: never one a later launch under the name made.
+                if self.running[config.name] === process { self.running[config.name] = nil }
                 return !self.stopping
             }
             self.log("sensors.stopped name=\(config.name)")
@@ -170,9 +189,17 @@ final class SensorPlugins: @unchecked Sendable {
             }
         }
         do {
-            try process.run()
-            lock.withLock { running[config.name] = process }
-            log("sensors.started name=\(config.name)")
+            // Started and registered in one step that stop() also takes: a launch (a relaunch a
+            // minute on, say) either finishes before stop looks, and is stopped with the rest, or
+            // finds it stopping and doesn't start.
+            let started = try lock.withLock { () -> Bool in
+                // Stopping, or a sensor of this name already running: not started.
+                guard !stopping, running[config.name] == nil else { return false }
+                try process.run()
+                running[config.name] = process
+                return true
+            }
+            if started { log("sensors.started name=\(config.name)") }
         } catch {
             log("sensors.launch_failed name=\(config.name)")
         }

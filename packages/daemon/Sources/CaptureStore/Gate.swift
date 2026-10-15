@@ -91,13 +91,26 @@ public final class Gate: @unchecked Sendable {
         }
     }
 
+    /// How far ahead of now an observation may be stamped (clocks differ a little): further, and
+    /// it's refused, since nothing (Forget, retention) can reach what's stamped in the future.
+    public static let futureSkew: TimeInterval = 300
+    /// The longest an app, bundle or device name is kept, with no control characters: they're plain
+    /// metadata.
+    public static let nameLength = 256
+
     /// One observation, as parsed from JSON, against the user's exclusion list.
     public func ingest(_ value: Any?, fragments: [String]) throws {
-        guard Observations.error(value) == nil, let o = value as? [String: Any], let at = (o["at"] as? String).flatMap(CaptureStore.date) else {
+        guard Observations.error(value) == nil, let o = value as? [String: Any], let at = (o["at"] as? String).flatMap(CaptureStore.date),
+              at <= Date().addingTimeInterval(Self.futureSkew) else {
             lock.withLock { counts.invalid += 1 }
             return
         }
         let text = { (key: String) in o[key] as? String }
+        // A name as it's kept in plain metadata: short, and with no control characters. Exclusion
+        // matches the name as the sensor gave it, before this.
+        let name = { (key: String) -> String? in
+            text(key).map { String(String.UnicodeScalarView($0.unicodeScalars.filter { $0.value >= 0x20 && $0.value != 0x7f }.prefix(Self.nameLength))) }
+        }
         func clean(_ value: String) -> String {
             let out = Redact.redact(value)
             if out != value { lock.withLock { counts.redacted += 1 } }
@@ -126,7 +139,7 @@ public final class Gate: @unchecked Sendable {
 
         let kind = text("kind")!
         if kind == "audio" {
-            let device = text("device")!
+            let device = name("device")!
             let segment = CaptureStore.newCaptureId()
             try append([
                 NewCapture(captureId: segment, capturedAt: at, captureType: "audio_segment", source: source ?? "ambient_audio", sourceApp: device),
@@ -148,10 +161,10 @@ public final class Gate: @unchecked Sendable {
             return
         }
         if kind == "screen" {
-            try append([NewCapture(capturedAt: at, captureType: "screen_text", source: source ?? "screen", sourceApp: text("bundle") ?? app,
+            try append([NewCapture(capturedAt: at, captureType: "screen_text", source: source ?? "screen", sourceApp: name("bundle") ?? name("app"),
                                    sourceUrl: text("url"), contentText: clean(text("text")!), extraction: text("extraction") ?? "ocr")])
         } else {
-            try append([NewCapture(capturedAt: at, captureType: "activity", source: source ?? "activity", sourceApp: text("bundle") ?? app,
+            try append([NewCapture(capturedAt: at, captureType: "activity", source: source ?? "activity", sourceApp: name("bundle") ?? name("app"),
                                    contentText: json(["app": app, "window": clean(window), "state": text("state")!]), extraction: "none")])
         }
     }

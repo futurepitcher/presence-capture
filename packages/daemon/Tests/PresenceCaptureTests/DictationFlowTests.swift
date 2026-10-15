@@ -55,7 +55,7 @@ final class DictationFlowTests: XCTestCase {
         func working() {}
         func hold(_ text: String) { held = text }
         func say(_ message: String) { said = message }
-        func hide() {}
+        func hide() { held = nil }
     }
 
     /// Holds a proposal until released.
@@ -107,6 +107,12 @@ final class DictationFlowTests: XCTestCase {
                 if revoke { (revoked, revoke) = (true, false) }
                 return now
             }
+        }
+        private var secureNow = false
+        /// The same field turns into a password field just before typing, after the last sample.
+        var secureJustBeforeTyping: Bool {
+            get { lock.withLock { secureNow } }
+            set { lock.withLock { secureNow = newValue } }
         }
         /// The field has lost the focus just before typing, though samples still show it.
         var focusLost: Bool {
@@ -199,6 +205,7 @@ final class DictationFlowTests: XCTestCase {
                                        focusRead.pass()
                                        return !place.focusLost && place.sample.focus == focus
                                    },
+                                   stillOpen: { _ in place.sample.focus.security == .open && !place.secureJustBeforeTyping },
                                    finishTyping: {}, pasteWaitWhile: { [unowned self] in pastesWait = $0 }, keyDown: { _ in true },
                                    // The key is pressed at test times (0, then 2): polls while it's held are at 1.
                                    uptime: { 1 })
@@ -256,6 +263,17 @@ final class DictationFlowTests: XCTestCase {
         dictation.press(keyCode: 63, flags: 0, at: 2)
         await until { !typed.isEmpty }
         XCTAssertEqual(typed, ["Send the deck on friday."])
+    }
+
+    func testWordsLeftInThePanelGoWhenItsPausedOrLocked() async throws {
+        let dictation = try dictation()
+        dictation.press(keyCode: 63, flags: fn, at: 0)
+        await settle()
+        place.sample.focus = DictationFocus(app: "com.apple.Safari", element: 2, security: .open)
+        dictation.press(keyCode: 63, flags: 0, at: 2)
+        await until { panel.held != nil }
+        dictation.cancel(.locked)
+        XCTAssertNil(panel.held, "the panel kept showing what was said after the screen locked")
     }
 
     func testAFocusThatMovedTypesNothingButKeepsWhatWasSaid() async throws {
@@ -531,6 +549,18 @@ final class DictationFlowTests: XCTestCase {
             XCTAssertEqual(panel.said, "Nothing is typed into a password field.", "\(security)")
             XCTAssertEqual(try kept(), 0, "\(security): kept")
         }
+    }
+
+    func testAFieldThatBecomesAPasswordFieldJustBeforeTypingGetsNothing() async throws {
+        place.secureJustBeforeTyping = true
+        let dictation = try dictation()
+        dictation.press(keyCode: 63, flags: fn, at: 0)
+        dictation.press(keyCode: 63, flags: 0, at: 2)
+        await until { panel.said != nil }
+        dictation.flush()
+        XCTAssertEqual(typed, [], "typed into a field that had just become a password field")
+        XCTAssertNil(panel.held)
+        XCTAssertEqual(try kept(), 0)
     }
 
     func testAFocusThatCantBeConfirmedJustBeforeTypingIsTakenAsAPasswordField() async throws {

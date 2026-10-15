@@ -29,6 +29,35 @@ test('gate: audio whose transcript fails to write leaves no segment, and the sam
   store.close();
 });
 
+test('gate: an observation stamped in the future is refused, since nothing could Forget it', () => {
+  const store = openStore();
+  const gate = createGate(store, { source: 'sensor:clock' });
+  gate.ingest({ kind: 'screen', at: '2200-01-01T00:00:00.000Z', app: 'Notes', window: 'Plans', text: 'from the future' });
+  gate.ingest({ kind: 'screen', at: new Date(Date.now() + 60_000).toISOString(), app: 'Notes', window: 'Plans', text: 'a clock a minute fast' });
+  assert.equal(gate.stats.invalid, 1);
+  assert.equal(count(store), 1, 'a clock a little fast is still kept');
+  store.close();
+});
+
+test('gate: app, bundle and device names are kept short, with no control characters', () => {
+  const store = openStore();
+  const gate = createGate(store, { source: 'sensor:names' });
+  gate.ingest({ kind: 'activity', at: '2026-10-06T09:00:00.000Z', app: `No\ntes${'x'.repeat(1000)}`, window: 'Plans', state: 'active' });
+  const app = store.db.prepare('SELECT source_app FROM capture_event').get().source_app;
+  assert.equal([...app].length, 256);
+  assert.ok(app.startsWith('Notesxxx'), app.slice(0, 20));
+  store.close();
+});
+
+test('gate: exclusion matches the whole name, before it is cut short for keeping', () => {
+  const store = openStore();
+  const gate = createGate(store, { source: 'sensor:names', fragments: ['bank'] });
+  gate.ingest({ kind: 'screen', at: '2026-10-06T09:00:00.000Z', app: `${'a'.repeat(300)}Bank`, window: 'Plans', text: 'the balance' });
+  assert.equal(gate.stats.excluded, 1, 'a name past the cut escaped its exclusion');
+  assert.equal(count(store), 0);
+  store.close();
+});
+
 test('gate: an observation stamped inside a forgotten range is refused and counted, not taken for a duplicate', () => {
   const store = openStore();
   const gate = createGate(store);

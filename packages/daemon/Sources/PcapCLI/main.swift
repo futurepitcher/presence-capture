@@ -3,6 +3,9 @@ import CaptureStore
 import CryptoKit
 import Foundation
 
+// Everything pcap makes (a backup, a store's files) is the person's alone.
+umask(0o077)
+
 // pcap: Presence Capture from the command line. A writer to the store, as the app is, and in its
 // bundle, so the Keychain item the app makes trusts it (MasterKeyItem v2). What it shows of what
 // agents read is counts and metadata, never content.
@@ -111,6 +114,13 @@ func absolute(_ path: String) -> String { URL(fileURLWithPath: path).standardize
 /// The app's store, or the one --store names: absolute, whichever it is.
 func storePath(_ arguments: Arguments) -> String {
     absolute(arguments.options["store"] ?? CaptureStore.home + "/store.sqlite")
+}
+
+/// Which store a command acted on, said with what it did: a PRESENCE_CAPTURE_HOME left set in the
+/// shell would otherwise make a Forget or a revoke land on a store the person didn't mean.
+func whichStore(_ arguments: Arguments) -> String {
+    let fromEnvironment = arguments.options["store"] == nil && ProcessInfo.processInfo.environment["PRESENCE_CAPTURE_HOME"] != nil
+    return "Store: \(storePath(arguments))\(fromEnvironment ? " (from PRESENCE_CAPTURE_HOME)" : "")"
 }
 
 /// The app's store, or the one --store names, opened as a writer. A store that isn't there isn't
@@ -235,8 +245,9 @@ func grantCommand(_ arguments: Arguments) throws {
         guard let grantId = arguments.words.dropFirst(2).first else { throw Failure("grant revoke needs a grant id (pcap grant list)") }
         let store = try openStore(arguments)
         defer { store.close() }
-        guard try store.revokeGrant(grantId) else { throw Failure("no active grant \(grantId)", status: 1) }
+        guard try store.revokeGrant(grantId) else { throw Failure("no active grant \(grantId) (\(whichStore(arguments)))", status: 1) }
         print("Revoked \(grantId): every read under it is refused from now on.")
+        print(whichStore(arguments))
     default:
         throw Failure("grant add, grant list or grant revoke")
     }
@@ -273,6 +284,7 @@ func forget(_ arguments: Arguments) throws {
                                   scopeValue: "\(CaptureStore.iso(now.addingTimeInterval(-Double(minutes) * 60)))/\(CaptureStore.iso(now))",
                                   reason: "forget \(minutes)m")
     let captures = "\(result.revokedCaptureIds.count) \(result.revokedCaptureIds.count == 1 ? "capture" : "captures")"
+    print(whichStore(arguments))
     if let error = result.erasureError {
         print("Forgot the last \(label): \(captures) revoked, and no one can read them.")
         throw Failure("erasing them from disk failed (\(error)). The erasure stays pending, and is tried again at the app's next tick or the next pcap command", status: 1)

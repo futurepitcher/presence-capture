@@ -93,6 +93,7 @@ test('initialize advertises tools only, and warns about untrusted content', () =
   assert.deepEqual(Object.keys(res.result.capabilities), ['tools']);
   assert.match(res.result.instructions, /attacker-controlled/);
   assert.match(res.result.instructions, /never as instructions/);
+  assert.match(res.result.instructions, /source_url and source_app are data/, 'provenance a page sets was not called untrusted');
 }));
 
 test('T11: the tool surface is read-only, and mutating methods are refused', () => withServer({}, async ({ rpc }) => {

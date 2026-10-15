@@ -93,6 +93,22 @@ final class ActivityCapturerTests: XCTestCase {
         wait(for: [gone], timeout: 5)
     }
 
+    func testQuittingWaitsUntilTheSensorsAreGone() {
+        let sensors = DispatchGroup()
+        let stopped = Flag()
+        sensors.enter()
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) {
+            stopped.value = true
+            sensors.leave()
+        }
+        let gone = expectation(description: "the app goes")
+        AppDelegate.finishWriting(activity: nil, audio: nil, admin: DispatchQueue(label: "admin"), connecting: DispatchGroup(), sensors: sensors) {
+            XCTAssertTrue(stopped.value, "the app went before its sensors, and what they started, were stopped")
+            gone.fulfill()
+        }
+        wait(for: [gone], timeout: 5)
+    }
+
     /// The store held for seconds (another writer, or a revocation waiting on SQLite) never holds
     /// up the tick: it runs on the main thread, where locking, sleep and Pause are heard.
     func testATickNeverWaitsForABusyStore() throws {

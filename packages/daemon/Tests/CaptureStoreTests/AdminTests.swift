@@ -75,6 +75,20 @@ final class AdminTests: XCTestCase {
         XCTAssertEqual(try store.quickCheck(), "ok")
     }
 
+    func testAnAppendOnlyRecordCantBeReplacedInPlace() throws {
+        let store = try store()
+        _ = try store.append(NewCapture(capturedAt: Date(), captureType: "screen_text", source: "screen", contentText: "a"))
+        let forgotten = try store.append(NewCapture(capturedAt: Date(), captureType: "screen_text", source: "screen", contentText: "b"))
+        let grant = try store.issueGrant(NewGrant(clientId: "agent", expiresAt: Date().addingTimeInterval(3600)))
+        _ = try store.read(grantId: grant, ReadRequest(tool: "recent"))
+        _ = try store.revoke(scopeKind: "capture", scopeValue: forgotten)
+        XCTAssertEqual(try store.rows("SELECT COUNT(*) FROM revocation").first?.int(0), 1)
+        // A REPLACE deletes the row it replaces: that delete meets the trigger refusing one.
+        XCTAssertThrowsError(try store.exec("INSERT OR REPLACE INTO egress_record SELECT * FROM egress_record WHERE egress_id = 1"))
+        XCTAssertThrowsError(try store.exec("INSERT OR REPLACE INTO revocation SELECT * FROM revocation"))
+        XCTAssertEqual(try store.verifyEgressChain().ok, true)
+    }
+
     func testRetentionUsesThePeriodAsItIsOnceTheStoreIsHeld() throws {
         let store = try store()
         let old = try store.append(NewCapture(capturedAt: Date().addingTimeInterval(-20 * 86_400), captureType: "screen_text", source: "screen", contentText: "old"))

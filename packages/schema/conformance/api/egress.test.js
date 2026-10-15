@@ -18,6 +18,13 @@ function readableStore() {
   return { store, grantId };
 }
 
+test('an append-only record cannot be replaced in place: the delete a REPLACE makes meets its trigger', () => {
+  const { store, grantId } = readableStore();
+  store.createReader(grantId).read({ tool: 'search' });
+  assert.throws(() => store.db.prepare('INSERT OR REPLACE INTO egress_record SELECT * FROM egress_record LIMIT 1').run());
+  store.close();
+});
+
 test('T9: capture content never crosses the boundary unwrapped', () => {
   const { store, grantId } = readableStore();
   const rows = store.createReader(grantId).read({ tool: 'search' });

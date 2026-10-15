@@ -56,8 +56,9 @@ keeps the record, so you can still say "an agent read a capture from Notes at
   (`key_check`, migration 009).
 - **No captured text in plaintext on disk.** Exclusion comes first, then
   redaction, then sealing, then the write. The metadata in `capture_event`
-  isn't sealed: a page's full URL, for one, is kept as it was, and stays after
-  Forget ([CONTRACT.md](https://github.com/futurepitcher/presence-capture/blob/main/packages/daemon/CONTRACT.md)). The
+  isn't sealed: a page's address, for one, stays after Forget. Only its
+  scheme, host and path are kept, redacted like text, never its query or
+  fragment ([CONTRACT.md](https://github.com/futurepitcher/presence-capture/blob/main/packages/daemon/CONTRACT.md)). The
   forensic check below looks for plaintext as well as for revoked bytes.
 - **Identical content is stored twice.** Two captures with the same bytes are
   sealed under two keys, so either can be erased alone.

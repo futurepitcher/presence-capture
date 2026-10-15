@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 
 /// A window's text as its app exposes it to Accessibility: exact where OCR guesses, and cheaper.
 /// What's read is only what's visible in the window (a text view's visible range, an element
@@ -24,8 +25,41 @@ public enum AXText {
 
     /// Roles whose value is text someone reads.
     static let textRoles: Set<String> = ["AXStaticText", "AXTextArea", "AXTextField", "AXHeading", "AXCell"]
+    /// An element whose role, or subrole, couldn't be read: whether it's a password field isn't
+    /// known, so nothing of it, or under it, is read.
+    public static let unreadable = "AXUnreadable"
     /// Never read, whatever else is.
-    static let secure: Set<String> = ["AXSecureTextField"]
+    static let secure: Set<String> = ["AXSecureTextField", unreadable]
+
+    /// An attribute as Accessibility answered it, in a batch where each can fail on its own: text,
+    /// absent (the element has none), failed (an error, a timeout), or some other kind of value.
+    public enum Answer: Equatable, Sendable {
+        case text(String)
+        case absent
+        case failed
+        case other
+    }
+
+    /// An element's role and subrole, when both were read (a subrole may be absent); nil when either
+    /// couldn't be, and then whether it's a password field isn't known.
+    public static func identity(role: Answer, subrole: Answer) -> (role: String, subrole: String?)? {
+        guard case .text(let role) = role else { return nil }
+        switch subrole {
+        case .text(let subrole): return (role, subrole)
+        case .absent: return (role, nil)
+        case .failed, .other: return nil
+        }
+    }
+
+    /// An element's text as kept: a text view's cut to what's scrolled into sight. A text area whose
+    /// visible range can't be read keeps none (it may run far past what's shown; OCR reads what is).
+    public static func visibleValue(_ value: String?, role: String, visibleRange: CFRange?) -> String? {
+        guard let value else { return nil }
+        guard let range = visibleRange, range.location >= 0, range.length >= 0 else { return role == "AXTextArea" ? nil : value }
+        let ns = value as NSString
+        let start = min(range.location, ns.length)
+        return ns.substring(with: NSRange(location: start, length: min(range.length, ns.length - start)))
+    }
 
     /// Below this, Accessibility gave too little to stand for the window, and OCR reads it instead.
     public static let enough = 40

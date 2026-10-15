@@ -42,8 +42,12 @@ public enum AXReader {
         var identityValues: CFArray?
         guard AXUIElementCopyMultipleAttributeValues(element, identity as CFArray, [], &identityValues) == .success,
               let ids = identityValues as? [Any], ids.count == identity.count else { return nil }
-        let role = ids[0] as? String ?? ""
-        let subrole = ids[1] as? String
+        // Each attribute of a batch can fail on its own, even when the batch succeeds: a role or
+        // subrole that wasn't read leaves whether it's a password field unknown, so nothing of it,
+        // or under it, is asked for.
+        guard let (role, subrole) = AXText.identity(role: answer(ids[0]), subrole: answer(ids[1])) else {
+            return AXText.Node(role: AXText.unreadable)
+        }
         // A password field: nothing more of it, or under it, is asked for. Its value is never
         // fetched, not even to be thrown away.
         if AXText.secure.contains(role) || subrole.map(AXText.secure.contains) == true {
@@ -54,13 +58,9 @@ public enum AXReader {
         guard AXUIElementCopyMultipleAttributeValues(element, content as CFArray, [], &values) == .success,
               let list = values as? [Any], list.count == content.count else { return nil }
         func string(_ i: Int) -> String? { list[i] as? String }
-        var value = string(0)
-        if let text = value, let range = cfRange(list[5]) {
-            // A text view: only what's scrolled into sight.
-            let ns = text as NSString
-            let start = max(0, min(range.location, ns.length))
-            value = ns.substring(with: NSRange(location: start, length: max(0, min(range.length, ns.length - start))))
-        }
+        // A text view: only what's scrolled into sight, and nothing of a text area whose sight can't
+        // be read.
+        let value = AXText.visibleValue(string(0), role: role, visibleRange: cfRange(list[5]))
         var frame: CGRect?
         if let origin = point(list[2]), let size = size(list[3]) { frame = CGRect(origin: origin, size: size) }
         var children: [AXText.Node] = []
@@ -71,6 +71,20 @@ public enum AXReader {
             }
         }
         return AXText.Node(role: role, subrole: subrole, value: value, title: string(1), frame: frame, children: children)
+    }
+
+    /// One attribute of a batch, as it answered: an error value is absent (no value, unsupported)
+    /// or failed (anything else, a timeout included).
+    private static func answer(_ item: Any) -> AXText.Answer {
+        let ref = item as CFTypeRef
+        if CFGetTypeID(ref) == AXValueGetTypeID() {
+            let value = item as! AXValue
+            guard AXValueGetType(value) == .axError else { return .other }
+            var error = AXError.success
+            _ = AXValueGetValue(value, .axError, &error)
+            return error == .noValue || error == .attributeUnsupported ? .absent : .failed
+        }
+        return (item as? String).map(AXText.Answer.text) ?? .other
     }
 
     private static func point(_ value: Any) -> CGPoint? {

@@ -1,6 +1,7 @@
 import { createHash, createHmac, hkdfSync, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { migrate } from './migrate.js';
+import { cleanSourceUrl } from './redact.js';
 import { newKey, seal, unseal } from './seal.js';
 
 const ENVELOPE_VERSION = '1';
@@ -115,6 +116,9 @@ export function openStore(path = ':memory:', { masterKey, onTruncated } = {}) {
   db.exec('PRAGMA busy_timeout = 5000');
   // Deleted content is overwritten, not left on a free page (R11).
   db.exec('PRAGMA secure_delete = ON');
+  // A REPLACE deletes the row it replaces; with this, that delete meets the triggers that refuse
+  // one, so an append-only record can't be rewritten in place.
+  db.exec('PRAGMA recursive_triggers = ON');
   // What a revocation reaches is worked out in a temp table: kept in memory, never in a file outside the store's directory.
   db.exec('PRAGMA temp_store = MEMORY');
   // A new store is switched to WAL by whichever writer gets there first, and
@@ -232,7 +236,8 @@ export function openStore(path = ':memory:', { masterKey, onTruncated } = {}) {
       event.captureType,
       event.source,
       event.sourceApp ?? null,
-      event.sourceUrl ?? null,
+      // Kept in plain metadata, which Forget leaves: scheme, host and path only, redacted.
+      cleanSourceUrl(event.sourceUrl),
       event.privacyLevel,
       event.classification ?? null,
       payloadHash,

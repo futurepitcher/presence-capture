@@ -65,6 +65,24 @@ final class SharedCasesTests: XCTestCase {
         }
     }
 
+    func testKeepsOfAPagesAddressWhatTheCasesSay() throws {
+        let file = try cases("source-url")
+        for c in try XCTUnwrap(file["cases"] as? [[String: Any]]) {
+            XCTAssertEqual(SourceURL.clean(c["input"] as? String), c["output"] as? String, c["name"] as? String ?? "")
+        }
+        XCTAssertEqual(SourceURL.maxLength, file["max_length"] as? Int)
+        let long = "https://example.com/" + String(repeating: "a", count: 5000)
+        XCTAssertEqual(SourceURL.clean(long)?.unicodeScalars.count, SourceURL.maxLength)
+    }
+
+    func testRedactsManyPrivateKeyStartsWithNoEndInLinearTime() {
+        // A page can show thousands of them, unseen; each capture of it is redacted.
+        let text = String(repeating: "-----BEGIN PRIVATE KEY-----\n", count: 8000)
+        let started = Date()
+        XCTAssertEqual(Redact.redact(text), "[PRIVATE_KEY]")
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1, "redaction runs in the capture path")
+    }
+
     func testRedactsALongRunInLinearTime() {
         let started = Date()
         for run in [String(repeating: "x", count: 400_000), String(repeating: "7", count: 400_000), String(repeating: "a1.", count: 130_000)] {

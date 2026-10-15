@@ -79,8 +79,9 @@ Before anything is written, secrets (private keys, tokens, API keys,
 `password=…`) and personal identifiers (emails, card and phone numbers, IP
 addresses) in captured text are replaced with labels such as `[API_KEY]`.
 Redaction matches known patterns, so a secret in a shape it doesn't know isn't
-caught. It covers the text, not the record: a page's full URL is kept as it
-was, in plain text, and stays after Forget. The order of
+caught. The record isn't sealed: a page's address is kept in plain text, and
+stays after Forget, but only its scheme, host and path, redacted like text. Its
+query and fragment, where tokens usually are, are never kept. The order of
 steps is in [CONTRACT.md](https://github.com/futurepitcher/presence-capture/blob/main/packages/daemon/CONTRACT.md#write-path).
 
 ### What about other people on a call or in the room?

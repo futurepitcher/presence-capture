@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { isExcluded, parseExclusionList, SELF_WINDOWS, SYSTEM_APPS } from '../../src/exclusion.js';
-import { redact } from '../../src/redact.js';
+import { cleanSourceUrl, redact } from '../../src/redact.js';
 
 const cases = (name) => JSON.parse(readFileSync(new URL(`../../cases/${name}.json`, import.meta.url), 'utf8'));
 
 const exclusion = cases('exclusion');
 const redaction = cases('redaction');
+const sourceUrl = cases('source-url');
 
 test('R8: the reference holds the same built-in lists as the shared cases', () => {
   assert.deepEqual(SYSTEM_APPS, exclusion.system_apps);
@@ -39,6 +40,25 @@ for (const c of redaction.cases) {
     for (const leak of c.must_not_contain ?? []) assert.ok(!out.includes(leak), `leaked ${leak}: ${out}`);
   });
 }
+
+for (const c of sourceUrl.cases) {
+  test(`source URL: ${c.name}`, () => {
+    assert.equal(cleanSourceUrl(c.input), c.output);
+  });
+}
+
+test('source URL: cut to its longest', () => {
+  const long = `https://example.com/${'a'.repeat(5000)}`;
+  assert.equal([...cleanSourceUrl(long)].length, sourceUrl.max_length);
+});
+
+test('redaction runs in linear time over many private-key starts with no end', () => {
+  // A page can show thousands of them, unseen; each capture of it is redacted.
+  const text = '-----BEGIN PRIVATE KEY-----\n'.repeat(8000);
+  const started = Date.now();
+  assert.equal(redact(text), '[PRIVATE_KEY]');
+  assert.ok(Date.now() - started < 1000, `took ${Date.now() - started} ms`);
+});
 
 test('redaction runs in linear time over a long run of letters or digits', () => {
   // Captured text can hold a long base64 or hex blob, and redaction runs in

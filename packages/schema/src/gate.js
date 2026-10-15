@@ -17,6 +17,13 @@ import { RevokedError } from './store.js';
  *   `source` names every capture's source, as a sensor plugin's are
  *   (`sensor:<name>`); unset, each kind keeps its built-in source.
  */
+// How far ahead of now an observation may be stamped (clocks differ a little): further, and it's
+// refused, since nothing (Forget, retention) can reach what's stamped in the future.
+export const FUTURE_SKEW_MS = 300_000;
+// The longest an app, bundle or device name is kept, with no control characters: plain metadata.
+export const NAME_LENGTH = 256;
+const name = (value) => (value == null ? value : [...String(value).replace(/[\u0000-\u001f\u007f]/g, '')].slice(0, NAME_LENGTH).join(''));
+
 export function createGate(store, { fragments = [], platform = 'macos', source } = {}) {
   const stats = { appended: 0, excluded: 0, redacted: 0, invalid: 0, duplicates: 0, refused: 0, captureIds: [] };
   // One observation's captures, all in one transaction (an audio segment and
@@ -50,18 +57,22 @@ export function createGate(store, { fragments = [], platform = 'macos', source }
     return out;
   };
 
-  function ingest(o) {
-    if (observationError(o)) {
+  function ingest(observation) {
+    if (observationError(observation) || Date.parse(observation.at) > Date.now() + FUTURE_SKEW_MS) {
       stats.invalid += 1;
       return;
     }
+    const o = observation;
+    // Names as kept in plain metadata: short, with no control characters. Exclusion matches the
+    // names as the sensor gave them, before this.
+    const kept = { app: name(o.app), bundle: name(o.bundle), device: name(o.device) };
 
     if (o.kind === 'audio') {
       const audioId = `cap_${randomUUID()}`;
       append([{
-        captureId: audioId, captureType: 'audio_segment', source: source ?? 'ambient_audio', sourceApp: o.device, capturedAt: o.at,
+        captureId: audioId, captureType: 'audio_segment', source: source ?? 'ambient_audio', sourceApp: kept.device, capturedAt: o.at,
       }, {
-        captureType: 'audio_transcript', source: source ?? 'ambient_audio', sourceApp: o.device, capturedAt: o.at,
+        captureType: 'audio_transcript', source: source ?? 'ambient_audio', sourceApp: kept.device, capturedAt: o.at,
         contentText: clean(o.transcript), extraction: 'asr', derivedFrom: audioId,
       }], o);
       return;
@@ -84,12 +95,12 @@ export function createGate(store, { fragments = [], platform = 'macos', source }
 
     if (o.kind === 'screen') {
       append([{
-        captureType: 'screen_text', source: source ?? 'screen', sourceApp: o.bundle ?? o.app,
+        captureType: 'screen_text', source: source ?? 'screen', sourceApp: kept.bundle ?? kept.app,
         sourceUrl: o.url ?? null, capturedAt: o.at, contentText: clean(o.text), extraction: o.extraction ?? 'ocr',
       }], o);
     } else {
       append([{
-        captureType: 'activity', source: source ?? 'activity', sourceApp: o.bundle ?? o.app, capturedAt: o.at,
+        captureType: 'activity', source: source ?? 'activity', sourceApp: kept.bundle ?? kept.app, capturedAt: o.at,
         contentText: JSON.stringify({ app: o.app, window: clean(o.window ?? ''), state: o.state }), extraction: 'none',
       }], o);
     }

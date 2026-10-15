@@ -15,6 +15,9 @@ public enum StoreError: Error, CustomStringConvertible, Equatable {
     case revoked(String)
     case sealing
     case sqlite(String)
+    /// The writer's own `admit` said no, once the store was held for it (capture paused while the
+    /// write waited): nothing is written.
+    case notAdmitted
 
     public var description: String {
         switch self {
@@ -24,6 +27,7 @@ public enum StoreError: Error, CustomStringConvertible, Equatable {
         case .revoked(let message): return "revoked: \(message)"
         case .sealing: return "sealing failed"
         case .sqlite(let message): return "capture store: \(message)"
+        case .notAdmitted: return "not admitted"
         }
     }
 }
@@ -96,23 +100,40 @@ public final class CaptureStore: @unchecked Sendable {
     /// with none of the person's environment.
     public static var defaultHome: String { NSHomeDirectory() + "/Library/Application Support/Presence Capture" }
 
+    /// Makes a file or folder the person's alone (`mode`), when it's there and theirs: a store or a
+    /// home made before files were kept private, or copied in. Anything else is left as it is.
+    public static func makePrivate(_ path: String, mode: mode_t) {
+        var info = stat()
+        guard lstat(path, &info) == 0, info.st_uid == getuid(), (info.st_mode & S_IFMT) != S_IFLNK else { return }
+        if info.st_mode & 0o777 != mode { chmod(path, mode) }
+    }
+
     /// Opens (creating when missing) the store at `path`, sealed under `masterKey`, which is never
     /// written down. Refuses a key that isn't this store's.
     public init(path: String, masterKey: SymmetricKey) throws {
         guard masterKey.bitCount == 256 else { throw StoreError.sqlite("masterKey must be 32 bytes") }
         self.masterKey = masterKey
         dedupeSecret = HKDF<SHA256>.deriveKey(inputKeyMaterial: masterKey, info: Data("presence-capture dedupe".utf8), outputByteCount: 32)
-        try FileManager.default.createDirectory(at: URL(fileURLWithPath: path).deletingLastPathComponent(), withIntermediateDirectories: true)
+        // A folder it makes is the person's alone (the default under Application Support already is).
+        try FileManager.default.createDirectory(at: URL(fileURLWithPath: path).deletingLastPathComponent(), withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
         guard sqlite3_open(path, &db) == SQLITE_OK else { throw StoreError.sqlite("can't open the store") }
         // Another process (a reader, another writer) may hold the write lock for a moment: wait for it.
         sqlite3_busy_timeout(db, 5000)
         try exec("PRAGMA foreign_keys = ON")
         // Deleted content is overwritten, not left on a free page (R11).
         try exec("PRAGMA secure_delete = ON")
+        // A REPLACE deletes the row it replaces; with this, that delete meets the triggers that
+        // refuse one, so an append-only record can't be rewritten in place.
+        try exec("PRAGMA recursive_triggers = ON")
         // What a revocation reaches is worked out in a temp table: kept in memory, never in a file
         // outside the store's directory.
         try exec("PRAGMA temp_store = MEMORY")
         try switchToWAL()
+        // A store made before files were kept private (or copied in) is made so now: the database
+        // and its log and index, where they're the person's. New ones SQLite makes follow the
+        // database's mode.
+        for file in [path, path + "-wal", path + "-shm"] { Self.makePrivate(file, mode: 0o600) }
         try migrate()
         do {
             try checkKey(writing: true)
@@ -204,8 +225,8 @@ public final class CaptureStore: @unchecked Sendable {
     /// Appends a capture: event, key, sealed text and sealed payload in one transaction, so a
     /// capture never exists half-sealed. The payload hash is over the sealed bytes.
     @discardableResult
-    public func append(_ capture: NewCapture) throws -> String {
-        try appendAll([capture])[0]
+    public func append(_ capture: NewCapture, admit: () -> Bool = { true }) throws -> String {
+        try appendAll([capture], admit: admit)[0]
     }
 
     /// Appends several captures in one transaction: all of them or none. A later one can name an
@@ -213,12 +234,18 @@ public final class CaptureStore: @unchecked Sendable {
     /// segment and its transcript land together, and a duplicate segment (its dedupe key) or a
     /// failed transcript leaves nothing.
     @discardableResult
-    public func appendAll(_ captures: [NewCapture]) throws -> [String] {
+    /// `admit` is asked once the store is held for the write (its lock, then SQLite's), just before
+    /// anything is written: a writer that may have waited there (another writer holding the store)
+    /// says whether it still may write. No, and nothing is (`StoreError.notAdmitted`).
+    public func appendAll(_ captures: [NewCapture], admit: () -> Bool = { true }) throws -> [String] {
         try lock.withLock {
             var ids: [String] = []
             // Under the write lock from the start, so no revocation can commit between the check
             // that nothing here was forgotten and the write.
-            try transaction(immediate: true) { ids = try captures.map(appendLocked) }
+            try transaction(immediate: true) {
+                guard admit() else { throw StoreError.notAdmitted }
+                ids = try captures.map(appendLocked)
+            }
             return ids
         }
     }
@@ -249,7 +276,8 @@ public final class CaptureStore: @unchecked Sendable {
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             captureId, try nextSequence(), capturedAt, capture.captureType, capture.source,
-            capture.sourceApp, capture.sourceUrl, capture.privacyLevel, capture.classification, payloadHash,
+            // Kept in plain metadata, which Forget leaves: scheme, host and path only, redacted.
+            capture.sourceApp, SourceURL.clean(capture.sourceUrl), capture.privacyLevel, capture.classification, payloadHash,
             capture.extraction, capture.derivedFrom, capture.dedupeKey)
         try run("INSERT INTO capture_key (capture_id, wrapped_key, created_at) VALUES (?, ?, ?)",
                 captureId, try Seal.seal(Seal.bytes(dataKey), key: masterKey, aad: "key:\(captureId)"), createdAt)

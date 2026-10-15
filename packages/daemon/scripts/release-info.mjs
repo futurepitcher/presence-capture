@@ -40,10 +40,19 @@ const sha256 = (path) => createHash('sha256').update(readFileSync(path)).digest(
 
 const programs = ['PresenceCapture', 'pcap-mcp', 'pcap'].map((name) => ({ name, path: join(args.app, 'Contents/MacOS', name) }));
 
-/** What a binary links, as `otool -L` says: system frameworks and libraries only. */
-const linked = (path) => (run('otool', '-L', path) ?? '').split('\n').slice(1)
-  .map((line) => line.trim().split(' (')[0])
-  .filter((lib) => lib.startsWith('/System/Library/') || lib.startsWith('/usr/lib/'));
+/**
+ * What a binary links, as `otool -L` says. It's meant to be the system's alone (no third-party
+ * runtime dependencies): anything else, or a binary otool can't read, stops the release rather than
+ * leaving the SBOM short.
+ */
+const linked = (path) => {
+  const out = run('otool', '-L', path);
+  if (out == null) throw new Error(`otool couldn't read ${path}: the SBOM would be incomplete`);
+  const libraries = out.split('\n').slice(1).map((line) => line.trim().split(' (')[0]).filter(Boolean);
+  const foreign = libraries.filter((lib) => !lib.startsWith('/System/Library/') && !lib.startsWith('/usr/lib/'));
+  if (foreign.length > 0) throw new Error(`${basename(path)} links ${foreign.join(', ')}, which isn't part of macOS: the SBOM lists none`);
+  return libraries;
+};
 
 const macos = run('sw_vers', '-productVersion');
 const libraries = [...new Set(programs.flatMap((p) => linked(p.path)))].sort();

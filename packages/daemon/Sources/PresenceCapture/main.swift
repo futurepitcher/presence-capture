@@ -52,6 +52,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var sensors: SensorPlugins?
     /// Whether capture is held, for sensor plugins, whose output arrives off the main thread.
     private let heldNow = Flag()
+    /// Held, as screen capture reads it: set here at once, so a capture under way sees a Pause.
+    private let screenHold = HoldState()
     /// Since when the exclusion list has been readable: what's heard is kept only if said since (R8).
     private let exclusionsReadable = ReadableSince()
     private var timers: [Timer] = []
@@ -100,13 +102,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func holdCapture(going: Bool = false) {
         let held = going || heldFor != nil
         heldNow.value = held
+        screenHold.set(held)
         audio?.tick(listening: !held && CGPreflightScreenCaptureAccess() && loadExclusions() != nil)
         if held {
             activity?.reset()
             dictation?.cancel(paused ? .paused : .locked)
         }
-        guard let capturer else { return }
-        Task { await capturer.hold(held) }
+        // Screen capture reads screenHold, set above, directly: nothing queued can set it back.
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -115,11 +117,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         buildMenu()
+        // The app's own folders and log, the person's alone, however an earlier build left them.
+        for folder in [home, home + "/logs"] { CaptureStore.makePrivate(folder, mode: 0o700) }
+        CaptureStore.makePrivate(home + "/logs/capture.log", mode: 0o600)
         log = Logger(path: home + "/logs/capture.log")
         let log = self.log!
         do {
-            let store = try CaptureStore(path: home + "/store.sqlite", masterKey: try Keychain.masterKey(log: log.write))
-            let capturer = ScreenCapturer(store: store, log: log.write)
+            let storeExists = FileManager.default.fileExists(atPath: home + "/store.sqlite")
+            let store = try CaptureStore(path: home + "/store.sqlite", masterKey: try Keychain.masterKey(storeExists: storeExists, log: log.write))
+            let capturer = ScreenCapturer(store: store, holding: screenHold, log: log.write)
             (self.store, self.capturer) = (store, capturer)
             activity = ActivityCapturer(store: store, log: log.write)
             if #available(macOS 26, *) {
@@ -145,7 +151,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             log.write("start.ready")
         } catch {
             log.write("start.failed \(String(describing: type(of: error)))")
-            problem = error is MasterKeyError ? "The store's key couldn't be read from or kept in the Keychain" : "The capture store couldn't be opened"
+            problem = error is Keychain.StoreWithoutKey
+                ? "The store is here, but its key isn't in this Mac's Keychain. Restore the Keychain from the same backup as the store, or move the store aside to start a new one"
+                : error is MasterKeyError ? "The store's key couldn't be read from or kept in the Keychain" : "The capture store couldn't be opened"
         }
         watchSleep()
         // Permissions are asked for when the person chooses to, from the menu or the first-run
@@ -161,6 +169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             let held = self.heldFor != nil
             self.heldNow.value = held
+            self.screenHold.set(held)
             let seesScreen = CGPreflightScreenCaptureAccess()
             // A list that exists but can't be read: nothing is captured until it can be (R8), what's
             // heard included. Hearing stops, and what it was still transcribing isn't kept.
@@ -175,10 +184,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             // A permission taken away stops dictation.
             self.dictation?.check()
-            Task {
-                await capturer.hold(held)
-                if !held { await capturer.tick(fragments: fragments) }
-            }
+            // A tick that runs late, after a Pause, finds it held (screenHold, set at once) and does nothing.
+            if !held { Task { await capturer.tick(fragments: fragments) } }
             self.refresh()
         })
         timers.append(Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
@@ -684,12 +691,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ConnectAgent.quitting = true
         // A confirmation on screen is answered no.
         if ConnectAgent.confirming { NSApp.abortModal() }
-        sensors?.stop()
+        // Sensors are told to stop at once; quitting waits until they, and all they started, have.
+        let sensorsGone = DispatchGroup()
+        if let sensors {
+            sensorsGone.enter()
+            sensors.stop { sensorsGone.leave() }
+        }
         timers.forEach { $0.invalidate() }
         timers = []
         holdCapture(going: true)
         dictation?.stop()
-        Self.finishWriting(activity: activity, audio: audio, dictation: dictation, admin: admin, connecting: ConnectAgent.underWay) {
+        Self.finishWriting(activity: activity, audio: audio, dictation: dictation, admin: admin, connecting: ConnectAgent.underWay,
+                           sensors: sensorsGone) {
             NSApp.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
@@ -700,9 +713,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// withdrawal), what activity and dictation have queued, and listening. Then `done`, on the main
     /// thread, after any result those posted there.
     static func finishWriting(activity: ActivityCapturer?, audio: Listener?, dictation: Dictating? = nil, admin: DispatchQueue,
-                              connecting: DispatchGroup, done: @escaping () -> Void) {
+                              connecting: DispatchGroup, sensors: DispatchGroup = DispatchGroup(), done: @escaping () -> Void) {
         Task.detached {
             await withCheckedContinuation { done in connecting.notify(queue: .global()) { done.resume() } }
+            await withCheckedContinuation { done in sensors.notify(queue: .global()) { done.resume() } }
             await withCheckedContinuation { done in admin.async { done.resume() } }
             activity?.flush()
             await dictation?.drained()
@@ -750,6 +764,8 @@ private extension Int {
     var nonZero: Int? { self == 0 ? nil : self }
 }
 
+// Everything the app makes (the store, its log, the exclusion list, sensors.json) is the person's alone.
+umask(0o077)
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
