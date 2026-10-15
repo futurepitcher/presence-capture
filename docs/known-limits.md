@@ -25,9 +25,10 @@ or because it can't be fixed from inside the app.
   metadata that stays after Forget. Its query and fragment, where tokens
   usually are, are never kept; a secret in the path itself, in a shape
   redaction doesn't know, would be. A store made before 0.1.0 has its old
-  addresses cut the same way when it's first opened (migration 011), but a
-  pattern inside an old path, an email say, isn't redacted there: Forget that
-  stretch to erase it.
+  addresses cut as far as SQL can when it's first opened (migration 011): the
+  query, fragment, userinfo and page-carrying schemes go. A pattern inside an
+  old path (an email, say) isn't redacted, nor a control character removed:
+  Forget that stretch to erase it.
 - **Speech that runs into a forgotten stretch.** An utterance is stamped when it
   began. One that began just before the stretch you forgot, and ran on into
   it, is kept: at most the length of one utterance.
