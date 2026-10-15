@@ -69,7 +69,7 @@ and live in `payload_blob` or a file `storage_uri` names.
 | `capture_type` | TEXT | `screen_frame`, `screen_text`, `audio_segment`, `audio_transcript`, `audio_alignment`, `activity` |
 | `source` | TEXT | Source family. Platform-neutral (R9) |
 | `source_app` | TEXT NULL | Bundle id or executable where known |
-| `source_url` | TEXT NULL | MUST be `NULL` when not establishable. MUST NOT be inferred from content |
+| `source_url` | TEXT NULL | MUST be `NULL` when not establishable. MUST NOT be inferred from content. It's plain metadata that Forget leaves, so an implementation MUST keep only an address's scheme, host and path: userinfo, query, fragment and control characters dropped, the rest redacted as text, at most 2048 characters; and MUST keep nothing (`NULL`) of an address of a scheme that can carry the page itself (`data`, `javascript`, `vbscript`, `blob`, `about`) or with no `scheme://` form. [`cases/source-url.json`](../../packages/schema/cases/source-url.json) holds every implementation to the same answers; migration 011 cuts addresses kept before this rule |
 | `privacy_level` | TEXT | `standard`, `sensitive`, `excluded`, `sacred_mode` |
 | `classification` | TEXT NULL | Opaque to the schema (R6) |
 | `payload_hash` | TEXT NULL | FK to `capture_payload` |
@@ -77,9 +77,13 @@ and live in `payload_blob` or a file `storage_uri` names.
 | `derived_from` | TEXT NULL | FK to `capture_event`. Set on derived artifacts (R10) |
 | `dedupe_key` | TEXT NULL | Unique where not null (R7). For an observation a sensor marks with `dedupe` ([ADR 0007](../adr/0007-plugins.md)): hex(HMAC-SHA256(HKDF-SHA256(master key, empty salt, info `presence-capture dedupe`, 32 bytes), source ‖ U+001F ‖ value)). It outlives a revocation, so a revoked observation isn't captured again, and without the master key it says nothing about the value |
 
-Implementations MUST reject UPDATE and DELETE against this table. The reference
-implementation enforces this with database triggers rather than application
-convention, because a convention is not a guarantee.
+Implementations MUST reject UPDATE and DELETE against this table, the delete an
+`INSERT OR REPLACE` makes included. The reference implementation enforces this
+with database triggers rather than application convention, because a convention
+is not a guarantee, and opens the store with `recursive_triggers` on so a
+REPLACE's delete meets them. The one exception is a migration that brings
+metadata kept before a rule up to it (011, `source_url`), which lifts the
+update trigger for its one statement, inside its transaction, and puts it back.
 
 The event records *that* something was captured. *What* was captured is never
 in it: see the next section.

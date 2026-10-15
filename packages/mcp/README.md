@@ -15,7 +15,7 @@ The tests start the server under test as an MCP client would, over stdio,
 with `--store <path> --grant <grant_id> --master-key-file <path>`. They
 seed and inspect the store through the reference, which opens any conformant
 store. The native server, `pcap-mcp` (in `packages/daemon`), passes the same
-12.
+tests: all of them, the ADR 0001 §7 set below included.
 
 Run it against a store:
 
