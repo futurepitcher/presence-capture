@@ -214,7 +214,7 @@ wrote the content. The store runs with `secure_delete = ON`, so deleted cells ar
 - **Why a key per capture.** An APFS snapshot or an SSD can keep bytes the filesystem was asked
   to remove. The key is a few dozen bytes in one SQLite page that can be overwritten. Without
   it, a surviving ciphertext is noise (ADR 0002 §2).
-- **Retention** is the same mechanism with `reason = 'retention'`. The app defaults to 14 days.
+- **Retention** is the same mechanism with `reason = 'retention'`. The app defaults to a year; a person who chooses Indefinitely keeps everything until they forget it, so a stolen, unlocked store holds more.
 
 How it's tested:
 - **The forensic check** (conformance suite, R11) revokes an audio capture and its transcript

@@ -75,6 +75,28 @@ final class MenuTests: XCTestCase {
         XCTAssertFalse(AppDelegate.retentionChanged(.failure(Failed())))
     }
 
+    func testRetentionIsAYearUnlessChosenAndIndefinitelyKeepsEverything() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "retention-\(UUID().uuidString)"))
+        XCTAssertEqual(AppDelegate.retentionDays(defaults), 365, "the default isn't a year")
+        XCTAssertEqual(AppDelegate.retentionPeriod(AppDelegate.retentionDays(defaults)), 365)
+        defaults.set(AppDelegate.keepIndefinitely, forKey: "retentionDays")
+        XCTAssertNil(AppDelegate.retentionPeriod(AppDelegate.retentionDays(defaults)), "kept indefinitely, yet something would age out")
+        XCTAssertEqual(AppDelegate.retentionChoices.last, AppDelegate.keepIndefinitely, "Indefinitely isn't offered, or isn't the longest")
+        XCTAssertEqual(AppDelegate.span(AppDelegate.keepIndefinitely).capitalized, "Indefinitely")
+        XCTAssertEqual(AppDelegate.kept(AppDelegate.keepIndefinitely), "kept indefinitely")
+        XCTAssertEqual(AppDelegate.kept(14), "kept for 14 days")
+    }
+
+    func testWhatsAppIsApprovedWithItsOwnConsent() {
+        XCTAssertTrue(AppDelegate.isWhatsApp(["/opt/homebrew/bin/node", "/src/presence-capture/packages/plugins/whatsapp/sensor.mjs", "--experimental"]))
+        XCTAssertFalse(AppDelegate.isWhatsApp(["/opt/homebrew/bin/node", "/src/git-activity/sensor.mjs"]))
+        let consent = AppDelegate.whatsAppConsent(kept: AppDelegate.kept(365))
+        for words in ["every WhatsApp chat", "both sides", "kept for 1 year", "Exclude WhatsApp Chats…", "Forget a WhatsApp Chat…", "Pause", "Don't connect an agent"] {
+            XCTAssertTrue(consent.contains(words), "the consent doesn't say \(words)")
+        }
+        XCTAssertFalse(consent.contains("\u{2014}"))
+    }
+
     // MARK: Agents Read
 
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -132,7 +154,10 @@ final class MenuTests: XCTestCase {
             ("agents-read-list", AnyView(AgentsReadView.ReadsList(egress: snapshot.egress).padding(20).frame(width: 600))),
             ("agents-read-grants", AnyView(AgentsReadView.GrantsList(grants: snapshot.grants, withdraw: { _ in }).padding(20).frame(width: 600))),
             ("onboarding", AnyView(OnboardingView(permissions: { Permissions(screen: true, microphone: false, accessibility: false) }, canHear: true, hearing: { false },
-                                                  allowScreen: {}, allowMicrophone: {}, allowAccessibility: {}, connect: { _ in }, done: {}))),
+                                                  allowScreen: {}, allowMicrophone: {}, allowAccessibility: {},
+                                                  whatsApp: WhatsAppControls(status: { .off }, maxHistoryDays: { 365 }, turnOn: { _ in }, openAccess: {}),
+                                                  retention: RetentionControls(days: { AppDelegate.defaultRetentionDays }, choose: { _ in }),
+                                                  connect: { _ in }, done: {}))),
         ]
         let keep = ProcessInfo.processInfo.environment["PRESENCE_CAPTURE_RENDER_DIR"]
         for (name, view) in views {

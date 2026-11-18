@@ -11,8 +11,9 @@ import CaptureStore
 ///
 /// The store lives in ~/Library/Application Support/Presence Capture (PRESENCE_CAPTURE_HOME to move
 /// it); its master key in the Keychain. Settings are the app's defaults: `interval` (seconds),
-/// `retentionDays`, `paused`, `hearMicrophone` (off until the person turns it on: whether a room is
-/// heard is theirs to choose), `hearSystemAudio`.
+/// `retentionDays` (a year unless the person chooses; `keepIndefinitely` keeps everything), `paused`,
+/// `hearMicrophone` (off until the person turns it on: whether a room is heard is theirs to choose),
+/// `hearSystemAudio`.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let home = CaptureStore.home
     private let defaults = UserDefaults.standard
@@ -25,6 +26,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hearMicrophoneItem: NSMenuItem!
     private var hearSystemAudioItem: NSMenuItem!
     private var approveSensorsItem: NSMenuItem!
+    private var excludeWhatsAppItem: NSMenuItem!
+    private var whatsAppItem: NSMenuItem!
+    private var forgetWhatsAppChatItem: NSMenuItem!
     private var retentionMenu: NSMenu!
     /// Dictation (R2b, macOS 26): its spans are shared with ambient audio, which drops what was dictated.
     private let dictationSpans = DictationSpans()
@@ -50,6 +54,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var activity: ActivityCapturer?
     private var log: Logger!
     private var sensors: SensorPlugins?
+    /// WhatsApp, built in (docs/sources/whatsapp.md): off until the person turns it on.
+    private var whatsApp: WhatsAppCapturer?
     /// Whether capture is held, for sensor plugins, whose output arrives off the main thread.
     private let heldNow = Flag()
     /// Held, as screen capture reads it: set here at once, so a capture under way sees a Pause.
@@ -60,9 +66,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var problem: String?
 
     private var exclusionPath: String { home + "/excluded-windows.txt" }
+    /// The WhatsApp chats never read, by the app or the sensor plugin (packages/plugins/whatsapp).
+    private var whatsAppExclusionPath: String { home + "/whatsapp-exclude.txt" }
     private var sensorsPath: String { home + "/sensors.json" }
     private var interval: TimeInterval { TimeInterval(defaults.integer(forKey: "interval").nonZero ?? 5) }
-    private var retentionDays: Int { defaults.integer(forKey: "retentionDays").nonZero ?? 14 }
+    private var retentionDays: Int { Self.retentionDays(defaults) }
     private var hearMicrophone: Bool { defaults.object(forKey: "hearMicrophone") as? Bool ?? false }
     private var hearSystemAudio: Bool { defaults.object(forKey: "hearSystemAudio") as? Bool ?? true }
 
@@ -143,8 +151,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let heldNow = self.heldNow
             sensors = SensorPlugins(configPath: sensorsPath, store: store, fragments: { Exclusion.load(exclusionPath) },
                                     held: { heldNow.value }, log: log.write)
+            let whatsAppExclusionPath = self.whatsAppExclusionPath
+            whatsApp = WhatsAppCapturer(store: store, defaults: defaults, held: { heldNow.value }, fragments: { Exclusion.load(exclusionPath) },
+                                        chats: { Exclusion.load(whatsAppExclusionPath) }, log: log.write)
             holdCapture()
             sensors?.start()
+            whatsApp?.start()
             dictation?.apply()
             schedule(capturer: capturer, store: store)
             retain(store)
@@ -196,6 +208,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             for sensor in self.sensors?.takeCounts() ?? [] {
                 log.write("sensors.hour name=\(sensor.name) appended=\(sensor.stats.appended) excluded=\(sensor.stats.excluded) redacted=\(sensor.stats.redacted) invalid=\(sensor.stats.invalid) refused=\(sensor.stats.refused) dropped=\(sensor.dropped)")
             }
+            if let whatsApp = self.whatsApp, whatsApp.enabled {
+                let stats = whatsApp.takeStats()
+                log.write("whatsapp.hour appended=\(stats.appended) excluded=\(stats.excluded) redacted=\(stats.redacted) duplicates=\(stats.duplicates) refused=\(stats.refused)")
+            }
             Task {
                 let counts = await capturer.takeCounts()
                 let average = counts.reads == 0 ? 0 : Int(counts.readMs / Double(counts.reads))
@@ -211,7 +227,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let (defaults, log) = (self.defaults, self.log!)
         admin.async {
             do {
-                let result = try store.retain(policy: { Double(defaults.integer(forKey: "retentionDays").nonZero ?? 14) })
+                let result = try store.retain(policy: { Self.retentionPeriod(Self.retentionDays(defaults)) })
                 log.write("retention.done revoked=\(result?.revokedCaptureIds.count ?? 0)")
             } catch {
                 log.write("retention.failed")
@@ -272,6 +288,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dictationItem.submenu = dictationMenu
         let exclusions = NSMenuItem(title: "Edit Excluded Apps and Windows…", action: #selector(editExclusions), keyEquivalent: "")
         approveSensorsItem = NSMenuItem(title: "Approve Sensors…", action: #selector(approveSensors), keyEquivalent: "")
+        excludeWhatsAppItem = NSMenuItem(title: "Exclude WhatsApp Chats…", action: #selector(editWhatsAppExclusions), keyEquivalent: "")
+        whatsAppItem = NSMenuItem(title: "Capture WhatsApp (Experimental)", action: #selector(toggleWhatsApp), keyEquivalent: "")
+        forgetWhatsAppChatItem = NSMenuItem(title: "Forget a WhatsApp Chat…", action: #selector(forgetWhatsAppChat), keyEquivalent: "")
         let screenItem = NSMenuItem(title: "Allow Screen Recording…", action: #selector(allowScreen), keyEquivalent: "")
         microphoneItem = NSMenuItem(title: "Allow Microphone…", action: #selector(allowMicrophone), keyEquivalent: "")
         accessibilityItem = NSMenuItem(title: "Allow Accessibility (page addresses)…", action: #selector(allowAccessibility), keyEquivalent: "")
@@ -296,7 +315,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let setUp = NSMenuItem(title: "Set Up Presence Capture…", action: #selector(showOnboarding), keyEquivalent: "")
         let updates = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
         for item in [stateItem!, audioItem!, .separator(), pauseItem!, forgetQuarter, forgetHour, .separator(), connect, agents, .separator(),
-                     hearMicrophoneItem!, hearSystemAudioItem!, dictationItem!, retention, exclusions, approveSensorsItem!, .separator(),
+                     hearMicrophoneItem!, hearSystemAudioItem!, dictationItem!, retention, exclusions, .separator(),
+                     whatsAppItem!, excludeWhatsAppItem!, forgetWhatsAppChatItem!, approveSensorsItem!, .separator(),
                      screenItem, microphoneItem!, accessibilityItem!, setUp, updates, .separator()] {
             menu.addItem(item)
         }
@@ -305,11 +325,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
     }
 
-    /// The periods the menu offers for Keep Captures For, in days.
-    static let retentionChoices = [1, 7, 14, 30, 90, 365]
+    /// Keep Captures For when the person hasn't chosen: a year.
+    static let defaultRetentionDays = 365
+    /// Keep Captures For → Indefinitely: nothing ages out. Forget and revocation still erase.
+    static let keepIndefinitely = Int.max
+
+    /// The periods the menu and the first-run window offer for Keep Captures For, in days, shortest
+    /// first: Indefinitely is the longest.
+    static let retentionChoices = [1, 7, 14, 30, 90, 365, keepIndefinitely]
+
+    nonisolated static func retentionDays(_ defaults: UserDefaults) -> Int {
+        defaults.integer(forKey: "retentionDays").nonZero ?? defaultRetentionDays
+    }
+
+    /// The period retention erases by, or nil when captures are kept indefinitely.
+    nonisolated static func retentionPeriod(_ days: Int) -> Double? {
+        days == keepIndefinitely ? nil : Double(days)
+    }
 
     static func span(_ days: Int) -> String {
-        days == 365 ? "1 year" : days == 1 ? "1 day" : "\(days) days"
+        days == keepIndefinitely ? "indefinitely" : days == 365 ? "1 year" : days == 1 ? "1 day" : "\(days) days"
+    }
+
+    /// "kept indefinitely", or "kept for 1 year".
+    static func kept(_ days: Int) -> String {
+        days == keepIndefinitely ? "kept indefinitely" : "kept for \(span(days))"
     }
 
     private func refresh() {
@@ -331,6 +371,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let waiting = sensors?.unapproved.count ?? 0
         approveSensorsItem.isHidden = waiting == 0
         approveSensorsItem.title = waiting == 1 ? "Approve 1 Sensor…" : "Approve \(waiting) Sensors…"
+        let whatsAppOn = whatsApp?.enabled ?? false
+        let whatsAppPlugin = sensors?.commands.contains(where: Self.isWhatsApp) ?? false
+        whatsAppItem.isHidden = whatsApp == nil || !(whatsAppOn || whatsApp?.installed == true)
+        whatsAppItem.state = whatsAppOn ? .on : .off
+        whatsAppItem.title = whatsAppOn && whatsApp?.status == .needsAccess ? "Capture WhatsApp (Needs Full Disk Access)"
+            : whatsAppOn && whatsApp?.status == .unknownSchema ? "Capture WhatsApp (This Version Can't Be Read)" : "Capture WhatsApp (Experimental)"
+        excludeWhatsAppItem.isHidden = !(whatsAppOn || whatsAppPlugin)
+        forgetWhatsAppChatItem.isHidden = !whatsAppOn
         let symbol = problem != nil || !seesScreen ? "exclamationmark.circle" : paused ? "pause.circle" : "record.circle"
         statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Presence Capture: \(state)")
     }
@@ -407,14 +455,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         for sensor in sensors.unapproved {
             let alert = NSAlert()
-            alert.messageText = "Run the sensor “\(sensor.name)”?"
-            alert.informativeText = [
+            let whatsApp = Self.isWhatsApp(sensor.command)
+            alert.messageText = whatsApp ? "Capture your WhatsApp chats?" : "Run the sensor “\(sensor.name)”?"
+            let consent = whatsApp ? [Self.whatsAppConsent(kept: Self.kept(retentionDays))] : []
+            alert.informativeText = (consent + [
                 sensor.command.joined(separator: " "),
                 "Why it's waiting: \(sensor.reason).",
                 "It runs with your permissions. What it sends is excluded, redacted and sealed like any capture, "
                     + "but a program you run can do anything you can. Approve it only if you trust it.",
-            ].joined(separator: "\n\n")
-            alert.addButton(withTitle: "Approve")
+            ]).joined(separator: "\n\n")
+            alert.addButton(withTitle: whatsApp ? "Capture WhatsApp" : "Approve")
             alert.addButton(withTitle: "Not Now")
             guard alert.runModal() == .alertFirstButtonReturn else { continue }
             do {
@@ -424,6 +474,164 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         refresh()
+    }
+
+    /// The WhatsApp sensor (packages/plugins/whatsapp), whatever it's named.
+    static func isWhatsApp(_ command: [String]) -> Bool { command.contains { $0.hasSuffix("/whatsapp/sensor.mjs") } }
+
+    /// The consent the WhatsApp sensor is approved with: once, when it's first turned on, in words
+    /// that say it's every chat and both sides.
+    static func whatsAppConsent(kept: String) -> String {
+        [
+            "Experimental. From now on, Presence Capture keeps the text of every WhatsApp chat on this Mac, both sides and groups too: "
+                + "what people write to you, not only what you write. No photos, voice notes or files.",
+            "It stays on this Mac, sealed, \(kept). It never sends anything, and never talks to WhatsApp.",
+            "To skip a chat, add its name to Exclude WhatsApp Chats… in the menu. Pause holds it with everything else. "
+                + "Forget a WhatsApp Chat… erases what was kept from one chat.",
+            "Don't connect an agent while it's experimental: any agent with a default grant could read these chats. "
+                + "The people you talk to haven't agreed to this by your installing it.",
+        ].joined(separator: "\n\n")
+    }
+
+    @objc private func toggleWhatsApp() {
+        guard let whatsApp else { return }
+        if whatsApp.enabled {
+            whatsApp.turnOff()
+            refresh()
+        } else {
+            askWhatsApp(history: nil)
+        }
+    }
+
+    /// Turns WhatsApp on only once its consent is agreed to: from the menu, with past messages
+    /// offered there (none by default); from the first-run window, with what was chosen there.
+    private func askWhatsApp(history chosen: Int?) {
+        guard let whatsApp, !whatsApp.enabled, !quitting else { return }
+        let most = WhatsAppCapturer.historyDays(WhatsAppDatabase.historyMaxDays, retentionDays: retentionDays)
+        let alert = NSAlert()
+        alert.messageText = "Capture your WhatsApp chats?"
+        var said = [Self.whatsAppConsent(kept: Self.kept(retentionDays))]
+        if sensors?.commands.contains(where: Self.isWhatsApp) ?? false {
+            said.append("The WhatsApp sensor plugin is set up too. Remove it from sensors.json, or every message is noted twice.")
+        }
+        let history = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 260, height: 26), pullsDown: false)
+        if let chosen {
+            if chosen > 0 { said.append("It also brings in what was sent in the last \(Self.span(chosen)), from every chat but the ones you exclude.") }
+        } else {
+            for days in WhatsAppCapturer.historyChoices where days <= most {
+                history.addItem(withTitle: days == 0 ? "No past messages (default)" : "Also the last \(Self.span(days))")
+                history.lastItem?.tag = days
+            }
+            alert.accessoryView = history
+        }
+        alert.informativeText = said.joined(separator: "\n\n")
+        alert.addButton(withTitle: "Capture WhatsApp")
+        alert.addButton(withTitle: "Not Now")
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        whatsApp.turnOn(historyDays: WhatsAppCapturer.historyDays(chosen ?? history.selectedTag(), retentionDays: retentionDays))
+        refresh()
+        whatsApp.afterRead { [weak self] status in
+            self?.refresh()
+            guard status == .needsAccess, self?.quitting == false else { return }
+            let access = NSAlert()
+            access.messageText = "Allow Presence Capture to read WhatsApp's files"
+            access.informativeText = "macOS hasn't let it read them yet. In Privacy & Security, turn on Presence Capture under Full Disk Access. "
+                + "Nothing is read until you do, and it starts by itself once you have."
+            access.addButton(withTitle: "Open Privacy Settings")
+            access.addButton(withTitle: "Later")
+            if access.runModal() == .alertFirstButtonReturn { Self.openFullDiskAccess() }
+        }
+    }
+
+    static func openFullDiskAccess() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") { NSWorkspace.shared.open(url) }
+    }
+
+    /// One chat's captures, erased with a receipt (each chat's captures carry their own app), and,
+    /// unless unticked, the chat added to the exclude list so it isn't read again.
+    @objc private func forgetWhatsAppChat() {
+        guard let whatsApp, let store, !quitting else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        guard let chats = whatsApp.chatList(), !chats.isEmpty else {
+            let alert = NSAlert()
+            alert.messageText = "WhatsApp's chats can't be read right now"
+            alert.informativeText = "pcap forget --source forgets a chat from Terminal; docs/sources/whatsapp.md says how."
+            alert.runModal()
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Forget a WhatsApp chat?"
+        alert.informativeText = "Everything kept from the chat you pick is erased from this Mac. This can't be undone."
+        let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 300, height: 26), pullsDown: false)
+        for chat in chats {
+            picker.addItem(withTitle: chat.name)
+            picker.lastItem?.tag = chat.pk
+        }
+        let skip = NSButton(checkboxWithTitle: "And don't read it again", target: nil, action: nil)
+        skip.state = .on
+        let stack = NSStackView(views: [picker, skip])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.frame = NSRect(x: 0, y: 0, width: 300, height: 56)
+        alert.accessoryView = stack
+        alert.addButton(withTitle: "Forget")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn, let chat = chats.first(where: { $0.pk == picker.selectedTag() }) else { return }
+        if skip.state == .on { addWhatsAppExclusion(chat) }
+        admin.async {
+            let outcome = Result { try store.revoke(scopeKind: "source", scopeValue: WhatsAppDatabase.chatSource(chat.pk), reason: "forget whatsapp chat") }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                let said = NSAlert()
+                switch outcome {
+                case .success(let result):
+                    self.log.write("whatsapp.forget revoked=\(result.revokedCaptureIds.count) on_disk=\(result.erasedOnDisk)")
+                    said.messageText = "Forgotten"
+                    said.informativeText = "\(result.revokedCaptureIds.count) captures from “\(chat.name)” were "
+                        + (result.erasedOnDisk ? "erased." : "revoked and can't be read. Their last traces will be erased from disk as soon as the store can finish.")
+                case .failure:
+                    self.log.write("whatsapp.forget_failed")
+                    said.messageText = "Nothing was forgotten"
+                    said.informativeText = "The store couldn't be changed just now. Try again in a moment."
+                }
+                guard !self.quitting else { return }
+                said.runModal()
+            }
+        }
+    }
+
+    /// Adds a chat to the WhatsApp exclude list, made with its note if it isn't there yet: by its name,
+    /// or by its id when the name has a "#" (which starts a note in the list).
+    private func addWhatsAppExclusion(_ chat: WhatsAppDatabase.Chat) {
+        makeWhatsAppExclusions()
+        guard let line = chat.name.contains("#") ? chat.id : chat.name, let handle = FileHandle(forWritingAtPath: whatsAppExclusionPath) else { return }
+        defer { try? handle.close() }
+        _ = try? handle.seekToEnd()
+        try? handle.write(contentsOf: Data("\n\(line)\n".utf8))
+    }
+
+    /// The WhatsApp list of chats never read, opened in the person's text editor; made with a note on
+    /// first use. It's read before every read of WhatsApp's files.
+    @objc private func editWhatsAppExclusions() {
+        makeWhatsAppExclusions()
+        NSWorkspace.shared.open(URL(fileURLWithPath: whatsAppExclusionPath))
+    }
+
+    private func makeWhatsAppExclusions() {
+        if !FileManager.default.fileExists(atPath: whatsAppExclusionPath) {
+            try? FileManager.default.createDirectory(atPath: home, withIntermediateDirectories: true)
+            let note = """
+                # WhatsApp chats Presence Capture never reads, one a line: the chat's name as
+                # WhatsApp shows it, or its id. A line matches a whole name, in any case.
+                # Saved changes apply from the next read, within a minute. Lines starting with # are notes.
+                # What was already kept from a chat stays until it's forgotten: see docs/sources/whatsapp.md.
+                #
+                # Family
+
+                """
+            FileManager.default.createFile(atPath: whatsAppExclusionPath, contents: Data(note.utf8), attributes: [.posixPermissions: 0o600])
+        }
     }
 
     /// The person's own list, opened in their text editor; made with a note on first use.
@@ -493,6 +701,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                            allowScreen: { [weak self] in self?.allowScreen() },
                            allowMicrophone: { [weak self] in self?.askForMicrophone(thenHear: true) },
                            allowAccessibility: { [weak self] in self?.allowAccessibility() },
+                           whatsApp: whatsApp.map { whatsApp in
+                               WhatsAppControls(status: { whatsApp.status },
+                                                maxHistoryDays: { [weak self] in
+                                                    WhatsAppCapturer.historyDays(WhatsAppDatabase.historyMaxDays, retentionDays: self?.retentionDays ?? Self.defaultRetentionDays)
+                                                },
+                                                turnOn: { [weak self] days in self?.askWhatsApp(history: days) },
+                                                openAccess: { Self.openFullDiskAccess() })
+                           },
+                           retention: RetentionControls(days: { [weak self] in self?.retentionDays ?? Self.defaultRetentionDays },
+                                                        choose: { [weak self] days in self?.chooseRetention(days) }),
                            connect: { [weak self] client in self?.connect(client) },
                            done: { [weak self] in self?.windows.close("onboarding") })
         }
@@ -542,9 +760,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// A shorter period erases what's older now, so it's asked first, and it's kept only once what's
     /// older is revoked: if that fails, the period stays as it was, to try again. A longer one erases
     /// nothing yet.
-    @objc private func setRetention(_ sender: NSMenuItem) {
+    @objc private func setRetention(_ sender: NSMenuItem) { chooseRetention(sender.tag) }
+
+    /// Keep Captures For, from the menu or the first-run window.
+    private func chooseRetention(_ days: Int) {
         guard !quitting else { return }
-        let days = sender.tag
         guard !retentionChanging else {
             let busy = NSAlert()
             busy.messageText = "Keep Captures For is still being changed"
@@ -602,7 +822,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .failure:
             log.write("retention.set_failed days=\(days)")
             said.messageText = "Nothing was erased"
-            said.informativeText = "The store couldn't revoke what's older than \(Self.span(days)), so captures are still kept for \(Self.span(retentionDays)). Try again in a moment."
+            said.informativeText = "The store couldn't revoke what's older than \(Self.span(days)), so captures are still \(Self.kept(retentionDays)). Try again in a moment."
         }
         NSApp.activate(ignoringOtherApps: true)
         said.runModal()
@@ -696,6 +916,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let sensors {
             sensorsGone.enter()
             sensors.stop { sensorsGone.leave() }
+        }
+        if let whatsApp {
+            whatsApp.stop()
+            sensorsGone.enter()
+            DispatchQueue.global().async { whatsApp.flush(); sensorsGone.leave() }
         }
         timers.forEach { $0.invalidate() }
         timers = []

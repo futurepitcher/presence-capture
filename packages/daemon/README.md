@@ -170,6 +170,12 @@ With no `--store`, `pcap-mcp` opens the app's store:
 }
 ```
 
+`pcap forget --source <source>` forgets everything one source sent, at any
+time: WhatsApp (`whatsapp`), a sensor (`sensor:whatsapp`), or one WhatsApp
+chat (`net.whatsapp.WhatsApp.chat-12`, as the plugin's `--list-chats` names
+it; the menu's Forget a WhatsApp Chat… picks it by name). It asks first,
+unless given `--yes`.
+
 `pcap forget` is the menu's Forget, from the command line. The running app
 isn't told, so the app it was in front of is noted again at the next change,
 not at once.
@@ -183,17 +189,21 @@ not at once.
 | Connect an Agent → Claude Code… / Claude Desktop… / Cursor… | What `pcap connect` does: a grant of its own for 30 days, and `pcap-mcp` in the agent's MCP config. The change is shown, with its diff, and asked about; the config is copied aside first |
 | Agents Read… | Every agent's grant, with Withdraw…, and what each was given, day by day, by tool and kind: counts from the egress log, never content |
 | Hear the Microphone / Hear System Audio | Each input device on or off |
-| Keep Captures For → 1 Day … 1 Year | Retention (ADR 0003). A shorter period erases what's older at once, so it's asked first, and it's kept only once that's revoked: if the store can't, the period stays as it was |
+| Keep Captures For → 1 Day … 1 Year, Indefinitely | Retention (ADR 0003), a year unless you choose. Indefinitely keeps everything until you forget it. A shorter period erases what's older at once, so it's asked first, and it's kept only once that's revoked: if the store can't, the period stays as it was |
 | Edit Excluded Apps and Windows… | Your list, one fragment a line, applied within seconds. If it can't be read, nothing is captured |
-| Set Up Presence Capture… | The first-run window, again: each permission, what it's for, and connecting an agent |
+| Capture WhatsApp (Experimental) | Off until turned on here or in the set-up window, with its consent. Then every WhatsApp chat on this Mac, both sides, read-only from WhatsApp Desktop's own files every 30 seconds ([docs/sources/whatsapp.md](../../docs/sources/whatsapp.md)). Turning it on offers past messages, none by default. Shown when WhatsApp Desktop is on this Mac |
+| Exclude WhatsApp Chats… | Shown while WhatsApp is captured (or its sensor plugin is set up): the chats never read, by name or id |
+| Forget a WhatsApp Chat… | Shown while WhatsApp is captured: erases what was kept from one chat, with a receipt, and by default adds it to the exclude list. Asked first |
+| Set Up Presence Capture… | The first-run window, again: each permission, what it's for, WhatsApp (optional, with past messages off by default), how long captures are kept, and connecting an agent |
 | Check for Updates… | Asks GitHub for the latest release and offers its page if it's newer. Only when chosen: it's the one request the app makes |
 
 The first launch opens the set-up window. Nothing is asked for until its
 button is pressed; allowing the microphone there also turns on Hear the
 Microphone.
 
-Retention erases what's older than 14 days unless Keep Captures For says
-otherwise, hourly. The log, in `logs/`, holds counts only.
+Retention erases what's older than a year unless Keep Captures For, or the
+set-up window, says otherwise, hourly. Indefinitely turns it off; Forget and
+revocation still erase. The log, in `logs/`, holds counts only.
 
 ## Dictation (experimental)
 

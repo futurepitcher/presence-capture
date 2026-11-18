@@ -89,6 +89,13 @@ final class AdminTests: XCTestCase {
         XCTAssertEqual(try store.verifyEgressChain().ok, true)
     }
 
+    func testRetentionKeptIndefinitelyRevokesNothing() throws {
+        let store = try store()
+        let old = try store.append(NewCapture(capturedAt: Date().addingTimeInterval(-3_000 * 86_400), captureType: "screen_text", source: "screen", contentText: "old"))
+        XCTAssertNil(try store.retain(policy: { nil }), "keeping captures indefinitely revoked something")
+        XCTAssertEqual(try store.contentText(old), "old")
+    }
+
     func testRetentionUsesThePeriodAsItIsOnceTheStoreIsHeld() throws {
         let store = try store()
         let old = try store.append(NewCapture(capturedAt: Date().addingTimeInterval(-20 * 86_400), captureType: "screen_text", source: "screen", contentText: "old"))

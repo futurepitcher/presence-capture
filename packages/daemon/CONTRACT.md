@@ -100,7 +100,8 @@ These are not features. An implementation that misses one is not conformant:
 - Revocation erases: keys, sealed text and sealed bytes go in the revoking
   transaction, with an erasure receipt, and the WAL is truncated after
   ([ADR 0002](../../docs/adr/0002-erasable-revocation.md)).
-- Retention is a scheduled revocation, 14 days by default
+- Retention is a scheduled revocation, a year by default, or off when the
+  person chooses Indefinitely
   ([ADR 0003](../../docs/adr/0003-retention-is-revocation.md)).
 - Revocation is the only removal mechanism. The daemon never deletes a capture
   row.

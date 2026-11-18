@@ -69,6 +69,9 @@ final class SensorPlugins: @unchecked Sendable {
         }
     }
 
+    /// Every sensor's command as configured, approved or not.
+    var commands: [[String]] { lock.withLock { configs.values.map(\.command) } }
+
     /// Sensors not run because they aren't approved, or changed since they were.
     var unapproved: [Waiting] { lock.withLock { waiting.values.sorted { $0.name < $1.name } } }
 

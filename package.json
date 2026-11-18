@@ -8,7 +8,8 @@
   "workspaces": ["packages/schema", "packages/mcp"],
   "engines": { "node": ">=22.13.0" },
   "scripts": {
-    "test": "npm run test --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present && npm run test:plugins",
+    "test:plugins": "node --test 'packages/plugins/**/*.test.mjs'",
     "conformance": "npm run conformance --workspaces --if-present",
     "eval": "node packages/schema/bin/eval.js"
   }

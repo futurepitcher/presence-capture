@@ -17,8 +17,9 @@ let package = Package(
     targets: [
         // The store: sealing, revocation that erases, retention, and the rules applied before disk.
         .target(name: "CaptureStore", linkerSettings: [.linkedLibrary("sqlite3")]),
-        // What can be tested without a screen: reading text, which window is in front, speech to text.
-        .target(name: "CaptureCore"),
+        // What can be tested without a screen: reading text, which window is in front, speech to text,
+        // and WhatsApp Desktop's own database, read-only.
+        .target(name: "CaptureCore", linkerSettings: [.linkedLibrary("sqlite3")]),
         // Recall (ADR 0008): the reader's in-memory index and its tools.
         .target(name: "CaptureRecall", dependencies: ["CaptureStore"]),
         // Connecting an agent: its grant, and pcap-mcp in its MCP config. Shared by `pcap connect`
@@ -33,7 +34,7 @@ let package = Package(
         .executableTarget(name: "PcapCLI", dependencies: ["CaptureStore", "CaptureConnect"]),
         .testTarget(name: "CaptureStoreTests", dependencies: ["CaptureStore"]),
         .testTarget(name: "CaptureCoreTests", dependencies: ["CaptureCore"]),
-        .testTarget(name: "PresenceCaptureTests", dependencies: ["PresenceCapture", "CaptureStore"]),
+        .testTarget(name: "PresenceCaptureTests", dependencies: ["PresenceCapture", "CaptureStore", "CaptureCore"]),
         .testTarget(name: "CaptureRecallTests", dependencies: ["CaptureRecall", "CaptureStore"]),
         .testTarget(name: "CaptureConnectTests", dependencies: ["CaptureConnect", "CaptureStore"]),
     ],

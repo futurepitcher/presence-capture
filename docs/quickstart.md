@@ -120,8 +120,9 @@ off **Hear the Microphone** and **Hear System Audio**, to keep it out
 - **Where it lives:** `~/Library/Application Support/Presence Capture/`
   (`store.sqlite`, and `logs/` with counts only). Set `PRESENCE_CAPTURE_HOME` to
   move it. The key is in your Keychain, on this Mac only.
-- **How long:** 14 days. Change it under **Keep Captures For**, from 1 day to 1
-  year. A shorter period erases the older captures at once, so the app asks first.
+- **How long:** a year, unless you choose otherwise in the set-up window or
+  under **Keep Captures For**: from 1 day to 1 year, or **Indefinitely**. A
+  shorter period erases the older captures at once, so the app asks first.
 - **What it skips:** **Edit Excluded Apps and Windows…** opens your list, one
   line each. A line matches an app's name or a window's title, in any case.
   Saved changes apply within a few seconds.
