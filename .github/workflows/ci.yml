@@ -100,6 +100,10 @@ jobs:
         working-directory: packages/mcp
         run: npm test
 
+      # Plugin examples, each against synthetic data only.
+      - name: Plugin tests
+        run: npm run test:plugins
+
   # The macOS daemon: its own tests, then the store-layer suite driven through
   # its pcap-driver, so the Swift store is held to the same bytes as the
   # reference. Transcriber tests skip on a runner without the speech model.

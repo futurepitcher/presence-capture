@@ -1,7 +1,7 @@
 # WhatsApp as a source (draft plan)
 
 > **Status: draft, not in 0.1.** A plan and a first sensor
-> ([`packages/plugins/whatsapp`](../../packages/plugins/whatsapp/README.md)),
+> ([`packages/plugins/whatsapp`](https://github.com/futurepitcher/presence-capture/blob/main/packages/plugins/whatsapp/README.md)),
 > tested only against a synthetic database. Nothing here has run against a
 > real WhatsApp install yet. The open questions at the end need answers first.
 
@@ -155,7 +155,7 @@ Each message is one `screen` observation:
 
 It lands as `screen_text`, source `sensor:<name>`, sealed under its own key.
 
-**Two gaps, proposed in [RFC draft: sensor privacy floor](../../rfcs/0000-sensor-privacy-floor.md):**
+**Two gaps, proposed in [RFC draft: sensor privacy floor](https://github.com/futurepitcher/presence-capture/blob/main/rfcs/0000-sensor-privacy-floor.md):**
 
 1. **Privacy level.** Every sensor capture lands as `standard`, so any grant
    that reads `standard` (the default) can serve these messages to an agent.
