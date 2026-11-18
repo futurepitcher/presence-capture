@@ -38,6 +38,18 @@ struct RetentionControls {
     let choose: (Int) -> Void
 }
 
+/// WhatsApp's step in the first-run window (docs/sources/whatsapp.md): off until turned on here,
+/// with its consent, and with past messages only if chosen.
+struct WhatsAppControls {
+    let status: () -> WhatsAppCapturer.Status
+    /// The most days of history that can be brought in, as captures are kept now.
+    let maxHistoryDays: () -> Int
+    /// Shows the consent; turns it on, bringing in this many days of past messages, only if agreed.
+    let turnOn: (Int) -> Void
+    /// Where macOS lets the app read WhatsApp's files, when it hasn't yet.
+    let openAccess: () -> Void
+}
+
 /// The first-run window (R2): each permission, what it's for, and a button that asks for it. Nothing
 /// is asked until its button is pressed. Then connecting an agent, the five-minute path's last step.
 struct OnboardingView: View {
@@ -51,6 +63,8 @@ struct OnboardingView: View {
     let allowScreen: () -> Void
     let allowMicrophone: () -> Void
     let allowAccessibility: () -> Void
+    /// WhatsApp, built in; nil leaves the step out.
+    var whatsApp: WhatsAppControls? = nil
     /// How long captures are kept; nil leaves the step out.
     var retention: RetentionControls? = nil
     let connect: (Client) -> Void
@@ -62,6 +76,10 @@ struct OnboardingView: View {
     @State private var key = DictationKey.fn
     @State private var remembering = true
     @State private var keepDays = AppDelegate.defaultRetentionDays
+    @State private var whatsAppStatus = WhatsAppCapturer.Status.off
+    /// Past messages to bring in when WhatsApp is turned on here: none unless chosen.
+    @State private var historyDays = 0
+    @State private var maxHistory = WhatsAppDatabase.historyMaxDays
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -88,9 +106,10 @@ struct OnboardingView: View {
                  "Reads the address of the page in front and the text of the window in front, more exactly than from pixels.",
                  button: "Allow Accessibility…", action: allowAccessibility)
             if let dictation { dictationStep(dictation) }
-            if let retention { retentionStep(retention, number: dictation == nil ? 4 : 5) }
+            if let whatsApp { whatsAppStep(whatsApp, number: numbered) }
+            if let retention { retentionStep(retention, number: numbered + (whatsApp == nil ? 0 : 1)) }
             VStack(alignment: .leading, spacing: 8) {
-                Text("\((dictation == nil ? 4 : 5) + (retention == nil ? 0 : 1)). Connect an agent").bold()
+                Text("\(numbered + (whatsApp == nil ? 0 : 1) + (retention == nil ? 0 : 1)). Connect an agent").bold()
                 Text("It gets a grant of its own, for 30 days. You see the change to its settings before it's made.")
                     .font(.callout).foregroundStyle(.secondary)
                 HStack {
@@ -111,10 +130,62 @@ struct OnboardingView: View {
         .onReceive(tick) { _ in update() }
     }
 
+    /// The number of the first step after Dictation's.
+    private var numbered: Int { dictation == nil ? 4 : 5 }
+
     private func update() {
         (allowed, heard) = (permissions(), hearing())
         if let dictation { (dictating, key, remembering) = (dictation.on(), dictation.key(), dictation.remember()) }
+        if let whatsApp { (whatsAppStatus, maxHistory) = (whatsApp.status(), whatsApp.maxHistoryDays()) }
         if let retention { keepDays = retention.days() }
+    }
+
+    /// Every WhatsApp chat on this Mac, both sides, from WhatsApp Desktop's own files, read-only: off
+    /// until turned on here, past messages only if chosen (none by default).
+    private func whatsAppStep(_ whatsApp: WhatsAppControls, number: Int) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(number). WhatsApp (optional, experimental)").bold()
+                    Text("Keeps the text of every WhatsApp chat on this Mac, both sides and groups, read from WhatsApp's own files here. "
+                         + "Nothing is sent and WhatsApp is never contacted. Skip a chat any time with Exclude WhatsApp Chats… in the menu. "
+                         + "The people you talk to haven't agreed to this by your installing it.")
+                        .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                switch whatsAppStatus {
+                case .on:
+                    Label("On", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                case .off:
+                    Button("Capture WhatsApp…") { whatsApp.turnOn(min(historyDays, maxHistory)); update() }
+                case .needsAccess:
+                    Button("Allow in Privacy Settings…") { whatsApp.openAccess() }
+                case .notInstalled, .unknownSchema:
+                    EmptyView()
+                }
+            }
+            switch whatsAppStatus {
+            case .off:
+                Picker("Also bring in past messages", selection: $historyDays) {
+                    ForEach(WhatsAppCapturer.historyChoices.filter { $0 <= maxHistory }, id: \.self) { days in
+                        Text(days == 0 ? "None (default)" : AppDelegate.span(days)).tag(days)
+                    }
+                }
+                .frame(maxWidth: 360)
+                Text("Past messages come from every chat but the ones you exclude, and are kept like anything else captured.")
+                    .font(.caption).foregroundStyle(.secondary)
+            case .needsAccess:
+                Text("macOS hasn't let Presence Capture read WhatsApp's files yet. Turn on Presence Capture under Full Disk Access, then come back.")
+                    .font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+            case .notInstalled:
+                Text("WhatsApp Desktop isn't on this Mac.").font(.callout).foregroundStyle(.secondary)
+            case .unknownSchema:
+                Text("This version of WhatsApp Desktop isn't one Presence Capture can read yet, so nothing is read. An update will say when it can.")
+                    .font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+            case .on:
+                EmptyView()
+            }
+        }
     }
 
     /// How long what's captured is kept: a year unless chosen here or under Keep Captures For.

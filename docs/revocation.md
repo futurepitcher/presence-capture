@@ -84,7 +84,7 @@ sealed in practice is text.
 |--------|-----------------|
 | **Forget the Last 15 Minutes…**, **Forget the Last Hour…** in the menu | A `time_range`: from 15 or 60 minutes ago to now |
 | `pcap forget 15m` (minutes or hours, up to a day) | The same, from a terminal |
-| `pcap forget --source <source>` | A `source`: everything one sensor, app or WhatsApp chat sent, at any time. Asked first |
+| `pcap forget --source <source>` | A `source`: everything one sensor, app or WhatsApp chat sent, at any time. Asked first. The menu's Forget a WhatsApp Chat… does it for one chat |
 | **Keep Captures For** (retention) | A `time_range` from the epoch to now minus the period, with reason `retention` |
 | The store's `revoke` call | A `capture`, a `time_range`, a `source` or a `privacy_level` |
 

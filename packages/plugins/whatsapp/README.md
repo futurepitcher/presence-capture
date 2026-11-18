@@ -7,6 +7,11 @@ are never read. The plan, the consent model and what's unverified are in
 [docs/sources/whatsapp.md](../../../docs/sources/whatsapp.md). Read it before
 running this.
 
+> **On a Mac, use the app's built-in reader instead:** Capture WhatsApp, in
+> the set-up window and the menu. It's the same reading in Swift, with no Node
+> to install, and runs by itself once turned on. Running both notes every
+> message twice. This plugin stays as the reference and for other hosts.
+
 > **Experimental. Don't connect an agent while it runs.** Its captures are
 > `standard`, so any agent with a default grant can read your chats,
 > including other people's words. Tested only against a synthetic database.

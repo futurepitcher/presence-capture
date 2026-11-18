@@ -33,7 +33,9 @@ which covers sending outside this Mac. That ADR isn't in the repository yet.
 
 **Experimental sensors.** A [WhatsApp sensor](sources/whatsapp.md) is in the
 repository as experimental: every chat, read-only, less the chats a person
-excludes. Its captures are `standard`, so don't connect an agent while it runs.
+excludes. The Mac app has the same reader built in (Capture WhatsApp), so on a
+Mac the plugin is for reference and other hosts. Its captures are `standard`,
+so don't connect an agent while it runs.
 
 ## Sensors
 
