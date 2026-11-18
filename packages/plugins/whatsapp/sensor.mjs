@@ -2,12 +2,18 @@
 /**
  * whatsapp: a sensor plugin (ADR 0007) that notes the text messages of ONE
  * WhatsApp chat, read from WhatsApp Desktop's own database on this Mac.
- * DRAFT: see docs/sources/whatsapp.md. Off unless a person lists it in
- * sensors.json and approves it, one chat per entry.
+ *
+ * EXPERIMENTAL: see docs/sources/whatsapp.md. Its captures are `standard`,
+ * so any agent with a default grant can read them: don't connect an agent
+ * while it runs. Off unless a person lists it in sensors.json, with
+ * --experimental in its command, and approves it, one chat per entry.
  *
  * Usage:
- *   sensor.mjs --chat <jid> --label <text> [--from me|both] [--name <sensor-name>]
- *              [--since <ISO time>] [--db <path>] [--once] [--every <seconds>]
+ *   sensor.mjs --experimental --chat <jid> --label <text> [--from me|both]
+ *              [--history-days <n> | --since <ISO time>] [--name <sensor-name>]
+ *              [--db <path>] [--once] [--every <seconds>]
+ *
+ * --experimental  required: the command a person approves says so.
  *
  * --chat    the chat's id in WhatsApp (as `--list-chats` prints it). One chat
  *           per sensor, so each chat is approved, paused and revoked alone.
@@ -17,7 +23,10 @@
  *           the other side's too.
  * --name    the sensor's name, and so its source (sensor:<name>). Defaults to
  *           whatsapp.
- * --since   the earliest message to note. Defaults to a day before start.
+ * --history-days  imports this chat's history: messages from up to n days
+ *           before start (1 to 365). Without it, a day back. Older messages
+ *           than the store keeps (its retention) are refused by the store.
+ * --since   the same, from an exact time, no more than 365 days back.
  * --list-chats  prints chat ids and message counts to stderr, then exits. It
  *           sends no observation, so nothing it prints is stored.
  *
@@ -39,11 +48,14 @@ export const REQUIRED = {
   ZWAMESSAGE: ['Z_PK', 'ZCHATSESSION', 'ZISFROMME', 'ZMESSAGEDATE', 'ZTEXT', 'ZSTANZAID'],
   ZWACHATSESSION: ['Z_PK', 'ZCONTACTJID'],
 };
+// The furthest back an import may reach.
+export const HISTORY_MAX_DAYS = 365;
+const DAY_MS = 86_400_000;
 // A group's id ends in @g.us. Groups are refused unless asked for by --allow-group.
 const GROUP = /@g\.us$/;
 
 export function parseArgs(argv) {
-  const out = { from: 'me', name: 'whatsapp', db: DEFAULT_DB, every: 30, once: false, allowGroup: false, listChats: false };
+  const out = { from: 'me', name: 'whatsapp', db: DEFAULT_DB, every: 30, once: false, allowGroup: false, listChats: false, experimental: false };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     const next = () => argv[(i += 1)];
@@ -52,6 +64,8 @@ export function parseArgs(argv) {
     else if (a === '--from') out.from = next();
     else if (a === '--name') out.name = next();
     else if (a === '--since') out.since = next();
+    else if (a === '--history-days') out.historyDays = Number(next());
+    else if (a === '--experimental') out.experimental = true;
     else if (a === '--db') out.db = next();
     else if (a === '--every') out.every = Number(next());
     else if (a === '--once') out.once = true;
@@ -65,14 +79,26 @@ export function parseArgs(argv) {
 /** Null when the options are usable; otherwise why not. */
 export function optionsError(o) {
   if (o.listChats) return null;
+  if (!o.experimental) return 'this sensor is experimental: its command must say --experimental';
   if (!o.chat) return '--chat is required: one chat per sensor';
   if (!o.label || !o.label.trim()) return '--label is required: the name kept for this chat';
   if (!['me', 'both'].includes(o.from)) return '--from is me or both';
   if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(o.name)) return '--name is lower-case letters, digits and hyphens';
   if (GROUP.test(o.chat) && !o.allowGroup) return 'a group chat needs --allow-group';
+  if (o.since != null && o.historyDays != null) return '--since or --history-days, not both';
+  if (o.historyDays != null && !(Number.isInteger(o.historyDays) && o.historyDays >= 1 && o.historyDays <= HISTORY_MAX_DAYS)) {
+    return `--history-days is a whole number from 1 to ${HISTORY_MAX_DAYS}`;
+  }
   if (o.since != null && Number.isNaN(Date.parse(o.since))) return '--since must be a time';
+  if (o.since != null && Date.parse(o.since) < Date.now() - HISTORY_MAX_DAYS * DAY_MS) return `--since is at most ${HISTORY_MAX_DAYS} days back`;
   if (!(o.every >= 5)) return '--every is at least 5 seconds';
   return null;
+}
+
+/** The earliest moment a message is noted from: a day back unless the person asked for history. */
+export function startFor(o, now = Date.now()) {
+  if (o.since != null) return Date.parse(o.since);
+  return now - (o.historyDays ?? 1) * DAY_MS;
 }
 
 /** Null when the database has every column this reads; otherwise what's missing. */
@@ -165,10 +191,10 @@ function main() {
     return;
   }
 
+  process.stderr.write('experimental: captures are standard and readable by any agent with a default grant; see docs/sources/whatsapp.md\n');
   process.stdout.write(line({ sensor: o.name, protocol: '1' }));
   const isGroup = GROUP.test(o.chat);
-  const since = o.since ? Date.parse(o.since) : Date.now() - 86_400_000;
-  const sinceApple = since / 1000 - APPLE_EPOCH_S;
+  const sinceApple = startFor(o) / 1000 - APPLE_EPOCH_S;
   let afterPk = 0;
 
   const poll = () => {

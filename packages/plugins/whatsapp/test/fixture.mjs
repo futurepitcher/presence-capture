@@ -17,16 +17,22 @@ export const CHAT_B = '15555550101@s.whatsapp.net';
 export const GROUP = '120363000000000000@g.us';
 
 const apple = (iso) => Date.parse(iso) / 1000 - APPLE_EPOCH_S;
+/** A time this many hours before now, so the fixture never ages out of the tests. */
+export const ago = (hours) => new Date(Date.now() - hours * 3_600_000).toISOString();
 
 export const MESSAGES = [
   // chat, mine, at, text, stanza
-  [CHAT_A, 1, '2026-11-17T09:00:00Z', 'Morning, are we still on for the demo?', 'STANZA-A1'],
-  [CHAT_A, 0, '2026-11-17T09:01:00Z', 'Yes, 3pm works.', 'STANZA-A2'],
-  [CHAT_A, 1, '2026-11-17T09:02:00Z', 'Here is the staging key ANTHROPIC_API_KEY=sk-ant-api03-abcdefghijklmnopqrstuvwx', 'STANZA-A3'],
-  [CHAT_A, 1, '2026-11-17T09:03:00Z', null, 'STANZA-A4'], // a photo: no text
-  [CHAT_B, 1, '2026-11-17T10:00:00Z', 'Not on the list, never read.', 'STANZA-B1'],
-  [GROUP, 1, '2026-11-17T11:00:00Z', 'Group hello from me.', 'STANZA-G1'],
-  [GROUP, 0, '2026-11-17T11:01:00Z', 'Group hello from a member.', 'STANZA-G2'],
+  // History: older than a day, read only with --history-days or --since.
+  [CHAT_A, 1, ago(24 * 40), 'Forty days ago, from me.', 'STANZA-H40'],
+  [CHAT_A, 0, ago(24 * 10), 'Ten days ago, from them.', 'STANZA-H10'],
+  // The last day.
+  [CHAT_A, 1, ago(5), 'Morning, are we still on for the demo?', 'STANZA-A1'],
+  [CHAT_A, 0, ago(4.9), 'Yes, 3pm works.', 'STANZA-A2'],
+  [CHAT_A, 1, ago(4.8), 'Here is the staging key ANTHROPIC_API_KEY=sk-ant-api03-abcdefghijklmnopqrstuvwx', 'STANZA-A3'],
+  [CHAT_A, 1, ago(4.7), null, 'STANZA-A4'], // a photo: no text
+  [CHAT_B, 1, ago(4), 'Not on the list, never read.', 'STANZA-B1'],
+  [GROUP, 1, ago(3), 'Group hello from me.', 'STANZA-G1'],
+  [GROUP, 0, ago(2.9), 'Group hello from a member.', 'STANZA-G2'],
 ];
 
 /** Builds the database; returns its path and a cleanup. */

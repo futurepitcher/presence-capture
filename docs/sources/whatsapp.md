@@ -1,15 +1,23 @@
-# WhatsApp as a source (draft plan)
+# WhatsApp as a source (experimental)
 
-> **Status: draft, not in 0.1.** A plan and a first sensor
+> **Experimental, not in 0.1.** A plan and a first sensor
 > ([`packages/plugins/whatsapp`](https://github.com/futurepitcher/presence-capture/blob/main/packages/plugins/whatsapp/README.md)),
 > tested only against a synthetic database. Nothing here has run against a
-> real WhatsApp install yet. The open questions at the end need answers first.
+> real WhatsApp install yet.
+>
+> **Don't connect an agent while it runs.** Its captures are `standard`, the
+> level every default grant reads, so any connected agent can read your
+> chats, and with `--from both`, other people's words. Until the
+> [privacy floor](#how-it-maps-to-the-schema) lands, run it with no agent
+> connected, or only with grants whose `sources` leave `sensor:whatsapp*` out.
 
 ## The short version
 
 Read WhatsApp Desktop's own message database on the Mac, **read-only**, as a
 [sensor plugin](../plugins.md): **one chat per sensor**, each approved by the
-person, by default **only their own messages**, text only. It goes through the
+person, text only. By default **only their own messages**; both sides when
+they choose it for that chat. History can be **imported**, chat by chat, up
+to a year back, and no further than the store keeps anything. It goes through the
 same gate as every capture (validation, exclusion, redaction, sealing), so
 Pause, Forget, retention and revocation work on it unchanged.
 
@@ -58,9 +66,10 @@ wechaty idea is dropped for these reasons.
 
 **Why B is later.** Exports are official and as explicit as consent gets (the
 person picks the chat and taps Export). But they're one-off, their text format
-varies by locale and platform, and they're history, not a stream. An importer
-that reads an export through the same gate would suit backfill. It's not
-drafted here.
+varies by locale and platform, and they're history, not a stream. History is
+imported from the same database instead (below). An export importer would
+still help for messages older than what the Mac holds, and isn't drafted
+here.
 
 ## What was checked, and what wasn't
 
@@ -96,14 +105,18 @@ individual, not WhatsApp):
 Consent here has two people in it: the person running Presence Capture, and
 the people they're talking to. The design leans to the second.
 
-1. **Off by default.** No sensor runs until it's listed in `sensors.json` and
-   approved in **Approve Sensors…**, which shows the exact command.
+1. **Off by default, and labelled.** No sensor runs until it's listed in
+   `sensors.json` and approved in **Approve Sensors…**, which shows the exact
+   command. The command must contain `--experimental`, or the sensor refuses
+   to start, so the person approving it sees the word. It also says so on
+   standard error each time it starts.
 2. **Opt in per chat.** One sensor entry per chat (`--chat`). There's no "all
    chats" switch. Approving a chat shows its id and the label it will be kept
    under.
-3. **Your own messages unless you say otherwise.** `--from me` is the default.
-   `--from both` keeps the other side too, and should be a deliberate choice
-   per chat (open question 1).
+3. **Your own messages unless you choose both, chat by chat.** `--from me` is
+   the default. `--from both` keeps the other side too, and it's set on one
+   chat's entry, never for all. Keeping someone's words is a choice about
+   that person, so it's made one person at a time.
 4. **Groups are refused** unless the entry says `--allow-group`. In a group,
    other members are kept as "Member", never by name.
 5. **The person names the chat.** What's kept as the window is
@@ -139,10 +152,31 @@ the people they're talking to. The design leans to the second.
 | Your messages; theirs only with `--from both` | Media: photos, voice notes, video, documents, stickers |
 | Which chat, as your label | Contact names, numbers, profile photos, statuses |
 | | Calls, reactions, read receipts, typing |
-| | Anything before `--since` (a day before start, by default) |
+| | Anything older than a day, unless history is imported for that chat |
 
 Keys, tokens, emails, phone and card numbers in a message are redacted by the
 gate before it's written, as for any capture.
+
+## Importing history
+
+History is opt-in, per chat, bounded and still read-only.
+
+- **Opt-in, per chat.** `--history-days <n>` on one chat's entry, or
+  `--since <time>` for an exact start. Without either, a sensor starts a day
+  back.
+- **Bounded twice.** At most 365 days back; the sensor refuses more. And no
+  further than the store keeps anything: an imported message is a capture
+  like any other, so retention (**Keep Captures For**, 14 days by default)
+  erases one older than that within the hour, and once retention has cut a
+  range, the store refuses anything stamped inside it. To keep a longer
+  history, raise retention first, knowingly.
+- **Once.** Each message carries its own id as `dedupe`, so restarting, or
+  importing again, adds nothing, and a message that was forgotten or aged out
+  never comes back.
+- **Only what the Mac holds.** The Mac app may not have a chat's full history
+  (it's a linked device). Older messages would need the export importer.
+- **Same gate.** Imported messages are excluded, redacted and sealed like live
+  ones, and Forget by time takes them in by when they were sent.
 
 ## How it maps to the schema
 
@@ -161,9 +195,10 @@ It lands as `screen_text`, source `sensor:<name>`, sealed under its own key.
    that reads `standard` (the default) can serve these messages to an agent.
    Private conversations should be `sensitive`, which no grant reads unless
    it names it. The RFC lets the *host's* configuration, never the sensor,
-   raise a sensor's captures to `sensitive`. **Until it lands, don't enable
-   this sensor with an agent connected**, or give agents grants whose
-   `sources` leave `sensor:whatsapp*` out.
+   raise a sensor's captures to `sensitive`. It's future work, not in this
+   change. **Until it lands, the sensor ships as experimental**: don't
+   connect an agent while it runs, or give agents grants whose `sources`
+   leave `sensor:whatsapp*` out.
 2. **Extraction.** `screen` allows `accessibility` or `ocr`, and the gate
    defaults to `ocr`. A message read from an app's own store is neither, so the
    record says `ocr` when it isn't. The RFC adds `app_store`.
@@ -171,19 +206,19 @@ It lands as `screen_text`, source `sensor:<name>`, sealed under its own key.
 A `message` capture type of its own (sender, chat, reply) would be cleaner
 still. That's a bigger RFC, and isn't needed to start.
 
-## Open questions for Christopher
+## Decided (2026-11-18)
 
-1. **Whose words.** Your messages only by default, or both sides? Keeping the
-   other side means storing people's words they didn't agree to have kept.
-   Options: only yours; both, chat by chat; both, only with people who've said
-   yes.
-2. **Backfill.** Start from now (a day back by default), or import history?
-   History through the database is one flag; through official exports is a
-   separate importer.
-3. **The privacy floor.** Ship the RFC before this sensor is announced, or
-   ship the sensor marked experimental with the "no agent connected"
-   warning?
+1. **Whose words:** both sides, chosen chat by chat. Your own messages stay the
+   default.
+2. **History:** importable, per chat, bounded as above.
+3. **Release:** ships as experimental, with the "don't connect an agent"
+   warning, ahead of the privacy-floor RFC.
 
-Also needed from a real Mac, by whoever runs it first: the permission prompt
-seen, `--list-chats` working (it confirms `ZCONTACTJID`), and a week of
-capture with WhatsApp open, checking WhatsApp's files are untouched.
+## Still needed
+
+From a real Mac, by whoever runs it first: the permission prompt seen,
+`--list-chats` working (it confirms `ZCONTACTJID`), and a week of capture with
+WhatsApp open, checking WhatsApp's files are untouched.
+
+Before it leaves experimental: the privacy floor, a per-source Forget in the
+app and `pcap`, and pins that cover a command's arguments.

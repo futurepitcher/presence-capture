@@ -6,11 +6,10 @@ import { runSensor } from '../../../schema/src/sensor-host.js';
 import { openStore } from '../../../schema/src/store.js';
 import { checkSensor } from '../../../schema/conformance/plugins/sensor-kit.js';
 import { openReadOnly, optionsError, parseArgs, schemaError } from '../sensor.mjs';
-import { buildFixture, CHAT_A, GROUP } from './fixture.mjs';
+import { ago, buildFixture, CHAT_A, GROUP } from './fixture.mjs';
 
 const SENSOR = new URL('../sensor.mjs', import.meta.url).pathname;
-const SINCE = '2026-11-17T00:00:00Z';
-const command = (db, ...more) => [process.execPath, SENSOR, '--once', '--db', db, '--since', SINCE, ...more];
+const command = (db, ...more) => [process.execPath, SENSOR, '--experimental', '--once', '--db', db, ...more];
 const texts = (store, ids) => ids.map((id) => JSON.stringify(store.contentText(id)));
 
 test('whatsapp: the sensor kit passes it', async () => {
@@ -84,7 +83,7 @@ test('whatsapp: a message that arrives later is picked up by the next read', asy
     const cmd = command(fx.path, '--chat', CHAT_A, '--label', 'Alex');
     await runSensor({ command: cmd, store });
     // Sent earlier, written to this Mac later (synced from the phone).
-    fx.add(CHAT_A, 1, '2026-11-17T09:00:30Z', 'Late arrival.', 'STANZA-A5');
+    fx.add(CHAT_A, 1, ago(4.95), 'Late arrival.', 'STANZA-A5');
     const { stats } = await runSensor({ command: cmd, store });
     assert.equal(stats.appended, 1);
   } finally {
@@ -107,7 +106,7 @@ test('whatsapp: excluding the WhatsApp app drops everything it sends', async () 
 });
 
 test('whatsapp: groups are refused unless asked for, and members are never named', async () => {
-  assert.match(optionsError(parseArgs(['--chat', GROUP, '--label', 'Team'])), /--allow-group/);
+  assert.match(optionsError(parseArgs(['--experimental', '--chat', GROUP, '--label', 'Team'])), /--allow-group/);
   const fx = buildFixture();
   const store = openStore();
   try {
@@ -122,10 +121,17 @@ test('whatsapp: groups are refused unless asked for, and members are never named
 });
 
 test('whatsapp: options it refuses', () => {
-  assert.match(optionsError(parseArgs(['--label', 'Alex'])), /--chat/);
-  assert.match(optionsError(parseArgs(['--chat', CHAT_A])), /--label/);
-  assert.match(optionsError(parseArgs(['--chat', CHAT_A, '--label', 'Alex', '--from', 'everyone'])), /--from/);
-  assert.match(optionsError(parseArgs(['--chat', CHAT_A, '--label', 'Alex', '--name', 'WhatsApp Alex'])), /--name/);
+  const ok = ['--experimental', '--chat', CHAT_A, '--label', 'Alex'];
+  assert.equal(optionsError(parseArgs(ok)), null);
+  assert.match(optionsError(parseArgs(ok.slice(1))), /experimental/, 'ran without saying it is experimental');
+  assert.match(optionsError(parseArgs([...ok, '--history-days', '366'])), /--history-days/);
+  assert.match(optionsError(parseArgs([...ok, '--history-days', '0'])), /--history-days/);
+  assert.match(optionsError(parseArgs([...ok, '--history-days', '7', '--since', ago(24)])), /not both/);
+  assert.match(optionsError(parseArgs([...ok, '--since', ago(24 * 400)])), /365 days/);
+  assert.match(optionsError(parseArgs(['--experimental', '--label', 'Alex'])), /--chat/);
+  assert.match(optionsError(parseArgs(['--experimental', '--chat', CHAT_A])), /--label/);
+  assert.match(optionsError(parseArgs([...ok, '--from', 'everyone'])), /--from/);
+  assert.match(optionsError(parseArgs([...ok, '--name', 'WhatsApp Alex'])), /--name/);
   assert.throws(() => parseArgs(['--send', 'hi']), /unknown argument/);
 });
 
@@ -159,6 +165,31 @@ test('whatsapp: a database it doesn\'t recognise stops it, rather than guessing'
     assert.equal(stats.appended, 0);
     store.close();
   } finally {
+    fx.cleanup();
+  }
+});
+
+test('whatsapp: history is imported only when asked, for that chat, and kept only as long as the store keeps anything', async () => {
+  const fx = buildFixture();
+  const store = openStore();
+  try {
+    const cmd = command(fx.path, '--chat', CHAT_A, '--label', 'Alex', '--from', 'both', '--history-days', '60');
+    const { stats } = await runSensor({ command: cmd, store });
+    assert.equal(stats.appended, 5, 'two from history and three from the last day');
+
+    // Retention (14 days here) treats an imported message like any capture: the one older than it is erased.
+    store.retain({ days: 14, now: new Date() });
+    const kept = stats.captureIds.filter((id) => store.contentText(id) != null);
+    const all = texts(store, kept).join('\n');
+    assert.match(all, /Alex: Ten days ago, from them\./);
+    assert.doesNotMatch(all, /Forty days ago/, 'history older than retention outlived it');
+
+    // Importing again brings back nothing that retention erased.
+    const again = await runSensor({ command: cmd, store });
+    assert.equal(again.stats.appended, 0);
+    assert.equal(again.stats.refused, 1);
+  } finally {
+    store.close();
     fx.cleanup();
   }
 });
