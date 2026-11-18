@@ -183,17 +183,18 @@ not at once.
 | Connect an Agent → Claude Code… / Claude Desktop… / Cursor… | What `pcap connect` does: a grant of its own for 30 days, and `pcap-mcp` in the agent's MCP config. The change is shown, with its diff, and asked about; the config is copied aside first |
 | Agents Read… | Every agent's grant, with Withdraw…, and what each was given, day by day, by tool and kind: counts from the egress log, never content |
 | Hear the Microphone / Hear System Audio | Each input device on or off |
-| Keep Captures For → 1 Day … 1 Year | Retention (ADR 0003). A shorter period erases what's older at once, so it's asked first, and it's kept only once that's revoked: if the store can't, the period stays as it was |
+| Keep Captures For → 1 Day … 1 Year, Indefinitely | Retention (ADR 0003), a year unless you choose. Indefinitely keeps everything until you forget it. A shorter period erases what's older at once, so it's asked first, and it's kept only once that's revoked: if the store can't, the period stays as it was |
 | Edit Excluded Apps and Windows… | Your list, one fragment a line, applied within seconds. If it can't be read, nothing is captured |
-| Set Up Presence Capture… | The first-run window, again: each permission, what it's for, and connecting an agent |
+| Set Up Presence Capture… | The first-run window, again: each permission, what it's for, how long captures are kept, and connecting an agent |
 | Check for Updates… | Asks GitHub for the latest release and offers its page if it's newer. Only when chosen: it's the one request the app makes |
 
 The first launch opens the set-up window. Nothing is asked for until its
 button is pressed; allowing the microphone there also turns on Hear the
 Microphone.
 
-Retention erases what's older than 14 days unless Keep Captures For says
-otherwise, hourly. The log, in `logs/`, holds counts only.
+Retention erases what's older than a year unless Keep Captures For, or the
+set-up window, says otherwise, hourly. Indefinitely turns it off; Forget and
+revocation still erase. The log, in `logs/`, holds counts only.
 
 ## Dictation (experimental)
 

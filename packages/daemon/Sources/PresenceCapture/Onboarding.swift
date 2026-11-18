@@ -30,6 +30,14 @@ struct DictationControls {
     let globeClash: () -> String?
 }
 
+/// Keep Captures For, as the first-run window offers it: chosen here, explicitly, with a year unless
+/// the person picks another period, Indefinitely among them.
+struct RetentionControls {
+    let days: () -> Int
+    /// A shorter period asks first, as it does from the menu, since it erases what's older.
+    let choose: (Int) -> Void
+}
+
 /// The first-run window (R2): each permission, what it's for, and a button that asks for it. Nothing
 /// is asked until its button is pressed. Then connecting an agent, the five-minute path's last step.
 struct OnboardingView: View {
@@ -43,6 +51,8 @@ struct OnboardingView: View {
     let allowScreen: () -> Void
     let allowMicrophone: () -> Void
     let allowAccessibility: () -> Void
+    /// How long captures are kept; nil leaves the step out.
+    var retention: RetentionControls? = nil
     let connect: (Client) -> Void
     let done: () -> Void
 
@@ -51,6 +61,7 @@ struct OnboardingView: View {
     @State private var dictating = false
     @State private var key = DictationKey.fn
     @State private var remembering = true
+    @State private var keepDays = AppDelegate.defaultRetentionDays
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -77,8 +88,9 @@ struct OnboardingView: View {
                  "Reads the address of the page in front and the text of the window in front, more exactly than from pixels.",
                  button: "Allow Accessibility…", action: allowAccessibility)
             if let dictation { dictationStep(dictation) }
+            if let retention { retentionStep(retention, number: dictation == nil ? 4 : 5) }
             VStack(alignment: .leading, spacing: 8) {
-                Text("\(dictation == nil ? 4 : 5). Connect an agent").bold()
+                Text("\((dictation == nil ? 4 : 5) + (retention == nil ? 0 : 1)). Connect an agent").bold()
                 Text("It gets a grant of its own, for 30 days. You see the change to its settings before it's made.")
                     .font(.callout).foregroundStyle(.secondary)
                 HStack {
@@ -102,6 +114,24 @@ struct OnboardingView: View {
     private func update() {
         (allowed, heard) = (permissions(), hearing())
         if let dictation { (dictating, key, remembering) = (dictation.on(), dictation.key(), dictation.remember()) }
+        if let retention { keepDays = retention.days() }
+    }
+
+    /// How long what's captured is kept: a year unless chosen here or under Keep Captures For.
+    private func retentionStep(_ retention: RetentionControls, number: Int) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("\(number). Keep captures for").bold()
+            Text("What's older than this is erased from this Mac as it ages, for good. Indefinitely keeps everything "
+                 + "until you forget it. Forget, Pause and revoking an agent work the same either way. Change it any time under Keep Captures For.")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Picker("Keep captures for", selection: Binding(get: { keepDays }, set: { retention.choose($0); update() })) {
+                ForEach(AppDelegate.retentionChoices, id: \.self) { days in
+                    Text(AppDelegate.span(days).capitalized + (days == AppDelegate.defaultRetentionDays ? " (default)" : "")).tag(days)
+                }
+            }
+            .labelsHidden()
+            .frame(maxWidth: 220)
+        }
     }
 
     /// Hold a key and speak: its own permissions, the key, and whether what's said is remembered

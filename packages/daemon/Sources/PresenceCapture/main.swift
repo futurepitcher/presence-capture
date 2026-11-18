@@ -11,8 +11,9 @@ import CaptureStore
 ///
 /// The store lives in ~/Library/Application Support/Presence Capture (PRESENCE_CAPTURE_HOME to move
 /// it); its master key in the Keychain. Settings are the app's defaults: `interval` (seconds),
-/// `retentionDays`, `paused`, `hearMicrophone` (off until the person turns it on: whether a room is
-/// heard is theirs to choose), `hearSystemAudio`.
+/// `retentionDays` (a year unless the person chooses; `keepIndefinitely` keeps everything), `paused`,
+/// `hearMicrophone` (off until the person turns it on: whether a room is heard is theirs to choose),
+/// `hearSystemAudio`.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let home = CaptureStore.home
     private let defaults = UserDefaults.standard
@@ -62,7 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var exclusionPath: String { home + "/excluded-windows.txt" }
     private var sensorsPath: String { home + "/sensors.json" }
     private var interval: TimeInterval { TimeInterval(defaults.integer(forKey: "interval").nonZero ?? 5) }
-    private var retentionDays: Int { defaults.integer(forKey: "retentionDays").nonZero ?? 14 }
+    private var retentionDays: Int { Self.retentionDays(defaults) }
     private var hearMicrophone: Bool { defaults.object(forKey: "hearMicrophone") as? Bool ?? false }
     private var hearSystemAudio: Bool { defaults.object(forKey: "hearSystemAudio") as? Bool ?? true }
 
@@ -211,7 +212,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let (defaults, log) = (self.defaults, self.log!)
         admin.async {
             do {
-                let result = try store.retain(policy: { Double(defaults.integer(forKey: "retentionDays").nonZero ?? 14) })
+                let result = try store.retain(policy: { Self.retentionPeriod(Self.retentionDays(defaults)) })
                 log.write("retention.done revoked=\(result?.revokedCaptureIds.count ?? 0)")
             } catch {
                 log.write("retention.failed")
@@ -305,11 +306,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
     }
 
-    /// The periods the menu offers for Keep Captures For, in days.
-    static let retentionChoices = [1, 7, 14, 30, 90, 365]
+    /// Keep Captures For when the person hasn't chosen: a year.
+    static let defaultRetentionDays = 365
+    /// Keep Captures For → Indefinitely: nothing ages out. Forget and revocation still erase.
+    static let keepIndefinitely = Int.max
+
+    /// The periods the menu and the first-run window offer for Keep Captures For, in days, shortest
+    /// first: Indefinitely is the longest.
+    static let retentionChoices = [1, 7, 14, 30, 90, 365, keepIndefinitely]
+
+    nonisolated static func retentionDays(_ defaults: UserDefaults) -> Int {
+        defaults.integer(forKey: "retentionDays").nonZero ?? defaultRetentionDays
+    }
+
+    /// The period retention erases by, or nil when captures are kept indefinitely.
+    nonisolated static func retentionPeriod(_ days: Int) -> Double? {
+        days == keepIndefinitely ? nil : Double(days)
+    }
 
     static func span(_ days: Int) -> String {
-        days == 365 ? "1 year" : days == 1 ? "1 day" : "\(days) days"
+        days == keepIndefinitely ? "indefinitely" : days == 365 ? "1 year" : days == 1 ? "1 day" : "\(days) days"
+    }
+
+    /// "kept indefinitely", or "kept for 1 year".
+    static func kept(_ days: Int) -> String {
+        days == keepIndefinitely ? "kept indefinitely" : "kept for \(span(days))"
     }
 
     private func refresh() {
@@ -493,6 +514,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                            allowScreen: { [weak self] in self?.allowScreen() },
                            allowMicrophone: { [weak self] in self?.askForMicrophone(thenHear: true) },
                            allowAccessibility: { [weak self] in self?.allowAccessibility() },
+                           retention: RetentionControls(days: { [weak self] in self?.retentionDays ?? Self.defaultRetentionDays },
+                                                        choose: { [weak self] days in self?.chooseRetention(days) }),
                            connect: { [weak self] client in self?.connect(client) },
                            done: { [weak self] in self?.windows.close("onboarding") })
         }
@@ -542,9 +565,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// A shorter period erases what's older now, so it's asked first, and it's kept only once what's
     /// older is revoked: if that fails, the period stays as it was, to try again. A longer one erases
     /// nothing yet.
-    @objc private func setRetention(_ sender: NSMenuItem) {
+    @objc private func setRetention(_ sender: NSMenuItem) { chooseRetention(sender.tag) }
+
+    /// Keep Captures For, from the menu or the first-run window.
+    private func chooseRetention(_ days: Int) {
         guard !quitting else { return }
-        let days = sender.tag
         guard !retentionChanging else {
             let busy = NSAlert()
             busy.messageText = "Keep Captures For is still being changed"
@@ -602,7 +627,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .failure:
             log.write("retention.set_failed days=\(days)")
             said.messageText = "Nothing was erased"
-            said.informativeText = "The store couldn't revoke what's older than \(Self.span(days)), so captures are still kept for \(Self.span(retentionDays)). Try again in a moment."
+            said.informativeText = "The store couldn't revoke what's older than \(Self.span(days)), so captures are still \(Self.kept(retentionDays)). Try again in a moment."
         }
         NSApp.activate(ignoringOtherApps: true)
         said.runModal()

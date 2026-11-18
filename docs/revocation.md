@@ -284,8 +284,10 @@ It follows `derived_from`, prunes projections and erases content, with the same
 receipts as a Forget. You can see that retention removed last month's content,
 and when.
 
-- **In the app:** 14 days by default. **Keep Captures For** offers 1 day, 7, 14,
-  30, 90 and 1 year. It runs at launch and then every hour. A shorter period
+- **In the app:** a year by default, chosen in the set-up window or under
+  **Keep Captures For**, which offers 1 day, 7, 14, 30, 90, 1 year and
+  **Indefinitely**. Indefinitely runs no retention at all; Forget and every
+  other revocation still erase. It runs at launch and then every hour. A shorter period
   erases at once, so the app asks first, and keeps the new period only once that
   revocation succeeds.
 - **Quiet when there's nothing to do.** `store.retain()` returns `null` and

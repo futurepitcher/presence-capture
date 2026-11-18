@@ -48,7 +48,7 @@ Cursor in one step ([connecting an agent](docs/connect.md)).
   how long. Every row served is in a hash-chained log you can see in **Agents
   Read…**, and every row is labeled as untrusted content, not instructions.
 - **Forgets for real.** Forget the last 15 minutes or hour, or let retention
-  age captures out (14 days by default): the content and its key are erased in
+  age captures out (a year by default, or never): the content and its key are erased in
   one transaction, the write-ahead log is truncated, and a receipt says so.
   [How revocation works](docs/revocation.md).
 - **Dictation (experimental, macOS 26).** Hold a key, speak, and the words are

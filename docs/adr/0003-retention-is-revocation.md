@@ -29,6 +29,9 @@ revocation does.
   by default. The timer never keeps a process alive by itself.
 - The period is required and must be positive. The native apps default to 14
   days, the window PresenceVoice runs with, and let the user change it.
+- Amended 2026-11-18: the macOS app now defaults to a year, chosen in its
+  set-up window, and offers **Indefinitely**, which runs no retention at all.
+  The store's own rule is unchanged: a period it's given must be positive.
 
 ## Consequences
 

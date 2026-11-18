@@ -572,12 +572,12 @@ public final class CaptureStore: @unchecked Sendable {
 
     /// Retention by a period read once the store is held for writing (its lock and SQLite's): a
     /// period lengthened while this waited for another writer is the one used, never the one it
-    /// started with.
+    /// started with. A nil period keeps everything: nothing is revoked, and nothing is written.
     @discardableResult
-    public func retain(policy: () -> Double, now: () -> Date = Date.init) throws -> Revocation? {
+    public func retain(policy: () -> Double?, now: () -> Date = Date.init) throws -> Revocation? {
         try lock.withLock {
             try revokeLocked(scopeKind: "time_range", reason: "retention") {
-                let days = policy()
+                guard let days = policy() else { return nil }
                 guard days > 0 else { throw StoreError.sqlite("retention days must be positive") }
                 let cutoff = Self.iso(now().addingTimeInterval(-days * 86_400))
                 let pending = try rows("SELECT COUNT(*) FROM capture_event WHERE captured_at <= ? AND capture_id NOT IN (SELECT capture_id FROM revoked_capture)",

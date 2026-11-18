@@ -141,7 +141,8 @@ leaves the record that a capture happened. Detail:
 
 ### How long are captures kept?
 
-14 days. **Keep Captures For** offers 1 day, 7, 14, 30, 90 and 1 year. Retention
+A year, unless you choose otherwise when you set it up or under **Keep Captures
+For**, which offers 1 day, 7, 14, 30, 90, 1 year and **Indefinitely**. Retention
 is a scheduled Forget: it runs at launch and every hour, and writes the same
 receipts. A shorter period erases at once, so the app asks first. Detail:
 [Retention](revocation.md#retention-is-a-scheduled-revocation).
