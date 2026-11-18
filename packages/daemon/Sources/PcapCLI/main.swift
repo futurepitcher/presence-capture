@@ -21,6 +21,9 @@ let usage = """
       pcap grant revoke <grant_id>
       pcap egress [--days 7]       what each agent was given: counts, never content
       pcap forget <15m|1h|…>       revoke the stretch just past, and erase it from disk
+      pcap forget --source <source> [--yes]
+                                   revoke everything one source or app sent, such as one
+                                   WhatsApp chat (net.whatsapp.WhatsApp.chat-12), asked first
       pcap check                   the store's key, structure, egress log and erasures
 
       --store <path>, --master-key-file <path>: another store; by default, the app's, with its key
@@ -270,6 +273,7 @@ func egress(_ arguments: Arguments) throws {
 }
 
 func forget(_ arguments: Arguments) throws {
+    if arguments.options["source"] != nil { return try forgetSource(arguments) }
     try arguments.check("forget", words: 2)
     guard let span = arguments.words.dropFirst().first, let unit = span.last, "mh".contains(unit),
           let count = Int(span.dropLast()), count > 0, count <= (unit == "m" ? 1440 : 24) else {
@@ -294,6 +298,29 @@ func forget(_ arguments: Arguments) throws {
     } else {
         print("Forgot the last \(label): \(captures) revoked, and no one can read them; on-disk erasure pending, while a reader holds the store's log. It finishes when the reader lets go: at the app's next tick, or the next pcap command.")
     }
+}
+
+/// Everything a source sent, at any time: `sensor:<name>`, or an app as captures name it (its
+/// bundle ID), such as one WhatsApp chat. All of it, so it's asked first.
+func forgetSource(_ arguments: Arguments) throws {
+    try arguments.check("forget", words: 1, options: ["source"], flags: ["yes"])
+    guard let source = arguments.options["source"]?.trimmingCharacters(in: .whitespaces), !source.isEmpty else {
+        throw Failure("forget --source what? a source such as sensor:whatsapp, or an app such as net.whatsapp.WhatsApp.chat-12")
+    }
+    guard arguments.set.contains("yes") || (isatty(STDIN_FILENO) == 1 && ask("Forget everything ever captured from \(source)? This can't be undone. [y/N]")) else {
+        throw Failure("nothing was forgotten", status: 1)
+    }
+    let store = try openStore(arguments)
+    defer { store.close() }
+    let result = try store.revoke(scopeKind: "source", scopeValue: source, reason: "forget source")
+    let captures = "\(result.revokedCaptureIds.count) \(result.revokedCaptureIds.count == 1 ? "capture" : "captures")"
+    print(whichStore(arguments))
+    if let error = result.erasureError {
+        print("Forgot \(source): \(captures) revoked, and no one can read them.")
+        throw Failure("erasing them from disk failed (\(error)). The erasure stays pending, and is tried again at the app's next tick or the next pcap command", status: 1)
+    }
+    print(result.erasedOnDisk ? "Forgot \(source): \(captures) revoked and erased from disk."
+        : "Forgot \(source): \(captures) revoked, and no one can read them; on-disk erasure pending, while a reader holds the store's log.")
 }
 
 func check(_ arguments: Arguments) throws {

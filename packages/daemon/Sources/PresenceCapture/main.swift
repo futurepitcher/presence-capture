@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hearMicrophoneItem: NSMenuItem!
     private var hearSystemAudioItem: NSMenuItem!
     private var approveSensorsItem: NSMenuItem!
+    private var excludeWhatsAppItem: NSMenuItem!
     private var retentionMenu: NSMenu!
     /// Dictation (R2b, macOS 26): its spans are shared with ambient audio, which drops what was dictated.
     private let dictationSpans = DictationSpans()
@@ -61,6 +62,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var problem: String?
 
     private var exclusionPath: String { home + "/excluded-windows.txt" }
+    /// The WhatsApp sensor's own list of chats it never reads (packages/plugins/whatsapp).
+    private var whatsAppExclusionPath: String { home + "/whatsapp-exclude.txt" }
     private var sensorsPath: String { home + "/sensors.json" }
     private var interval: TimeInterval { TimeInterval(defaults.integer(forKey: "interval").nonZero ?? 5) }
     private var retentionDays: Int { Self.retentionDays(defaults) }
@@ -273,6 +276,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dictationItem.submenu = dictationMenu
         let exclusions = NSMenuItem(title: "Edit Excluded Apps and Windows…", action: #selector(editExclusions), keyEquivalent: "")
         approveSensorsItem = NSMenuItem(title: "Approve Sensors…", action: #selector(approveSensors), keyEquivalent: "")
+        excludeWhatsAppItem = NSMenuItem(title: "Exclude WhatsApp Chats…", action: #selector(editWhatsAppExclusions), keyEquivalent: "")
         let screenItem = NSMenuItem(title: "Allow Screen Recording…", action: #selector(allowScreen), keyEquivalent: "")
         microphoneItem = NSMenuItem(title: "Allow Microphone…", action: #selector(allowMicrophone), keyEquivalent: "")
         accessibilityItem = NSMenuItem(title: "Allow Accessibility (page addresses)…", action: #selector(allowAccessibility), keyEquivalent: "")
@@ -297,7 +301,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let setUp = NSMenuItem(title: "Set Up Presence Capture…", action: #selector(showOnboarding), keyEquivalent: "")
         let updates = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
         for item in [stateItem!, audioItem!, .separator(), pauseItem!, forgetQuarter, forgetHour, .separator(), connect, agents, .separator(),
-                     hearMicrophoneItem!, hearSystemAudioItem!, dictationItem!, retention, exclusions, approveSensorsItem!, .separator(),
+                     hearMicrophoneItem!, hearSystemAudioItem!, dictationItem!, retention, exclusions, excludeWhatsAppItem!, approveSensorsItem!, .separator(),
                      screenItem, microphoneItem!, accessibilityItem!, setUp, updates, .separator()] {
             menu.addItem(item)
         }
@@ -352,6 +356,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let waiting = sensors?.unapproved.count ?? 0
         approveSensorsItem.isHidden = waiting == 0
         approveSensorsItem.title = waiting == 1 ? "Approve 1 Sensor…" : "Approve \(waiting) Sensors…"
+        excludeWhatsAppItem.isHidden = !(sensors?.commands.contains(where: Self.isWhatsApp) ?? false)
         let symbol = problem != nil || !seesScreen ? "exclamationmark.circle" : paused ? "pause.circle" : "record.circle"
         statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Presence Capture: \(state)")
     }
@@ -428,14 +433,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         for sensor in sensors.unapproved {
             let alert = NSAlert()
-            alert.messageText = "Run the sensor “\(sensor.name)”?"
-            alert.informativeText = [
+            let whatsApp = Self.isWhatsApp(sensor.command)
+            alert.messageText = whatsApp ? "Capture your WhatsApp chats?" : "Run the sensor “\(sensor.name)”?"
+            let consent = whatsApp ? [Self.whatsAppConsent(kept: Self.kept(retentionDays))] : []
+            alert.informativeText = (consent + [
                 sensor.command.joined(separator: " "),
                 "Why it's waiting: \(sensor.reason).",
                 "It runs with your permissions. What it sends is excluded, redacted and sealed like any capture, "
                     + "but a program you run can do anything you can. Approve it only if you trust it.",
-            ].joined(separator: "\n\n")
-            alert.addButton(withTitle: "Approve")
+            ]).joined(separator: "\n\n")
+            alert.addButton(withTitle: whatsApp ? "Capture WhatsApp" : "Approve")
             alert.addButton(withTitle: "Not Now")
             guard alert.runModal() == .alertFirstButtonReturn else { continue }
             do {
@@ -445,6 +452,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         refresh()
+    }
+
+    /// The WhatsApp sensor (packages/plugins/whatsapp), whatever it's named.
+    static func isWhatsApp(_ command: [String]) -> Bool { command.contains { $0.hasSuffix("/whatsapp/sensor.mjs") } }
+
+    /// The consent the WhatsApp sensor is approved with: once, when it's first turned on, in words
+    /// that say it's every chat and both sides.
+    static func whatsAppConsent(kept: String) -> String {
+        [
+            "Experimental. From now on, Presence Capture keeps the text of every WhatsApp chat on this Mac, both sides and groups too: "
+                + "what people write to you, not only what you write. No photos, voice notes or files.",
+            "It stays on this Mac, sealed, \(kept). It never sends anything, and never talks to WhatsApp.",
+            "To skip a chat, add its name to Exclude WhatsApp Chats… in this menu. Pause holds it with everything else. "
+                + "pcap forget --source forgets one chat's messages; docs/sources/whatsapp.md says how.",
+            "Don't connect an agent while it's experimental: any agent with a default grant could read these chats. "
+                + "The people you talk to haven't agreed to this by your installing it.",
+        ].joined(separator: "\n\n")
+    }
+
+    /// The WhatsApp sensor's list of chats it never reads, opened in the person's text editor; made
+    /// with a note on first use. The sensor reads it before every query.
+    @objc private func editWhatsAppExclusions() {
+        if !FileManager.default.fileExists(atPath: whatsAppExclusionPath) {
+            try? FileManager.default.createDirectory(atPath: home, withIntermediateDirectories: true)
+            let note = """
+                # WhatsApp chats Presence Capture never reads, one a line: the chat's name as
+                # WhatsApp shows it, or its id. A line matches a whole name, in any case.
+                # Saved changes apply from the next read, within a minute. Lines starting with # are notes.
+                # What was already kept from a chat stays until it's forgotten: see docs/sources/whatsapp.md.
+                #
+                # Family
+
+                """
+            FileManager.default.createFile(atPath: whatsAppExclusionPath, contents: Data(note.utf8), attributes: [.posixPermissions: 0o600])
+        }
+        NSWorkspace.shared.open(URL(fileURLWithPath: whatsAppExclusionPath))
     }
 
     /// The person's own list, opened in their text editor; made with a note on first use.

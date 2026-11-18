@@ -32,8 +32,8 @@ Exporters are accepted as design only. They're to be built alongside ADR 0006,
 which covers sending outside this Mac. That ADR isn't in the repository yet.
 
 **Experimental sensors.** A [WhatsApp sensor](sources/whatsapp.md) is in the
-repository as experimental: one chat per sensor, read-only. Its captures are
-`standard`, so don't connect an agent while it runs.
+repository as experimental: every chat, read-only, less the chats a person
+excludes. Its captures are `standard`, so don't connect an agent while it runs.
 
 ## Sensors
 

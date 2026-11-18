@@ -87,6 +87,16 @@ final class MenuTests: XCTestCase {
         XCTAssertEqual(AppDelegate.kept(14), "kept for 14 days")
     }
 
+    func testWhatsAppIsApprovedWithItsOwnConsent() {
+        XCTAssertTrue(AppDelegate.isWhatsApp(["/opt/homebrew/bin/node", "/src/presence-capture/packages/plugins/whatsapp/sensor.mjs", "--experimental"]))
+        XCTAssertFalse(AppDelegate.isWhatsApp(["/opt/homebrew/bin/node", "/src/git-activity/sensor.mjs"]))
+        let consent = AppDelegate.whatsAppConsent(kept: AppDelegate.kept(365))
+        for words in ["every WhatsApp chat", "both sides", "kept for 1 year", "Exclude WhatsApp Chats…", "Pause", "Don't connect an agent"] {
+            XCTAssertTrue(consent.contains(words), "the consent doesn't say \(words)")
+        }
+        XCTAssertFalse(consent.contains("\u{2014}"))
+    }
+
     // MARK: Agents Read
 
     private let now = Date(timeIntervalSince1970: 1_800_000_000)

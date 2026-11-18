@@ -170,6 +170,11 @@ With no `--store`, `pcap-mcp` opens the app's store:
 }
 ```
 
+`pcap forget --source <source>` forgets everything one source sent, at any
+time: a sensor (`sensor:whatsapp`), or one WhatsApp chat
+(`net.whatsapp.WhatsApp.chat-12`, as the sensor's `--list-chats` names it). It
+asks first, unless given `--yes`.
+
 `pcap forget` is the menu's Forget, from the command line. The running app
 isn't told, so the app it was in front of is noted again at the next change,
 not at once.
@@ -185,6 +190,7 @@ not at once.
 | Hear the Microphone / Hear System Audio | Each input device on or off |
 | Keep Captures For → 1 Day … 1 Year, Indefinitely | Retention (ADR 0003), a year unless you choose. Indefinitely keeps everything until you forget it. A shorter period erases what's older at once, so it's asked first, and it's kept only once that's revoked: if the store can't, the period stays as it was |
 | Edit Excluded Apps and Windows… | Your list, one fragment a line, applied within seconds. If it can't be read, nothing is captured |
+| Exclude WhatsApp Chats… | Shown once the WhatsApp sensor is set up (experimental): the chats it never reads, by name or id |
 | Set Up Presence Capture… | The first-run window, again: each permission, what it's for, how long captures are kept, and connecting an agent |
 | Check for Updates… | Asks GitHub for the latest release and offers its page if it's newer. Only when chosen: it's the one request the app makes |
 
