@@ -153,8 +153,10 @@ final class WhatsAppCapturer: @unchecked Sendable {
         }
         do {
             let last = try db.lastRow()
-            // A database made again (WhatsApp reinstalled) starts its rows over: so does the read.
-            let after = min(defaults.integer(forKey: Self.afterKey), last)
+            // A database made again (WhatsApp reinstalled) starts its rows over: so does the read. (So
+            // does one whose newest rows were deleted; dedupe keeps that re-read from adding anything.)
+            let saved = defaults.integer(forKey: Self.afterKey)
+            let after = saved > last ? 0 : saved
             // Held: what was written meanwhile is passed over, never kept later.
             if held() {
                 defaults.set(last, forKey: Self.afterKey)
