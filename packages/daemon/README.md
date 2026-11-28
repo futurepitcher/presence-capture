@@ -262,8 +262,13 @@ must be able to run it.
 | whisper.cpp | MIT | Optional runtime |
 | WhisperX (code) | BSD-2-Clause | Optional alignment stage |
 | WhisperX / pyannote diarization models | Gated — Hugging Face account, per-model terms acceptance, token. `speaker-diarization-community-1` weights are CC-BY-4.0, commercial use permitted **with attribution** | **Opt-in only.** Never a default |
-| Moonshine, English models | MIT | Optional low-latency English lane |
-| Moonshine, non-English models | Reported as a community licence free only below $1M revenue — **unverified** | Not usable as a default until the official text is confirmed |
+| Moonshine, streaming models in every language, and English Tiny and Base | MIT | Optional low-latency lane |
+| Moonshine, legacy non-streaming models for other languages: Arabic, Japanese, Korean, Mandarin, Ukrainian and Vietnamese (Tiny and Base), Spanish (Base) | Moonshine Community License. Its licence file calls it non-commercial, and its terms end the grant above US $1M in annual revenue | **Never a default.** Limited by the adopter's revenue |
+
+The Moonshine rows were read from the `LICENSE` file of `moonshine-ai/moonshine`
+on 2026-11-27, which lists the restricted models and says the list is exhaustive.
+Its speech-synthesis and pronunciation models are licensed separately and aren't
+covered here.
 
 If you add a model dependency, put it in this table with its licence, or the PR
 will be sent back.
