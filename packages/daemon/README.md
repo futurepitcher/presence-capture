@@ -264,11 +264,22 @@ must be able to run it.
 | WhisperX / pyannote diarization models | Gated — Hugging Face account, per-model terms acceptance, token. `speaker-diarization-community-1` weights are CC-BY-4.0, commercial use permitted **with attribution** | **Opt-in only.** Never a default |
 | Moonshine, streaming models in every language, and English Tiny and Base | MIT | Optional low-latency lane |
 | Moonshine, legacy non-streaming models for other languages: Arabic, Japanese, Korean, Mandarin, Ukrainian and Vietnamese (Tiny and Base), Spanish (Base) | Moonshine Community License. Its licence file calls it non-commercial, and its terms end the grant above US $1M in annual revenue | **Never a default.** Limited by the adopter's revenue |
+| Parakeet TDT 0.6B v3 (NVIDIA) | CC-BY-4.0, commercial use permitted **with attribution** | Optional speech-to-text lane |
+| Parakeet TDT 0.6B v3, Core ML conversion (FluidInference) | Unsettled at source. The repository is tagged CC-BY-4.0, its model card says Apache 2.0, and it has no licence file. Treat it as CC-BY-4.0, the upstream terms | Optional, with attribution to NVIDIA |
+| Whistle (Cactus Compute) | Weights Apache-2.0. The engine that runs them is published as prebuilt binaries, stated to be Apache-2.0. No source for it was found in the vendor's public repository | **Never a default.** The engine can't be rebuilt from what is published, and the vendor's Python package reports anonymous usage counts unless that is turned off |
+| LFM3-Audio-2B (Liquid AI) | LFM Open License v1.0. Commercial use is not licensed for a company group with annual revenue of US $10M or more | **Never a default.** Limited by the adopter's revenue |
 
 The Moonshine rows were read from the `LICENSE` file of `moonshine-ai/moonshine`
 on 2026-11-27, which lists the restricted models and says the list is exhaustive.
 Its speech-synthesis and pronunciation models are licensed separately and aren't
 covered here.
+
+The Parakeet, Whistle and LFM3 rows were read on 2026-11-27 from each model's
+Hugging Face repository: its licence tag, its licence file where it has one, and
+its model card. For Whistle that also covers the vendor's runtime repositories
+on Hugging Face and GitHub, of which only the main branch was read. The LFM3
+licence file is the same in the text, audio and omni repositories; only the
+audio model is listed because it is the one that transcribes.
 
 If you add a model dependency, put it in this table with its licence, or the PR
 will be sent back.
